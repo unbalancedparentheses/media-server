@@ -7,12 +7,12 @@ let
 
   allServices = [
     "jellyfin" "sonarr" "sonarr-anime" "radarr" "prowlarr"
-    "bazarr" "sabnzbd" "qbittorrent" "recyclarr" "nginx"
+    "bazarr" "qbittorrent" "recyclarr" "nginx"
   ];
 
   mediaDomains = [
     "jellyfin" "sonarr" "sonarr-anime" "radarr" "prowlarr"
-    "bazarr" "sabnzbd" "qbittorrent"
+    "bazarr" "qbittorrent"
   ];
 in
 {
