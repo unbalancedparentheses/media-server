@@ -127,11 +127,8 @@ in
     };
 
     # --- Downloaders ---
-    media-sabnzbd = mkService {
-      name = "sabnzbd";
-      pkg = pkgs.sabnzbd;
-      args = [ "-f" "${configBase}/sabnzbd/sabnzbd.ini" "-s" "127.0.0.1:8080" ];
-    };
+    # NOTE: sabnzbd is Linux-only in nixpkgs. Install via Homebrew:
+    #   brew install sabnzbd
 
     media-qbittorrent = mkService {
       name = "qbittorrent";

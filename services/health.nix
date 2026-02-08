@@ -20,7 +20,6 @@ let
     check "Radarr"       7878
     check "Prowlarr"     9696
     check "Bazarr"       6767
-    check "SABnzbd"      8080
     check "qBittorrent"  8081
 
     if [ -n "$failed" ]; then

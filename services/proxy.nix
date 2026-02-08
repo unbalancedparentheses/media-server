@@ -11,7 +11,6 @@ let
     radarr         = { port = 7878; ws = false; };
     prowlarr       = { port = 9696; ws = false; };
     bazarr         = { port = 6767; ws = false; };
-    sabnzbd        = { port = 8080; ws = false; };
     qbittorrent    = { port = 8081; ws = false; };
   };
 
@@ -98,7 +97,6 @@ let
         <a href="http://radarr.media.local">Radarr<br><span class="port">:7878</span></a>
         <a href="http://prowlarr.media.local">Prowlarr<br><span class="port">:9696</span></a>
         <a href="http://bazarr.media.local">Bazarr<br><span class="port">:6767</span></a>
-        <a href="http://sabnzbd.media.local">SABnzbd<br><span class="port">:8080</span></a>
         <a href="http://qbittorrent.media.local">qBittorrent<br><span class="port">:8081</span></a>
       </div>
     </body></html>
