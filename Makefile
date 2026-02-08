@@ -1,48 +1,56 @@
-.PHONY: install switch check logs status clean
+.PHONY: install switch check status logs log clean backup-init
 
-# First-time install (bootstrap nix-darwin)
-install:
-	@echo "Creating log directories..."
-	@for svc in jellyfin sonarr sonarr-anime radarr prowlarr bazarr sabnzbd qbittorrent jellyseerr; do \
-		mkdir -p ~/media/config/$$svc/logs; \
-	done
-	@echo "Building and switching nix-darwin configuration..."
-	darwin-rebuild switch --flake ~/media-server
+FLAKE := ~/media-server
 
-# Rebuild and switch (after first install)
+# First-time install
+install: switch
+	@echo ""
+	@echo "=== Setup Complete ==="
+	@echo "Next steps:"
+	@echo "  1. Start each service's web UI and grab API keys"
+	@echo "  2. Set up restic backups: make backup-init"
+	@echo "  3. Edit recyclarr API keys in Sonarr/Radarr settings"
+	@echo "  4. Open http://localhost to see the dashboard"
+
+# Rebuild and activate
 switch:
-	darwin-rebuild switch --flake ~/media-server
+	sudo darwin-rebuild switch --flake $(FLAKE)
 
-# Dry-run build to check for errors without applying
+# Dry-run build
 check:
-	darwin-rebuild check --flake ~/media-server
+	darwin-rebuild build --flake $(FLAKE)
 
-# Show status of all media services
+# Show all media services and port status
 status:
-	@echo "=== Media Services ==="
-	@launchctl list | grep media || echo "No media services running"
+	@echo "=== launchd Services ==="
+	@launchctl list | head -1
+	@launchctl list | grep media || echo "  (none running)"
 	@echo ""
 	@echo "=== Port Check ==="
-	@for pair in "Jellyfin:8096" "Sonarr:8989" "Sonarr-Anime:8990" "Radarr:7878" "Prowlarr:9696" "Bazarr:6767" "SABnzbd:8080" "qBittorrent:8081" "Jellyseerr:5055"; do \
+	@for pair in "Jellyfin:8096" "Sonarr:8989" "Sonarr-Anime:8990" "Radarr:7878" \
+	             "Prowlarr:9696" "Bazarr:6767" "SABnzbd:8080" "qBittorrent:8081" \
+	             "Nginx:80"; do \
 		name=$${pair%%:*}; port=$${pair##*:}; \
 		if curl -s -o /dev/null -w "" --connect-timeout 1 http://localhost:$$port; then \
-			echo "  ✓ $$name (port $$port)"; \
+			printf "  ✓ %-15s (port %s)\n" "$$name" "$$port"; \
 		else \
-			echo "  ✗ $$name (port $$port)"; \
+			printf "  ✗ %-15s (port %s)\n" "$$name" "$$port"; \
 		fi; \
 	done
 
-# Tail logs for all services
+# Initialize restic backup repository
+backup-init:
+	@if [ ! -f ~/media/config/backup-password ]; then \
+		read -sp "Choose a backup password: " pw && echo "$$pw" > ~/media/config/backup-password; \
+		chmod 600 ~/media/config/backup-password; \
+		echo ""; \
+	fi
+	RESTIC_PASSWORD_FILE=~/media/config/backup-password restic -r ~/media/backups init
+
+# Tail all service logs
 logs:
 	@tail -f ~/media/config/*/logs/*.log
 
 # Tail logs for a specific service: make log SVC=sonarr
 log:
 	@tail -f ~/media/config/$(SVC)/logs/*.log
-
-# Remove all generated configs (keeps media files)
-clean:
-	@echo "This will remove all service configs in ~/media/config/."
-	@echo "Media files in ~/media/{movies,tv,anime,downloads} are NOT affected."
-	@read -p "Are you sure? [y/N] " confirm && [ "$$confirm" = "y" ] && \
-		rm -rf ~/media/config/*/logs/ || echo "Aborted."
