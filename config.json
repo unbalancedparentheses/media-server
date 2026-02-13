@@ -1,6 +1,6 @@
 {
   "jellyfin": {
-    "username": "claudia",
+    "username": "unbalancedparen",
     "password": "changeme123"
   },
 
@@ -19,25 +19,19 @@
   },
 
   "indexers": [
-    { "name": "1337x",               "definitionName": "1337x",               "enable": true, "fields": {} },
-    { "name": "EZTV",                "definitionName": "eztv",                "enable": true, "fields": {} },
-    { "name": "The Pirate Bay",      "definitionName": "thepiratebay",        "enable": true, "fields": {} },
-    { "name": "YTS",                 "definitionName": "yts",                 "enable": true, "fields": {} },
-    { "name": "Knaben",              "definitionName": "Knaben",              "enable": true, "fields": {} },
-    { "name": "LimeTorrents",        "definitionName": "limetorrents",        "enable": true, "fields": {} },
-    { "name": "TorrentGalaxy",       "definitionName": "torrentgalaxyclone",  "enable": true, "fields": {} },
-    { "name": "KickassTorrents",     "definitionName": "kickasstorrents-to",  "enable": true, "fields": {} },
-    { "name": "Torrent Downloads",   "definitionName": "torrentdownloads",    "enable": true, "fields": {} },
-    { "name": "ExtraTorrent",        "definitionName": "extratorrent-st",     "enable": true, "fields": {} },
-    { "name": "BitSearch",           "definitionName": "bitsearch",           "enable": true, "fields": {} },
-    { "name": "RuTracker",           "definitionName": "rutracker-ru",        "enable": true, "fields": {} },
-    { "name": "MegaPeer",            "definitionName": "megapeer",            "enable": true, "fields": {} },
-    { "name": "Nyaa.si",             "definitionName": "nyaasi",              "enable": true, "fields": {} },
-    { "name": "SubsPlease",          "definitionName": "SubsPlease",          "enable": true, "fields": {} },
-    { "name": "Anidex",              "definitionName": "Anidex",              "enable": true, "fields": {} },
-    { "name": "Mikan",               "definitionName": "mikan",              "enable": true, "fields": {} },
-    { "name": "AniSource",           "definitionName": "anisource",           "enable": true, "fields": {} },
-    { "name": "Bangumi Moe",         "definitionName": "bangumi-moe",         "enable": true, "fields": {} },
+    { "name": "1337x",             "definitionName": "1337x",            "enable": true, "flaresolverr": true, "fields": {} },
+    { "name": "EZTV",              "definitionName": "eztv",             "enable": true, "fields": {} },
+    { "name": "The Pirate Bay",    "definitionName": "thepiratebay",     "enable": true, "fields": {} },
+    { "name": "YTS",               "definitionName": "yts",              "enable": true, "fields": {} },
+    { "name": "Knaben",            "definitionName": "Knaben",           "enable": true, "fields": {} },
+    { "name": "LimeTorrents",      "definitionName": "limetorrents",     "enable": true, "fields": {} },
+    { "name": "Torrent Downloads", "definitionName": "torrentdownloads", "enable": true, "fields": {} },
+    { "name": "BitSearch",         "definitionName": "bitsearch",        "enable": true, "fields": {} },
+    { "name": "MegaPeer",          "definitionName": "megapeer",         "enable": true, "fields": {} },
+    { "name": "Nyaa.si",           "definitionName": "nyaasi",           "enable": true, "fields": {} },
+    { "name": "SubsPlease",        "definitionName": "SubsPlease",       "enable": true, "fields": {} },
+    { "name": "Mikan",             "definitionName": "mikan",            "enable": true, "fields": {} },
+    { "name": "Bangumi Moe",       "definitionName": "bangumi-moe",      "enable": true, "fields": {} },
 
     { "_comment": "Enable and add your API key if you have an NZBgeek account",
       "name": "NZBgeek", "definitionName": "NZBgeek", "enable": false,

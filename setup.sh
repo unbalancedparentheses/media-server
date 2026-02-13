@@ -87,7 +87,15 @@ SONARR_ANIME_KEY=$(get_api_key "sonarr-anime")
 RADARR_KEY=$(get_api_key "radarr")
 PROWLARR_KEY=$(get_api_key "prowlarr")
 SABNZBD_KEY=""
-[ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ] && SABNZBD_KEY=$(sed -n 's/^api_key = *//p' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null || echo "")
+if [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ]; then
+  SABNZBD_KEY=$(sed -n 's/^api_key = *//p' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null || echo "")
+  # Ensure Docker hostname is in the whitelist (prevents 403 from Sonarr/Radarr)
+  if ! grep -q "sabnzbd" "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null; then
+    sed -i '' 's/^host_whitelist = .*/& sabnzbd/' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null
+    docker restart sabnzbd >/dev/null 2>&1 && ok "SABnzbd: added Docker hostname to whitelist" || true
+    sleep 3
+  fi
+fi
 
 QBIT_PASS=$(docker logs qbittorrent 2>&1 | sed -n 's/.*A temporary password is provided for this session: *//p' | tail -1 || echo "")
 [ -z "$QBIT_PASS" ] && QBIT_PASS="adminadmin"
@@ -182,6 +190,22 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
+# 2b. SABNZBD — create categories so Sonarr/Radarr can connect
+# ═══════════════════════════════════════════════════════════════════
+if [ -n "$SABNZBD_KEY" ]; then
+  info "Creating SABnzbd categories..."
+  EXISTING_CATS=$(curl -sf "$SABNZBD_URL/api?mode=get_cats&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.categories[]' 2>/dev/null || echo "")
+  for cat in sonarr sonarr-anime radarr; do
+    if ! echo "$EXISTING_CATS" | grep -q "^${cat}$"; then
+      curl -sf "$SABNZBD_URL/api?mode=set_config&section=categories&keyword=$cat&apikey=$SABNZBD_KEY&dir=$cat&output=json" >/dev/null 2>&1 && \
+        ok "Category: $cat" || warn "Could not create category: $cat"
+    else
+      ok "Category: $cat"
+    fi
+  done
+fi
+
+# ═══════════════════════════════════════════════════════════════════
 # 3. SONARR / RADARR — root folders + download clients
 # ═══════════════════════════════════════════════════════════════════
 configure_arr() {
@@ -202,7 +226,7 @@ configure_arr() {
   if ! echo "$EXISTING_DL" | grep -q "qBittorrent"; then
     api POST "$url/api/v3/downloadclient" -H "$H" -d '{
       "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
-      "enable":true,"protocol":"torrent",
+      "enable":true,"protocol":"torrent","priority":1,
       "fields":[{"name":"host","value":"qbittorrent"},{"name":"port","value":8081},
         {"name":"username","value":"admin"},{"name":"password","value":"'"$QBIT_PASS"'"},
         {"name":"category","value":"'"$name"'"}]
@@ -212,7 +236,7 @@ configure_arr() {
   if [ -n "$SABNZBD_KEY" ] && ! echo "$EXISTING_DL" | grep -q "SABnzbd"; then
     api POST "$url/api/v3/downloadclient" -H "$H" -d '{
       "name":"SABnzbd","implementation":"Sabnzbd","configContract":"SabnzbdSettings",
-      "enable":true,"protocol":"usenet",
+      "enable":true,"protocol":"usenet","priority":2,
       "fields":[{"name":"host","value":"sabnzbd"},{"name":"port","value":8080},
         {"name":"apiKey","value":"'"$SABNZBD_KEY"'"},{"name":"category","value":"'"$name"'"}]
     }' >/dev/null 2>&1 && ok "SABnzbd connected" || warn "Could not add SABnzbd"
@@ -233,21 +257,24 @@ if [ -n "$PROWLARR_KEY" ]; then
   EXISTING_APPS=$(api GET "$PROWLARR_URL/api/v1/applications" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
 
   add_prowlarr_app() {
-    local name="$1" impl="$2" url="$3" key="$4"
+    local name="$1" impl="$2" url="$3" key="$4" cats="$5"
     if ! echo "$EXISTING_APPS" | grep -q "^${name}$"; then
       api POST "$PROWLARR_URL/api/v1/applications" -H "$PH" -d '{
         "name":"'"$name"'","implementation":"'"$impl"'","configContract":"'"$impl"'Settings",
         "syncLevel":"fullSync",
         "fields":[{"name":"prowlarrUrl","value":"'"$PROWLARR_INTERNAL"'"},
           {"name":"baseUrl","value":"'"$url"'"},{"name":"apiKey","value":"'"$key"'"},
-          {"name":"syncCategories"}]
+          {"name":"syncCategories","value":['"$cats"']}]
       }' >/dev/null 2>&1 && ok "$name connected" || warn "Could not connect $name"
     else ok "$name connected"; fi
   }
 
-  [ -n "$SONARR_KEY" ]       && add_prowlarr_app "Sonarr"       "Sonarr" "$SONARR_INTERNAL"       "$SONARR_KEY"
-  [ -n "$SONARR_ANIME_KEY" ] && add_prowlarr_app "Sonarr Anime" "Sonarr" "$SONARR_ANIME_INTERNAL" "$SONARR_ANIME_KEY"
-  [ -n "$RADARR_KEY" ]       && add_prowlarr_app "Radarr"       "Radarr" "$RADARR_INTERNAL"       "$RADARR_KEY"
+  SONARR_CATS="5000,5010,5020,5030,5040,5045,5050,5090"
+  RADARR_CATS="2000,2010,2020,2030,2040,2045,2050,2060,2070,2080,2090"
+
+  [ -n "$SONARR_KEY" ]       && add_prowlarr_app "Sonarr"       "Sonarr" "$SONARR_INTERNAL"       "$SONARR_KEY"       "$SONARR_CATS"
+  [ -n "$SONARR_ANIME_KEY" ] && add_prowlarr_app "Sonarr Anime" "Sonarr" "$SONARR_ANIME_INTERNAL" "$SONARR_ANIME_KEY" "$SONARR_CATS"
+  [ -n "$RADARR_KEY" ]       && add_prowlarr_app "Radarr"       "Radarr" "$RADARR_INTERNAL"       "$RADARR_KEY"       "$RADARR_CATS"
 
   # FlareSolverr
   EXISTING_PROXIES=$(api GET "$PROWLARR_URL/api/v1/indexerProxy" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
@@ -263,11 +290,31 @@ if [ -n "$PROWLARR_KEY" ]; then
   if ! echo "$EXISTING_DLC" | grep -q "qBittorrent"; then
     api POST "$PROWLARR_URL/api/v1/downloadclient" -H "$PH" -d '{
       "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
-      "enable":true,"protocol":"torrent",
+      "enable":true,"protocol":"torrent","priority":1,
       "fields":[{"name":"host","value":"qbittorrent"},{"name":"port","value":8081},
         {"name":"username","value":"admin"},{"name":"password","value":"'"$QBIT_PASS"'"},
         {"name":"category","value":"prowlarr"}]
     }' >/dev/null 2>&1 && ok "qBittorrent connected to Prowlarr" || true
+  fi
+
+  # Create FlareSolverr tag if it doesn't exist
+  FLARESOLVERR_TAG_ID=$(api GET "$PROWLARR_URL/api/v1/tag" -H "$PH" | jq -r '.[] | select(.label == "flaresolverr") | .id' 2>/dev/null || echo "")
+  if [ -z "$FLARESOLVERR_TAG_ID" ]; then
+    FLARESOLVERR_TAG_ID=$(api POST "$PROWLARR_URL/api/v1/tag" -H "$PH" -d '{"label":"flaresolverr"}' | jq -r '.id' 2>/dev/null || echo "")
+    [ -n "$FLARESOLVERR_TAG_ID" ] && ok "Created FlareSolverr tag (id: $FLARESOLVERR_TAG_ID)"
+  fi
+
+  # Assign tag to FlareSolverr proxy if not already
+  if [ -n "$FLARESOLVERR_TAG_ID" ]; then
+    PROXY=$(api GET "$PROWLARR_URL/api/v1/indexerProxy" -H "$PH" | jq -c '.[0]' 2>/dev/null || echo "")
+    if [ -n "$PROXY" ] && [ "$PROXY" != "null" ]; then
+      HAS_TAG=$(echo "$PROXY" | jq --argjson tid "$FLARESOLVERR_TAG_ID" '.tags | index($tid)' 2>/dev/null)
+      if [ "$HAS_TAG" = "null" ] || [ -z "$HAS_TAG" ]; then
+        PROXY_UPDATED=$(echo "$PROXY" | jq --argjson tid "$FLARESOLVERR_TAG_ID" '.tags += [$tid]' 2>/dev/null)
+        PROXY_ID=$(echo "$PROXY" | jq -r '.id' 2>/dev/null)
+        api PUT "$PROWLARR_URL/api/v1/indexerProxy/$PROXY_ID" -H "$PH" -d "$PROXY_UPDATED" >/dev/null 2>&1
+      fi
+    fi
   fi
 
   # Add indexers from config.json
@@ -283,6 +330,7 @@ if [ -n "$PROWLARR_KEY" ]; then
 
       IDX_NAME=$(cfg ".indexers[$i].name")
       IDX_DEF=$(cfg ".indexers[$i].definitionName")
+      IDX_FLARE=$(cfg ".indexers[$i].flaresolverr // false")
 
       if echo "$EXISTING_INDEXERS" | grep -q "^${IDX_NAME}$"; then
         ok "$IDX_NAME already added"
@@ -295,7 +343,7 @@ if [ -n "$PROWLARR_KEY" ]; then
       fi
 
       # Find the matching schema
-      SCHEMA=$(echo "$SCHEMAS" | jq --arg def "$IDX_DEF" '[.[] | select(.definitionName == $def)] | .[0]' 2>/dev/null)
+      SCHEMA=$(echo "$SCHEMAS" | jq -c --arg def "$IDX_DEF" '[.[] | select(.definitionName == $def)] | .[0]' 2>/dev/null)
 
       if [ -z "$SCHEMA" ] || [ "$SCHEMA" = "null" ]; then
         warn "$IDX_NAME: indexer '$IDX_DEF' not found in Prowlarr schemas"
@@ -305,18 +353,26 @@ if [ -n "$PROWLARR_KEY" ]; then
       # Merge user-provided fields into the schema
       USER_FIELDS=$(cfg ".indexers[$i].fields")
       if [ "$USER_FIELDS" != "null" ] && [ "$USER_FIELDS" != "{}" ]; then
-        # For each user field, update the matching field in the schema
-        SCHEMA=$(echo "$SCHEMA" | jq --argjson uf "$USER_FIELDS" '
+        SCHEMA=$(echo "$SCHEMA" | jq -c --argjson uf "$USER_FIELDS" '
           .fields = [.fields[] | if $uf[.name] then .value = $uf[.name] else . end]
         ' 2>/dev/null)
       fi
 
-      # Set the name and enable it
-      SCHEMA=$(echo "$SCHEMA" | jq --arg name "$IDX_NAME" '.name = $name | .enable = true | del(.id)' 2>/dev/null)
+      # Set name, enable, app profile, and optionally FlareSolverr tag
+      if [ "$IDX_FLARE" = "true" ] && [ -n "$FLARESOLVERR_TAG_ID" ]; then
+        SCHEMA=$(echo "$SCHEMA" | jq -c --arg name "$IDX_NAME" --argjson tid "$FLARESOLVERR_TAG_ID" \
+          '.name = $name | .enable = true | del(.id) | .appProfileId = 1 | .tags = [$tid]' 2>/dev/null)
+      else
+        SCHEMA=$(echo "$SCHEMA" | jq -c --arg name "$IDX_NAME" \
+          '.name = $name | .enable = true | del(.id) | .appProfileId = 1' 2>/dev/null)
+      fi
 
-      api POST "$PROWLARR_URL/api/v1/indexer" -H "$PH" -d "$SCHEMA" >/dev/null 2>&1 && \
+      # Write to temp file to avoid shell argument length limits
+      echo "$SCHEMA" > /tmp/prowlarr_indexer.json
+      api POST "$PROWLARR_URL/api/v1/indexer" -H "$PH" -d @/tmp/prowlarr_indexer.json >/dev/null 2>&1 && \
         ok "$IDX_NAME added" || warn "Could not add $IDX_NAME"
     done
+    rm -f /tmp/prowlarr_indexer.json
   fi
 fi
 
@@ -360,40 +416,99 @@ if [ "$PROVIDER_COUNT" -gt 0 ] 2>/dev/null && [ -n "$SABNZBD_KEY" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 6. BAZARR — connect to Sonarr + Radarr
+# 6. BAZARR — connect to Sonarr + Radarr (via config file)
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring Bazarr..."
-sleep 2
 
-BAZARR_API_KEY=""
-for f in "$CONFIG_DIR/bazarr/config/config.yaml" "$CONFIG_DIR/bazarr/config/config/config.yaml"; do
-  [ -f "$f" ] && BAZARR_API_KEY=$(sed -n 's/^[[:space:]]*apikey: *//p' "$f" 2>/dev/null | head -1) && [ -n "$BAZARR_API_KEY" ] && break
-done
-for f in "$CONFIG_DIR/bazarr/config/config.ini" "$CONFIG_DIR/bazarr/config.ini"; do
-  [ -z "$BAZARR_API_KEY" ] && [ -f "$f" ] && BAZARR_API_KEY=$(sed -n 's/^apikey *= *//p' "$f" 2>/dev/null | head -1) && [ -n "$BAZARR_API_KEY" ] && break
+BAZARR_CONFIG=""
+for f in "$CONFIG_DIR/bazarr/config/config/config.yaml" "$CONFIG_DIR/bazarr/config/config.yaml"; do
+  [ -f "$f" ] && BAZARR_CONFIG="$f" && break
 done
 
-if [ -n "$BAZARR_API_KEY" ]; then
-  ok "API key: $BAZARR_API_KEY"
-  BH="X-API-KEY: $BAZARR_API_KEY"
+if [ -n "$BAZARR_CONFIG" ]; then
+  ok "Config: $BAZARR_CONFIG"
 
-  [ -n "$SONARR_KEY" ] && api PATCH "$BAZARR_URL/api/system/settings" -H "$BH" -d '{
-    "settings":{"sonarr":{"ip":"sonarr","port":8989,"apikey":"'"$SONARR_KEY"'","base_url":"","ssl":false,"series_sync":60,"episodes_sync":60}}
-  }' >/dev/null 2>&1 && ok "Sonarr connected" || warn "Could not connect Sonarr"
+  # Use python3 to update the YAML config (available on macOS)
+  python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" << 'PYEOF'
+import sys, json, os
 
-  [ -n "$RADARR_KEY" ] && api PATCH "$BAZARR_URL/api/system/settings" -H "$BH" -d '{
-    "settings":{"radarr":{"ip":"radarr","port":7878,"apikey":"'"$RADARR_KEY"'","base_url":"","ssl":false,"movies_sync":60}}
-  }' >/dev/null 2>&1 && ok "Radarr connected" || warn "Could not connect Radarr"
+config_path = sys.argv[1]
+sonarr_key = sys.argv[2]
+radarr_key = sys.argv[3]
 
-  # Subtitle languages from config
-  LANG_JSON=$(cfg '[.subtitles.languages[] | {"name": (if . == "en" then "English" elif . == "es" then "Spanish" elif . == "fr" then "French" elif . == "de" then "German" elif . == "it" then "Italian" elif . == "pt" then "Portuguese" elif . == "ja" then "Japanese" elif . == "ko" then "Korean" elif . == "zh" then "Chinese" else . end), "code2": ., "enabled": true}]')
-  PROV_JSON=$(cfg '[.subtitles.providers[]]')
+# Bazarr uses a simple YAML that's also valid as line-based config
+# Read the raw file
+with open(config_path, 'r') as f:
+    content = f.read()
 
-  api PATCH "$BAZARR_URL/api/system/settings" -H "$BH" -d "{
-    \"settings\":{\"general\":{\"enabled_providers\":$PROV_JSON}}
-  }" >/dev/null 2>&1 && ok "Subtitle providers configured" || true
+# Try to use PyYAML if available, otherwise do line-based replacement
+try:
+    import yaml
+    config = yaml.safe_load(content) or {}
+except ImportError:
+    # Fallback: write a fresh config with the essential settings
+    config = {}
+
+# Ensure sections exist
+for section in ['general', 'sonarr', 'radarr']:
+    if section not in config:
+        config[section] = {}
+
+# Configure Sonarr connection
+if sonarr_key:
+    config['sonarr']['ip'] = 'sonarr'
+    config['sonarr']['port'] = 8989
+    config['sonarr']['base_url'] = '/'
+    config['sonarr']['apikey'] = sonarr_key
+    config['sonarr']['ssl'] = False
+    config['sonarr']['series_sync'] = 60
+    config['sonarr']['episodes_sync'] = 60
+    config['general']['use_sonarr'] = True
+
+# Configure Radarr connection
+if radarr_key:
+    config['radarr']['ip'] = 'radarr'
+    config['radarr']['port'] = 7878
+    config['radarr']['base_url'] = '/'
+    config['radarr']['apikey'] = radarr_key
+    config['radarr']['ssl'] = False
+    config['radarr']['movies_sync'] = 60
+    config['general']['use_radarr'] = True
+
+try:
+    import yaml
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False)
+except ImportError:
+    # Fallback: write as JSON (Bazarr also accepts this format in some versions)
+    with open(config_path, 'w') as f:
+        yaml_lines = []
+        def write_yaml(d, indent=0):
+            for k, v in d.items():
+                prefix = '  ' * indent
+                if isinstance(v, dict):
+                    yaml_lines.append(f'{prefix}{k}:')
+                    write_yaml(v, indent + 1)
+                elif isinstance(v, bool):
+                    yaml_lines.append(f'{prefix}{k}: {"true" if v else "false"}')
+                elif isinstance(v, str):
+                    yaml_lines.append(f"{prefix}{k}: '{v}'")
+                else:
+                    yaml_lines.append(f'{prefix}{k}: {v}')
+        write_yaml(config)
+        f.write('\n'.join(yaml_lines) + '\n')
+
+print("OK")
+PYEOF
+
+  if [ $? -eq 0 ]; then
+    ok "Sonarr + Radarr configured"
+    docker restart bazarr >/dev/null 2>&1 && ok "Bazarr restarted" || true
+  else
+    warn "Could not update Bazarr config"
+  fi
 else
-  warn "Bazarr API key not found"
+  warn "Bazarr config file not found"
 fi
 
 # ═══════════════════════════════════════════════════════════════════
@@ -401,26 +516,53 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring Jellyseerr..."
 
-JF_HEADER2='X-Emby-Authorization: MediaBrowser Client="setup", Device="script", DeviceId="setup-script", Version="1.0"'
+# Check initialization state
+JS_PUBLIC=$(curl -sf "$JELLYSEERR_URL/api/v1/settings/public" 2>/dev/null || echo "")
+JS_INITIALIZED=$(echo "$JS_PUBLIC" | jq -r '.initialized // false' 2>/dev/null)
 
-JS_STATUS=$(curl -sf "$JELLYSEERR_URL/api/v1/settings/about" 2>/dev/null || echo "")
-if ! echo "$JS_STATUS" | grep -q "version"; then
-  api POST "$JELLYSEERR_URL/api/v1/settings/jellyfin" \
-    -d '{"hostname":"jellyfin","port":8096,"useSsl":false,"urlBase":""}' >/dev/null 2>&1 && \
-    ok "Jellyfin server set" || warn "Could not set Jellyfin"
+# If not initialized, pre-configure Jellyfin in settings.json and restart
+if [ "$JS_INITIALIZED" != "true" ]; then
+  JS_SETTINGS="$CONFIG_DIR/jellyseerr/settings.json"
+  if [ -f "$JS_SETTINGS" ] && [ -n "$JELLYFIN_API_KEY" ]; then
+    # Get Jellyfin server ID
+    JF_SERVER_ID=$(api GET "$JELLYFIN_URL/System/Info/Public" | jq -r '.Id // empty' 2>/dev/null || echo "")
+
+    # Update Jellyfin connection in settings.json (set ip so auth endpoint works)
+    UPDATED=$(jq --arg ip "jellyfin" --arg key "$JELLYFIN_API_KEY" --arg sid "$JF_SERVER_ID" '
+      .jellyfin.ip = $ip |
+      .jellyfin.port = 8096 |
+      .jellyfin.useSsl = false |
+      .jellyfin.apiKey = $key |
+      .jellyfin.serverId = $sid |
+      .jellyfin.name = "Jellyfin" |
+      .public.initialized = true
+    ' "$JS_SETTINGS" 2>/dev/null)
+
+    if [ -n "$UPDATED" ]; then
+      echo "$UPDATED" > "$JS_SETTINGS"
+      docker restart jellyseerr >/dev/null 2>&1
+      ok "Jellyfin server pre-configured"
+      sleep 8
+      wait_for "Jellyseerr" "$JELLYSEERR_URL"
+    fi
+  fi
 fi
 
-JS_AUTH=$(api POST "$JELLYSEERR_URL/api/v1/auth/jellyfin" \
-  -d "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\",\"hostname\":\"jellyfin\",\"port\":8096,\"useSsl\":false,\"email\":\"admin@media.local\"}" || echo "")
-
+# Authenticate — serverType:2 = Jellyfin (required for initial admin creation)
 JS_COOKIE=""
-if echo "$JS_AUTH" | jq -e '.id' >/dev/null 2>&1; then
-  JS_COOKIE=$(curl -sf -c - -X POST "$JELLYSEERR_URL/api/v1/auth/jellyfin" \
+for AUTH_BODY in \
+  "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\",\"email\":\"admin@media.local\",\"serverType\":2}" \
+  "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\",\"email\":\"admin@media.local\"}"; do
+  JS_AUTH_RESP=$(curl -s -c - -X POST "$JELLYSEERR_URL/api/v1/auth/jellyfin" \
     -H "Content-Type: application/json" \
-    -d "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\",\"hostname\":\"jellyfin\",\"port\":8096,\"useSsl\":false,\"email\":\"admin@media.local\"}" 2>/dev/null \
-    | sed -n 's/.*connect.sid[[:space:]]*//p' || echo "")
-  ok "Authenticated"
-fi
+    -d "$AUTH_BODY" 2>/dev/null || echo "")
+  if echo "$JS_AUTH_RESP" | grep -q "connect.sid"; then
+    JS_COOKIE=$(echo "$JS_AUTH_RESP" | sed -n 's/.*connect.sid[[:space:]]*//p')
+    ok "Authenticated"
+    break
+  fi
+done
+[ -z "$JS_COOKIE" ] && warn "Could not authenticate (check Jellyfin credentials)"
 
 if [ -n "$JS_COOKIE" ]; then
   JA=(-b "connect.sid=$JS_COOKIE")
@@ -437,18 +579,22 @@ if [ -n "$JS_COOKIE" ]; then
   EXISTING_JS_SONARR=$(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
   if [ "$EXISTING_JS_SONARR" = "0" ] || [ -z "$EXISTING_JS_SONARR" ]; then
     [ -n "$SONARR_KEY" ] && {
-      PID=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" | jq '.[0].id // 1' 2>/dev/null || echo 1)
+      PROFILE=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" | jq '.[0]' 2>/dev/null)
+      PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
+      PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
       api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d '{
         "name":"Sonarr","hostname":"sonarr","port":8989,"useSsl":false,"apiKey":"'"$SONARR_KEY"'",
-        "baseUrl":"","activeProfileId":'"$PID"',"activeDirectory":"/media/tv",
+        "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/tv",
         "is4k":false,"enableSeasonFolders":true,"isDefault":true,"externalUrl":"http://localhost:8989"
       }' >/dev/null 2>&1 && ok "Sonarr connected" || warn "Could not add Sonarr"
     }
     [ -n "$SONARR_ANIME_KEY" ] && {
-      PID=$(api GET "$SONARR_ANIME_URL/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_ANIME_KEY" | jq '.[0].id // 1' 2>/dev/null || echo 1)
+      PROFILE=$(api GET "$SONARR_ANIME_URL/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_ANIME_KEY" | jq '.[0]' 2>/dev/null)
+      PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
+      PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
       api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d '{
         "name":"Sonarr Anime","hostname":"sonarr-anime","port":8989,"useSsl":false,"apiKey":"'"$SONARR_ANIME_KEY"'",
-        "baseUrl":"","activeProfileId":'"$PID"',"activeDirectory":"/media/anime",
+        "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/anime",
         "is4k":false,"enableSeasonFolders":true,"isDefault":false,"externalUrl":"http://localhost:8990",
         "seriesType":"anime","animeSeriesType":"anime"
       }' >/dev/null 2>&1 && ok "Sonarr Anime connected" || warn "Could not add Sonarr Anime"
@@ -459,10 +605,12 @@ if [ -n "$JS_COOKIE" ]; then
   EXISTING_JS_RADARR=$(api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
   if [ "$EXISTING_JS_RADARR" = "0" ] || [ -z "$EXISTING_JS_RADARR" ]; then
     [ -n "$RADARR_KEY" ] && {
-      PID=$(api GET "$RADARR_URL/api/v3/qualityprofile" -H "X-Api-Key: $RADARR_KEY" | jq '.[0].id // 1' 2>/dev/null || echo 1)
+      PROFILE=$(api GET "$RADARR_URL/api/v3/qualityprofile" -H "X-Api-Key: $RADARR_KEY" | jq '.[0]' 2>/dev/null)
+      PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
+      PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
       api POST "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" -d '{
         "name":"Radarr","hostname":"radarr","port":7878,"useSsl":false,"apiKey":"'"$RADARR_KEY"'",
-        "baseUrl":"","activeProfileId":'"$PID"',"activeDirectory":"/media/movies",
+        "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/movies",
         "is4k":false,"isDefault":true,"externalUrl":"http://localhost:7878","minimumAvailability":"released"
       }' >/dev/null 2>&1 && ok "Radarr connected" || warn "Could not add Radarr"
     }
