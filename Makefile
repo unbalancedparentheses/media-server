@@ -1,16 +1,33 @@
-.PHONY: install switch check status logs log clean backup-init
+.PHONY: bootstrap install switch check status logs log clean backup-init up down restart setup
 
 FLAKE := ~/media-server
 
-# First-time install
+# Full setup from scratch (new computer)
+bootstrap:
+	./bootstrap.sh
+
+# Docker shortcuts
+up:
+	docker compose up -d
+
+down:
+	docker compose down
+
+restart:
+	docker compose down && docker compose up -d
+
+# Re-run service wiring (idempotent)
+setup:
+	./setup.sh
+
+# First-time nix-darwin install
 install: switch
 	@echo ""
 	@echo "=== Setup Complete ==="
 	@echo "Next steps:"
-	@echo "  1. Start each service's web UI and grab API keys"
+	@echo "  1. Run 'make setup' to connect all services"
 	@echo "  2. Set up restic backups: make backup-init"
-	@echo "  3. Edit recyclarr API keys in Sonarr/Radarr settings"
-	@echo "  4. Open http://localhost to see the dashboard"
+	@echo "  3. Open http://media.local to see the dashboard"
 
 # Rebuild and activate
 switch:
