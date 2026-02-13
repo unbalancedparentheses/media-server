@@ -1,0 +1,175 @@
+services:
+  # --- Media Server ---
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: jellyfin
+    ports:
+      - "8096:8096"
+    volumes:
+      - ~/media/config/jellyfin:/config
+      - ~/media/movies:/media/movies
+      - ~/media/tv:/media/tv
+      - ~/media/anime:/media/anime
+    restart: unless-stopped
+
+  # --- TV ---
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/New_York
+    ports:
+      - "8989:8989"
+    volumes:
+      - ~/media/config/sonarr:/config
+      - ~/media/tv:/media/tv
+      - ~/media/downloads:/downloads
+    restart: unless-stopped
+
+  sonarr-anime:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: sonarr-anime
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/New_York
+    ports:
+      - "8990:8989"
+    volumes:
+      - ~/media/config/sonarr-anime:/config
+      - ~/media/anime:/media/anime
+      - ~/media/downloads:/downloads
+    restart: unless-stopped
+
+  # --- Movies ---
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/New_York
+    ports:
+      - "7878:7878"
+    volumes:
+      - ~/media/config/radarr:/config
+      - ~/media/movies:/media/movies
+      - ~/media/downloads:/downloads
+    restart: unless-stopped
+
+  # --- Indexers ---
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/New_York
+    ports:
+      - "9696:9696"
+    volumes:
+      - ~/media/config/prowlarr:/config
+    restart: unless-stopped
+
+  # --- Subtitles ---
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/New_York
+    ports:
+      - "6767:6767"
+    volumes:
+      - ~/media/config/bazarr:/config
+      - ~/media/movies:/media/movies
+      - ~/media/tv:/media/tv
+      - ~/media/anime:/media/anime
+    restart: unless-stopped
+
+  # --- Downloaders ---
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/New_York
+    ports:
+      - "8080:8080"
+    volumes:
+      - ~/media/config/sabnzbd:/config
+      - ~/media/downloads/usenet:/downloads
+    restart: unless-stopped
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    environment:
+      - PUID=501
+      - PGID=20
+      - TZ=America/New_York
+      - WEBUI_PORT=8081
+    ports:
+      - "8081:8081"
+      - "6881:6881"
+      - "6881:6881/udp"
+    volumes:
+      - ~/media/config/qbittorrent:/config
+      - ~/media/downloads/torrents:/downloads
+    restart: unless-stopped
+
+  # --- Request Management ---
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    environment:
+      - TZ=America/New_York
+    ports:
+      - "5055:5055"
+    volumes:
+      - ~/media/config/jellyseerr:/app/config
+    restart: unless-stopped
+
+  # --- Cloudflare Bypass for Prowlarr ---
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    environment:
+      - TZ=America/New_York
+    ports:
+      - "8191:8191"
+    restart: unless-stopped
+
+  # --- Quality Profile Sync ---
+  recyclarr:
+    image: recyclarr/recyclarr:latest
+    container_name: recyclarr
+    environment:
+      - TZ=America/New_York
+    volumes:
+      - ~/media/config/recyclarr:/config
+    restart: unless-stopped
+
+  # --- Reverse Proxy + Dashboard ---
+  nginx:
+    image: nginx:alpine
+    container_name: media-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - jellyfin
+      - sonarr
+      - sonarr-anime
+      - radarr
+      - prowlarr
+      - bazarr
+      - sabnzbd
+      - qbittorrent
+      - jellyseerr
+    restart: unless-stopped
