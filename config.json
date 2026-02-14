@@ -4,11 +4,16 @@
     "password": "changeme123"
   },
 
+  "qbittorrent": {
+    "username": "admin",
+    "password": "changeme123"
+  },
+
   "timezone": "America/New_York",
 
   "downloads": {
-    "complete": "/downloads/complete",
-    "incomplete": "/downloads/incomplete",
+    "complete": "/downloads/torrents/complete",
+    "incomplete": "/downloads/torrents/incomplete",
     "seeding_ratio": 2,
     "seeding_time_minutes": 10080
   },

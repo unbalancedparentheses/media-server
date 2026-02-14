@@ -15,6 +15,8 @@ cfg() { jq -r "$1" "$CONFIG_FILE"; }
 
 JELLYFIN_USER=$(cfg '.jellyfin.username')
 JELLYFIN_PASS=$(cfg '.jellyfin.password')
+QBIT_USER=$(cfg '.qbittorrent.username')
+QBIT_CONFIGURED_PASS=$(cfg '.qbittorrent.password')
 DL_COMPLETE=$(cfg '.downloads.complete')
 DL_INCOMPLETE=$(cfg '.downloads.incomplete')
 SEED_RATIO=$(cfg '.downloads.seeding_ratio')
@@ -97,8 +99,10 @@ if [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ]; then
   fi
 fi
 
-QBIT_PASS=$(docker logs qbittorrent 2>&1 | sed -n 's/.*A temporary password is provided for this session: *//p' | tail -1 || echo "")
-[ -z "$QBIT_PASS" ] && QBIT_PASS="adminadmin"
+# Try configured password first, fall back to temp password from logs
+QBIT_TEMP_PASS=$(docker logs qbittorrent 2>&1 | sed -n 's/.*A temporary password is provided for this session: *//p' | tail -1 || echo "")
+[ -z "$QBIT_TEMP_PASS" ] && QBIT_TEMP_PASS="adminadmin"
+QBIT_PASS="$QBIT_CONFIGURED_PASS"
 
 [ -n "$SONARR_KEY" ]       && ok "Sonarr:       $SONARR_KEY"       || err "Sonarr key not found"
 [ -n "$SONARR_ANIME_KEY" ] && ok "Sonarr Anime: $SONARR_ANIME_KEY" || err "Sonarr Anime key not found"
@@ -112,26 +116,38 @@ ok "qBittorrent:  admin / $QBIT_PASS"
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring qBittorrent..."
 
-QBIT_COOKIE=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
-  -d "username=admin&password=$QBIT_PASS" 2>/dev/null | sed -n 's/.*SID[[:space:]]*//p' || echo "")
+# Try configured password first, then temp password
+QBIT_COOKIE=""
+for try_pass in "$QBIT_PASS" "$QBIT_TEMP_PASS"; do
+  QBIT_COOKIE=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
+    -d "username=$QBIT_USER&password=$try_pass" 2>/dev/null | sed -n 's/.*SID[[:space:]]*//p' || echo "")
+  [ -n "$QBIT_COOKIE" ] && break
+done
 
 if [ -n "$QBIT_COOKIE" ]; then
   ok "Logged in"
+
+  # Set permanent password + preferences
   curl -sf -o /dev/null "$QBIT_URL/api/v2/app/setPreferences" \
     -b "SID=$QBIT_COOKIE" \
     --data-urlencode "json={
+      \"web_ui_username\": \"$QBIT_USER\",
+      \"web_ui_password\": \"$QBIT_PASS\",
       \"save_path\": \"$DL_COMPLETE\",
       \"temp_path\": \"$DL_INCOMPLETE\",
       \"temp_path_enabled\": true,
       \"web_ui_port\": 8081,
       \"max_ratio\": $SEED_RATIO,
       \"max_seeding_time\": $SEED_TIME
-    }" 2>/dev/null && ok "Preferences set (ratio: $SEED_RATIO, seed time: ${SEED_TIME}m)" || warn "Could not set preferences"
+    }" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"
 
   for cat in sonarr sonarr-anime radarr; do
     curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/createCategory" \
       -b "SID=$QBIT_COOKIE" \
-      -d "category=$cat&savePath=$DL_COMPLETE/$cat" 2>/dev/null && ok "Category: $cat" || true
+      -d "category=$cat&savePath=$DL_COMPLETE/$cat" 2>/dev/null && ok "Category: $cat" || \
+    curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/editCategory" \
+      -b "SID=$QBIT_COOKIE" \
+      -d "category=$cat&savePath=$DL_COMPLETE/$cat" 2>/dev/null && ok "Category: $cat (updated)" || true
   done
 else
   warn "Could not log in"
@@ -193,7 +209,14 @@ fi
 # 2b. SABNZBD — create categories so Sonarr/Radarr can connect
 # ═══════════════════════════════════════════════════════════════════
 if [ -n "$SABNZBD_KEY" ]; then
-  info "Creating SABnzbd categories..."
+  info "Configuring SABnzbd..."
+
+  # Set download directories
+  curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=complete_dir&value=/downloads/usenet/complete&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
+  curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=download_dir&value=/downloads/usenet/incomplete&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
+  ok "Directories: /downloads/usenet/{complete,incomplete}"
+
+  # Create categories
   EXISTING_CATS=$(curl -sf "$SABNZBD_URL/api?mode=get_cats&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.categories[]' 2>/dev/null || echo "")
   for cat in sonarr sonarr-anime radarr; do
     if ! echo "$EXISTING_CATS" | grep -q "^${cat}$"; then
@@ -209,7 +232,7 @@ fi
 # 3. SONARR / RADARR — root folders + download clients
 # ═══════════════════════════════════════════════════════════════════
 configure_arr() {
-  local name="$1" url="$2" key="$3" root_folder="$4"
+  local name="$1" url="$2" key="$3" root_folder="$4" cat_field="$5"
   info "Configuring $name..."
   local H="X-Api-Key: $key"
 
@@ -228,9 +251,9 @@ configure_arr() {
       "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
       "enable":true,"protocol":"torrent","priority":1,
       "fields":[{"name":"host","value":"qbittorrent"},{"name":"port","value":8081},
-        {"name":"username","value":"admin"},{"name":"password","value":"'"$QBIT_PASS"'"},
-        {"name":"category","value":"'"$name"'"}]
-    }' >/dev/null 2>&1 && ok "qBittorrent connected" || warn "Could not add qBittorrent"
+        {"name":"username","value":"'"$QBIT_USER"'"},{"name":"password","value":"'"$QBIT_PASS"'"},
+        {"name":"'"$cat_field"'","value":"'"$name"'"}]
+    }' >/dev/null 2>&1 && ok "qBittorrent connected (category: $name)" || warn "Could not add qBittorrent"
   else ok "qBittorrent connected"; fi
 
   if [ -n "$SABNZBD_KEY" ] && ! echo "$EXISTING_DL" | grep -q "SABnzbd"; then
@@ -238,14 +261,14 @@ configure_arr() {
       "name":"SABnzbd","implementation":"Sabnzbd","configContract":"SabnzbdSettings",
       "enable":true,"protocol":"usenet","priority":2,
       "fields":[{"name":"host","value":"sabnzbd"},{"name":"port","value":8080},
-        {"name":"apiKey","value":"'"$SABNZBD_KEY"'"},{"name":"category","value":"'"$name"'"}]
-    }' >/dev/null 2>&1 && ok "SABnzbd connected" || warn "Could not add SABnzbd"
+        {"name":"apiKey","value":"'"$SABNZBD_KEY"'"},{"name":"'"$cat_field"'","value":"'"$name"'"}]
+    }' >/dev/null 2>&1 && ok "SABnzbd connected (category: $name)" || warn "Could not add SABnzbd"
   elif [ -n "$SABNZBD_KEY" ]; then ok "SABnzbd connected"; fi
 }
 
-[ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "/media/tv"
-[ -n "$SONARR_ANIME_KEY" ] && configure_arr "sonarr-anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "/media/anime"
-[ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "/media/movies"
+[ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "/media/tv"    "tvCategory"
+[ -n "$SONARR_ANIME_KEY" ] && configure_arr "sonarr-anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "/media/anime" "tvCategory"
+[ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "/media/movies" "movieCategory"
 
 # ═══════════════════════════════════════════════════════════════════
 # 4. PROWLARR — connect apps + FlareSolverr + indexers from config
