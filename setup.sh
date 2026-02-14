@@ -90,7 +90,7 @@ SABNZBD_KEY=""
 if [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ]; then
   SABNZBD_KEY=$(sed -n 's/^api_key = *//p' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null || echo "")
   # Ensure Docker hostname is in the whitelist (prevents 403 from Sonarr/Radarr)
-  if ! grep -q "sabnzbd" "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null; then
+  if ! grep -q "^host_whitelist.*sabnzbd" "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null; then
     sed -i '' 's/^host_whitelist = .*/& sabnzbd/' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null
     docker restart sabnzbd >/dev/null 2>&1 && ok "SABnzbd: added Docker hostname to whitelist" || true
     sleep 3
@@ -428,75 +428,74 @@ done
 if [ -n "$BAZARR_CONFIG" ]; then
   ok "Config: $BAZARR_CONFIG"
 
-  # Use python3 to update the YAML config (available on macOS)
+  # Use python3 to do targeted updates (preserves all existing config)
   python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" << 'PYEOF'
-import sys, json, os
+import sys
 
 config_path = sys.argv[1]
 sonarr_key = sys.argv[2]
 radarr_key = sys.argv[3]
 
-# Bazarr uses a simple YAML that's also valid as line-based config
-# Read the raw file
 with open(config_path, 'r') as f:
-    content = f.read()
+    lines = f.readlines()
 
-# Try to use PyYAML if available, otherwise do line-based replacement
-try:
-    import yaml
-    config = yaml.safe_load(content) or {}
-except ImportError:
-    # Fallback: write a fresh config with the essential settings
-    config = {}
+# Parse into sections: { section_name: { key: line_index } }
+sections = {}
+current_section = None
+for i, line in enumerate(lines):
+    stripped = line.rstrip('\n')
+    if stripped and not stripped[0].isspace() and stripped.endswith(':') and stripped != '---':
+        current_section = stripped[:-1]
+        sections[current_section] = {}
+    elif current_section and stripped.startswith('  ') and ':' in stripped:
+        key = stripped.split(':')[0].strip()
+        sections[current_section][key] = i
 
-# Ensure sections exist
-for section in ['general', 'sonarr', 'radarr']:
-    if section not in config:
-        config[section] = {}
+def set_value(section, key, value):
+    """Update an existing key or append to section."""
+    if isinstance(value, bool):
+        val_str = 'true' if value else 'false'
+    elif isinstance(value, str):
+        val_str = f"'{value}'" if value else "''"
+    else:
+        val_str = str(value)
 
-# Configure Sonarr connection
+    if section in sections and key in sections[section]:
+        idx = sections[section][key]
+        lines[idx] = f'  {key}: {val_str}\n'
+    elif section in sections:
+        # Find end of section to append
+        sec_keys = sections[section]
+        if sec_keys:
+            last_idx = max(sec_keys.values())
+        else:
+            # Find section header line
+            for j, l in enumerate(lines):
+                if l.rstrip('\n') == f'{section}:':
+                    last_idx = j
+                    break
+        lines.insert(last_idx + 1, f'  {key}: {val_str}\n')
+        # Rebuild index for this section
+        sections[section][key] = last_idx + 1
+
 if sonarr_key:
-    config['sonarr']['ip'] = 'sonarr'
-    config['sonarr']['port'] = 8989
-    config['sonarr']['base_url'] = '/'
-    config['sonarr']['apikey'] = sonarr_key
-    config['sonarr']['ssl'] = False
-    config['sonarr']['series_sync'] = 60
-    config['sonarr']['episodes_sync'] = 60
-    config['general']['use_sonarr'] = True
+    set_value('sonarr', 'ip', 'sonarr')
+    set_value('sonarr', 'port', 8989)
+    set_value('sonarr', 'base_url', '/')
+    set_value('sonarr', 'apikey', sonarr_key)
+    set_value('sonarr', 'ssl', False)
+    set_value('general', 'use_sonarr', True)
 
-# Configure Radarr connection
 if radarr_key:
-    config['radarr']['ip'] = 'radarr'
-    config['radarr']['port'] = 7878
-    config['radarr']['base_url'] = '/'
-    config['radarr']['apikey'] = radarr_key
-    config['radarr']['ssl'] = False
-    config['radarr']['movies_sync'] = 60
-    config['general']['use_radarr'] = True
+    set_value('radarr', 'ip', 'radarr')
+    set_value('radarr', 'port', 7878)
+    set_value('radarr', 'base_url', '/')
+    set_value('radarr', 'apikey', radarr_key)
+    set_value('radarr', 'ssl', False)
+    set_value('general', 'use_radarr', True)
 
-try:
-    import yaml
-    with open(config_path, 'w') as f:
-        yaml.dump(config, f, default_flow_style=False)
-except ImportError:
-    # Fallback: write as JSON (Bazarr also accepts this format in some versions)
-    with open(config_path, 'w') as f:
-        yaml_lines = []
-        def write_yaml(d, indent=0):
-            for k, v in d.items():
-                prefix = '  ' * indent
-                if isinstance(v, dict):
-                    yaml_lines.append(f'{prefix}{k}:')
-                    write_yaml(v, indent + 1)
-                elif isinstance(v, bool):
-                    yaml_lines.append(f'{prefix}{k}: {"true" if v else "false"}')
-                elif isinstance(v, str):
-                    yaml_lines.append(f"{prefix}{k}: '{v}'")
-                else:
-                    yaml_lines.append(f'{prefix}{k}: {v}')
-        write_yaml(config)
-        f.write('\n'.join(yaml_lines) + '\n')
+with open(config_path, 'w') as f:
+    f.writelines(lines)
 
 print("OK")
 PYEOF
@@ -535,6 +534,7 @@ if [ "$JS_INITIALIZED" != "true" ]; then
       .jellyfin.apiKey = $key |
       .jellyfin.serverId = $sid |
       .jellyfin.name = "Jellyfin" |
+      .main.mediaServerType = 2 |
       .public.initialized = true
     ' "$JS_SETTINGS" 2>/dev/null)
 
