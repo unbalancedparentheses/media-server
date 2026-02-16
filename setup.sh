@@ -275,14 +275,24 @@ if [ -n "$JELLYFIN_TOKEN" ]; then
 
   for lib_pair in "Movies:/media/movies:movies" "TV Shows:/media/tv:tvshows" "Anime:/media/anime:tvshows"; do
     lib_name="${lib_pair%%:*}"; rest="${lib_pair#*:}"; lib_path="${rest%%:*}"; lib_type="${rest##*:}"
-    if echo "$EXISTING_LIBS" | grep -q "^${lib_name}$"; then
-      ok "Library '$lib_name' exists"
-    else
+    if ! echo "$EXISTING_LIBS" | grep -q "^${lib_name}$"; then
       encoded=$(printf '%s' "$lib_name" | jq -sRr @uri)
-      api POST "$JELLYFIN_URL/Library/VirtualFolders?name=${encoded}&collectionType=$lib_type&refreshLibrary=true" \
+      api POST "$JELLYFIN_URL/Library/VirtualFolders?name=${encoded}&collectionType=$lib_type&refreshLibrary=false" \
         -H "X-Emby-Token: $JELLYFIN_TOKEN" \
-        -d "{\"LibraryOptions\":{},\"PathInfos\":[{\"Path\":\"$lib_path\"}]}" && \
-        ok "Added library: $lib_name" || warn "Could not add: $lib_name"
+        -d '{"LibraryOptions":{}}' && \
+        ok "Created library: $lib_name" || warn "Could not create: $lib_name"
+    fi
+
+    # Ensure the path is attached (creating the library doesn't always set it)
+    HAS_PATH=$(api GET "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JELLYFIN_TOKEN" | \
+      jq -r --arg name "$lib_name" --arg path "$lib_path" '.[] | select(.Name == $name) | .Locations[] | select(. == $path)' 2>/dev/null || echo "")
+    if [ -z "$HAS_PATH" ]; then
+      api POST "$JELLYFIN_URL/Library/VirtualFolders/Paths?refreshLibrary=true" \
+        -H "X-Emby-Token: $JELLYFIN_TOKEN" \
+        -d "{\"Name\":\"$lib_name\",\"PathInfo\":{\"Path\":\"$lib_path\"}}" && \
+        ok "Library '$lib_name' → $lib_path" || warn "Could not add path to $lib_name"
+    else
+      ok "Library '$lib_name' → $lib_path"
     fi
   done
 
@@ -326,8 +336,14 @@ configure_arr() {
   info "Configuring $name..."
   local H="X-Api-Key: $key"
 
-  EXISTING=$(api GET "$url/api/v3/rootfolder" -H "$H" | jq -r '.[].path' 2>/dev/null || echo "")
-  if echo "$EXISTING" | grep -q "^${root_folder}$"; then
+  # Remove stale root folders (e.g. /downloads) and ensure only the correct one exists
+  EXISTING_ROOTS=$(api GET "$url/api/v3/rootfolder" -H "$H" 2>/dev/null || echo "[]")
+  echo "$EXISTING_ROOTS" | jq -r '.[] | select(.path != "'"$root_folder"'") | .id' 2>/dev/null | while read -r stale_id; do
+    [ -n "$stale_id" ] && api DELETE "$url/api/v3/rootfolder/$stale_id" -H "$H" >/dev/null 2>&1 && \
+      ok "Removed stale root folder (id: $stale_id)"
+  done
+
+  if echo "$EXISTING_ROOTS" | jq -r '.[].path' 2>/dev/null | grep -q "^${root_folder}$"; then
     ok "Root folder: $root_folder"
   else
     api POST "$url/api/v3/rootfolder" -H "$H" -d "{\"path\":\"$root_folder\"}" >/dev/null && \
@@ -796,9 +812,111 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
+# 17. END-TO-END VERIFICATION
+# ═══════════════════════════════════════════════════════════════════
+info "Running end-to-end verification..."
+
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+check() {
+  local desc="$1" result="$2"
+  if [ "$result" = "true" ]; then
+    ok "$desc"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    warn "FAIL: $desc"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+}
+
+# --- Sonarr ---
+SONARR_DL=$(curl -sf "$SONARR_URL/api/v3/downloadclient" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null || echo "[]")
+check "Sonarr → qBittorrent" "$(echo "$SONARR_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
+check "Sonarr → root folder /media/tv" \
+  "$(curl -sf "$SONARR_URL/api/v3/rootfolder" -H "X-Api-Key: $SONARR_KEY" | jq 'any(.[]; .path == "/media/tv")' 2>/dev/null)"
+
+# --- Sonarr Anime ---
+SONARR_ANIME_DL=$(curl -sf "$SONARR_ANIME_URL/api/v3/downloadclient" -H "X-Api-Key: $SONARR_ANIME_KEY" 2>/dev/null || echo "[]")
+check "Sonarr Anime → qBittorrent" "$(echo "$SONARR_ANIME_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
+check "Sonarr Anime → root folder /media/anime" \
+  "$(curl -sf "$SONARR_ANIME_URL/api/v3/rootfolder" -H "X-Api-Key: $SONARR_ANIME_KEY" | jq 'any(.[]; .path == "/media/anime")' 2>/dev/null)"
+
+# --- Radarr ---
+RADARR_DL=$(curl -sf "$RADARR_URL/api/v3/downloadclient" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null || echo "[]")
+check "Radarr → qBittorrent" "$(echo "$RADARR_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
+check "Radarr → root folder /media/movies" \
+  "$(curl -sf "$RADARR_URL/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" | jq 'any(.[]; .path == "/media/movies")' 2>/dev/null)"
+check "Radarr → no stale root folders" \
+  "$(curl -sf "$RADARR_URL/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" | jq '[.[] | .path] | all(. == "/media/movies")' 2>/dev/null)"
+
+# --- Prowlarr ---
+PROWLARR_APPS=$(curl -sf "$PROWLARR_URL/api/v1/applications" -H "X-Api-Key: $PROWLARR_KEY" 2>/dev/null || echo "[]")
+check "Prowlarr → Sonarr" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Sonarr")' 2>/dev/null)"
+check "Prowlarr → Sonarr Anime" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Sonarr Anime")' 2>/dev/null)"
+check "Prowlarr → Radarr" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Radarr")' 2>/dev/null)"
+
+PROWLARR_INDEXERS=$(curl -sf "$PROWLARR_URL/api/v1/indexer" -H "X-Api-Key: $PROWLARR_KEY" 2>/dev/null || echo "[]")
+INDEXER_COUNT=$(echo "$PROWLARR_INDEXERS" | jq '[.[] | select(.enable == true)] | length' 2>/dev/null || echo "0")
+check "Prowlarr → indexers enabled (${INDEXER_COUNT})" "$([ "$INDEXER_COUNT" -gt 0 ] 2>/dev/null && echo true || echo false)"
+
+# --- qBittorrent ---
+QBIT_COOKIE_V=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" -d "username=$QBIT_USER&password=$QBIT_PASS" 2>/dev/null | sed -n 's/.*SID[[:space:]]*//p')
+check "qBittorrent → login" "$([ -n "$QBIT_COOKIE_V" ] && echo true || echo false)"
+
+QBIT_CATS=$(curl -sf "$QBIT_URL/api/v2/torrents/categories" -b "SID=$QBIT_COOKIE_V" 2>/dev/null || echo "{}")
+check "qBittorrent → category: sonarr" "$(echo "$QBIT_CATS" | jq 'has("sonarr")' 2>/dev/null)"
+check "qBittorrent → category: radarr" "$(echo "$QBIT_CATS" | jq 'has("radarr")' 2>/dev/null)"
+
+# --- Jellyfin ---
+JF_HEADER_V='X-Emby-Authorization: MediaBrowser Client="verify", Device="script", DeviceId="verify", Version="1.0"'
+JF_AUTH_V=$(curl -sf -X POST "$JELLYFIN_URL/Users/AuthenticateByName" -H "$JF_HEADER_V" \
+  -H "Content-Type: application/json" -d "{\"Username\":\"$JELLYFIN_USER\",\"Pw\":\"$JELLYFIN_PASS\"}" 2>/dev/null)
+JF_TOKEN_V=$(echo "$JF_AUTH_V" | jq -r '.AccessToken // empty' 2>/dev/null)
+check "Jellyfin → login" "$([ -n "$JF_TOKEN_V" ] && echo true || echo false)"
+
+if [ -n "$JF_TOKEN_V" ]; then
+  # Pipe to file — Jellyfin response is too large for shell variables
+  curl -sf "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JF_TOKEN_V" > /tmp/jf_verify.json 2>/dev/null
+  for lp in "Movies:/media/movies" "TV Shows:/media/tv" "Anime:/media/anime"; do
+    ln="${lp%%:*}"; lpath="${lp#*:}"
+    HAS=$(jq --arg n "$ln" --arg p "$lpath" \
+      '[.[] | select(.Name == $n) | .Locations[] | select(. == $p)] | length > 0' /tmp/jf_verify.json 2>/dev/null)
+    check "Jellyfin → $ln → $lpath" "$HAS"
+  done
+  rm -f /tmp/jf_verify.json
+fi
+
+# --- Jellyseerr ---
+JS_STATUS=$(curl -sf "$JELLYSEERR_URL/api/v1/settings/public" 2>/dev/null)
+check "Jellyseerr → initialized" "$(echo "$JS_STATUS" | jq '.initialized' 2>/dev/null)"
+
+# --- Prowlarr search test ---
+curl -sf --max-time 30 "$PROWLARR_URL/api/v1/search?query=big+buck+bunny&type=movie&limit=3" \
+  -H "X-Api-Key: $PROWLARR_KEY" > /tmp/prowlarr_verify.json 2>/dev/null || echo "[]" > /tmp/prowlarr_verify.json
+SEARCH_COUNT=$(jq 'length' /tmp/prowlarr_verify.json 2>/dev/null || echo "0")
+rm -f /tmp/prowlarr_verify.json
+check "Prowlarr → search works (${SEARCH_COUNT} results)" "$([ "$SEARCH_COUNT" -gt 0 ] 2>/dev/null && echo true || echo false)"
+
+# --- Radarr health (no errors) ---
+RADARR_ERRORS=$(curl -sf "$RADARR_URL/api/v3/health" -H "X-Api-Key: $RADARR_KEY" | jq '[.[] | select(.type == "error")] | length' 2>/dev/null || echo "0")
+check "Radarr → no health errors" "$([ "$RADARR_ERRORS" = "0" ] && echo true || echo false)"
+
+SONARR_ERRORS=$(curl -sf "$SONARR_URL/api/v3/health" -H "X-Api-Key: $SONARR_KEY" | jq '[.[] | select(.type == "error")] | length' 2>/dev/null || echo "0")
+check "Sonarr → no health errors" "$([ "$SONARR_ERRORS" = "0" ] && echo true || echo false)"
+
+# --- Summary ---
+TOTAL=$((TESTS_PASSED + TESTS_FAILED))
+echo ""
+if [ "$TESTS_FAILED" -eq 0 ]; then
+  printf "\033[1;32m   All %d checks passed!\033[0m\n" "$TOTAL"
+else
+  printf "\033[1;31m   %d/%d checks failed\033[0m\n" "$TESTS_FAILED" "$TOTAL"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
 # DONE
 # ═══════════════════════════════════════════════════════════════════
-info "Done! All services connected."
 echo ""
 echo "  ┌──────────────────────────────────────────────────────────┐"
 echo "  │                   Setup Complete!                        │"
@@ -817,15 +935,4 @@ echo "    1. Go to http://jellyseerr.media.local"
 echo "    2. Search for a series or movie"
 echo "    3. Click Request"
 echo "    4. Watch at http://jellyfin.media.local"
-echo ""
-echo "  Connections:"
-echo "    Prowlarr  → Sonarr, Sonarr Anime, Radarr, FlareSolverr"
-echo "    Sonarr    → qBittorrent, SABnzbd"
-echo "    Radarr    → qBittorrent, SABnzbd"
-echo "    Bazarr    → Sonarr, Radarr"
-echo "    Jellyseerr→ Jellyfin, Sonarr, Sonarr Anime, Radarr"
-echo "    Recyclarr → Sonarr, Sonarr Anime, Radarr"
-echo ""
-echo "  To add indexers, edit config.json and set 'enable: true',"
-echo "  then run ./setup.sh again. It's idempotent."
 echo ""
