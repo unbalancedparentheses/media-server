@@ -7,7 +7,7 @@ set -eo pipefail
 # ═══════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONFIG_FILE="$SCRIPT_DIR/config.json"
+CONFIG_FILE="$SCRIPT_DIR/config.toml"
 MEDIA_DIR="$HOME/media"
 CONFIG_DIR="$MEDIA_DIR/config"
 
@@ -33,7 +33,7 @@ wait_for() {
   echo " up"
 }
 
-cfg() { jq -r "$1" "$CONFIG_FILE"; }
+cfg() { echo "$CONFIG_JSON" | jq -r "$1"; }
 
 get_api_key() {
   local f="$CONFIG_DIR/$1/config.xml"
@@ -77,10 +77,19 @@ else
   ok "jq"
 fi
 
-# config.json
-if [ ! -f "$CONFIG_FILE" ]; then
-  err "Missing config.json — copy config.json.example and fill in your values"
+# yq (TOML/YAML parser)
+if ! command -v yq &>/dev/null; then
+  brew install yq
+  ok "yq installed"
+else
+  ok "yq"
 fi
+
+# config.toml
+if [ ! -f "$CONFIG_FILE" ]; then
+  err "Missing config.toml — copy config.toml.example and fill in your values"
+fi
+CONFIG_JSON=$(yq -p toml -o json '.' "$CONFIG_FILE")
 
 # ═══════════════════════════════════════════════════════════════════
 # 2. DIRECTORY STRUCTURE
@@ -94,6 +103,21 @@ mkdir -p "$MEDIA_DIR"/backups
 mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,organizr}/logs
 
 ok "~/media/ directory tree ready"
+
+# Pre-seed SABnzbd config to skip the first-run wizard
+if [ ! -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ]; then
+  SAB_GEN_KEY=$(openssl rand -hex 16)
+  cat > "$CONFIG_DIR/sabnzbd/sabnzbd.ini" << SABEOF
+__version__ = 19
+__encoding__ = utf-8
+[misc]
+api_key = $SAB_GEN_KEY
+download_dir = /downloads/usenet/incomplete
+complete_dir = /downloads/usenet/complete
+host_whitelist = sabnzbd
+SABEOF
+  ok "SABnzbd: pre-seeded config (wizard skipped)"
+fi
 
 # ═══════════════════════════════════════════════════════════════════
 # 3. DOCKER COMPOSE
@@ -144,6 +168,10 @@ SONARR_PROFILE=$(cfg '.quality.sonarr_profile')
 SONARR_ANIME_PROFILE=$(cfg '.quality.sonarr_anime_profile')
 RADARR_PROFILE=$(cfg '.quality.radarr_profile')
 
+ORGANIZR_USER=$(cfg '.organizr.username')
+ORGANIZR_PASS=$(cfg '.organizr.password')
+ORGANIZR_EMAIL=$(cfg '.organizr.email')
+
 QBIT_URL="http://localhost:8081"
 JELLYFIN_URL="http://localhost:8096"
 SONARR_URL="http://localhost:8989"
@@ -153,6 +181,7 @@ PROWLARR_URL="http://localhost:9696"
 BAZARR_URL="http://localhost:6767"
 SABNZBD_URL="http://localhost:8080"
 JELLYSEERR_URL="http://localhost:5055"
+ORGANIZR_URL="http://localhost:9090"
 
 SONARR_INTERNAL="http://sonarr:8989"
 SONARR_ANIME_INTERNAL="http://sonarr-anime:8989"
@@ -172,6 +201,7 @@ wait_for "Bazarr"       "$BAZARR_URL"
 wait_for "SABnzbd"      "$SABNZBD_URL"
 wait_for "qBittorrent"  "$QBIT_URL"
 wait_for "Jellyseerr"   "$JELLYSEERR_URL"
+wait_for "Organizr"     "$ORGANIZR_URL"
 
 # ═══════════════════════════════════════════════════════════════════
 # 7. API KEYS
@@ -374,6 +404,22 @@ configure_arr() {
         {"name":"apiKey","value":"'"$SABNZBD_KEY"'"},{"name":"'"$cat_field"'","value":"'"$name"'"}]
     }' >/dev/null 2>&1 && ok "SABnzbd connected (category: $name)" || warn "Could not add SABnzbd"
   elif [ -n "$SABNZBD_KEY" ]; then ok "SABnzbd connected"; fi
+
+  # Configure web UI authentication (Sonarr v4 / Radarr v5 enable auth by default)
+  HOST_CONFIG=$(api GET "$url/api/v3/config/host" -H "$H" 2>/dev/null || echo "")
+  if [ -n "$HOST_CONFIG" ] && [ "$HOST_CONFIG" != "null" ]; then
+    CURRENT_AUTH_USER=$(echo "$HOST_CONFIG" | jq -r '.username // empty' 2>/dev/null)
+    if [ -z "$CURRENT_AUTH_USER" ]; then
+      HOST_ID=$(echo "$HOST_CONFIG" | jq -r '.id' 2>/dev/null)
+      UPDATED_HOST=$(echo "$HOST_CONFIG" | jq -c \
+        --arg user "$JELLYFIN_USER" --arg pass "$JELLYFIN_PASS" \
+        '.authenticationMethod = "forms" | .username = $user | .password = $pass | .passwordConfirmation = $pass | .authenticationRequired = "enabled"' 2>/dev/null)
+      api PUT "$url/api/v3/config/host/$HOST_ID" -H "$H" -d "$UPDATED_HOST" >/dev/null 2>&1 && \
+        ok "Auth set: $JELLYFIN_USER" || warn "Could not set authentication"
+    else
+      ok "Auth: $CURRENT_AUTH_USER"
+    fi
+  fi
 }
 
 [ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "/media/tv"    "tvCategory"
@@ -507,6 +553,22 @@ if [ -n "$PROWLARR_KEY" ]; then
     done
     rm -f /tmp/prowlarr_indexer.json
   fi
+
+  # Configure web UI authentication
+  PROWLARR_HOST_CONFIG=$(api GET "$PROWLARR_URL/api/v1/config/host" -H "$PH" 2>/dev/null || echo "")
+  if [ -n "$PROWLARR_HOST_CONFIG" ] && [ "$PROWLARR_HOST_CONFIG" != "null" ]; then
+    PROWLARR_AUTH_USER=$(echo "$PROWLARR_HOST_CONFIG" | jq -r '.username // empty' 2>/dev/null)
+    if [ -z "$PROWLARR_AUTH_USER" ]; then
+      PROWLARR_HOST_ID=$(echo "$PROWLARR_HOST_CONFIG" | jq -r '.id' 2>/dev/null)
+      PROWLARR_HOST_UPDATED=$(echo "$PROWLARR_HOST_CONFIG" | jq -c \
+        --arg user "$JELLYFIN_USER" --arg pass "$JELLYFIN_PASS" \
+        '.authenticationMethod = "forms" | .username = $user | .password = $pass | .passwordConfirmation = $pass | .authenticationRequired = "enabled"' 2>/dev/null)
+      api PUT "$PROWLARR_URL/api/v1/config/host/$PROWLARR_HOST_ID" -H "$PH" -d "$PROWLARR_HOST_UPDATED" >/dev/null 2>&1 && \
+        ok "Auth set: $JELLYFIN_USER" || warn "Could not set authentication"
+    else
+      ok "Auth: $PROWLARR_AUTH_USER"
+    fi
+  fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════
@@ -562,12 +624,14 @@ if [ -n "$BAZARR_CONFIG" ]; then
   ok "Config: $BAZARR_CONFIG"
 
   # Use python3 to do targeted updates (preserves all existing config)
-  python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" << 'PYEOF'
+  python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" << 'PYEOF'
 import sys
+import json
 
 config_path = sys.argv[1]
 sonarr_key = sys.argv[2]
 radarr_key = sys.argv[3]
+subtitle_providers = sys.argv[4] if len(sys.argv) > 4 else ''
 
 with open(config_path, 'r') as f:
     lines = f.readlines()
@@ -626,6 +690,11 @@ if radarr_key:
     set_value('radarr', 'apikey', radarr_key)
     set_value('radarr', 'ssl', False)
     set_value('general', 'use_radarr', True)
+
+# Configure subtitle providers
+if subtitle_providers:
+    providers_list = json.dumps(subtitle_providers.split(','))
+    set_value('general', 'enabled_providers', providers_list)
 
 with open(config_path, 'w') as f:
     f.writelines(lines)
@@ -816,7 +885,114 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 17. END-TO-END VERIFICATION
+# 17. ORGANIZR — dashboard with tabs for all services
+# ═══════════════════════════════════════════════════════════════════
+info "Configuring Organizr..."
+
+ORGANIZR_API_KEY=""
+
+# Find existing config to check if wizard was already run
+ORG_CONFIG_PHP=""
+for p in \
+  "$CONFIG_DIR/organizr/www/organizr/data/config/config.php"; do
+  [ -f "$p" ] && ORG_CONFIG_PHP="$p" && break
+done
+
+if [ -z "$ORG_CONFIG_PHP" ]; then
+  # Run the initial setup wizard
+  ORGANIZR_HASH=$(openssl rand -hex 16)
+  ORGANIZR_API_KEY=$(openssl rand -hex 10)
+  ORGANIZR_REG_PASS=$(openssl rand -hex 8)
+
+  WIZARD_RESP=$(curl -sf -X POST "$ORGANIZR_URL/api/v2/wizard" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"license\": \"personal\",
+      \"hashKey\": \"$ORGANIZR_HASH\",
+      \"api\": \"$ORGANIZR_API_KEY\",
+      \"registrationPassword\": \"$ORGANIZR_REG_PASS\",
+      \"username\": \"$ORGANIZR_USER\",
+      \"password\": \"$ORGANIZR_PASS\",
+      \"email\": \"$ORGANIZR_EMAIL\",
+      \"driver\": \"sqlite3\",
+      \"dbName\": \"organizr\",
+      \"dbPath\": \"/config/www/organizr/api/config/\"
+    }" 2>/dev/null || echo "")
+
+  WIZARD_RESULT=$(echo "$WIZARD_RESP" | jq -r '.response.result // empty' 2>/dev/null)
+  if [ "$WIZARD_RESULT" = "success" ]; then
+    ok "Wizard completed"
+    # Locate the config file created by the wizard
+    sleep 2
+    for p in \
+      "$CONFIG_DIR/organizr/www/organizr/data/config/config.php" \
+      "$CONFIG_DIR/organizr/www/Dashboard/api/config/config.php" \
+      "$CONFIG_DIR/organizr/api/config/config.php"; do
+      [ -f "$p" ] && ORG_CONFIG_PHP="$p" && break
+    done
+  else
+    WIZARD_MSG=$(echo "$WIZARD_RESP" | jq -r '.response.message // "unknown error"' 2>/dev/null)
+    warn "Wizard: $WIZARD_MSG"
+  fi
+else
+  ok "Already configured"
+fi
+
+# Read API key from config file if not set from wizard
+if [ -z "$ORGANIZR_API_KEY" ] && [ -n "$ORG_CONFIG_PHP" ]; then
+  ORGANIZR_API_KEY=$(sed -n "s/.*'organizrAPI' => '\([^']*\)'.*/\1/p" "$ORG_CONFIG_PHP" 2>/dev/null || echo "")
+fi
+
+# Create service tabs
+if [ -n "$ORGANIZR_API_KEY" ]; then
+  ok "API key: ${ORGANIZR_API_KEY:0:8}..."
+
+  EXISTING_TABS=$(curl -sf "$ORGANIZR_URL/api/v2/tabs" -H "Token: $ORGANIZR_API_KEY" 2>/dev/null || echo "")
+  EXISTING_TAB_NAMES=$(echo "$EXISTING_TABS" | jq -r '.response.data.tabs[].name' 2>/dev/null || echo "")
+
+  add_organizr_tab() {
+    local name="$1" url="$2" image="$3" order="$4"
+    if echo "$EXISTING_TAB_NAMES" | grep -q "^${name}$"; then
+      ok "Tab: $name"
+      return 0
+    fi
+    local resp
+    resp=$(curl -sf -X POST "$ORGANIZR_URL/api/v2/tabs" \
+      -H "Content-Type: application/json" \
+      -H "Token: $ORGANIZR_API_KEY" \
+      -d "{
+        \"name\": \"$name\",
+        \"url\": \"$url\",
+        \"image\": \"$image\",
+        \"type\": 1,
+        \"enabled\": 1,
+        \"group_id\": 0,
+        \"order\": $order
+      }" 2>/dev/null || echo "")
+    local result
+    result=$(echo "$resp" | jq -r '.response.result // empty' 2>/dev/null)
+    if [ "$result" = "success" ]; then
+      ok "Tab: $name"
+    else
+      warn "Tab $name: $(echo "$resp" | jq -r '.response.message // "failed"' 2>/dev/null)"
+    fi
+  }
+
+  add_organizr_tab "Jellyseerr"    "http://localhost:5055"  "plugins/images/tabs/overseerr.png"    1
+  add_organizr_tab "Jellyfin"      "http://localhost:8096"  "plugins/images/tabs/jellyfin.png"     2
+  add_organizr_tab "Sonarr"        "http://localhost:8989"  "plugins/images/tabs/sonarr.png"       3
+  add_organizr_tab "Sonarr Anime"  "http://localhost:8990"  "plugins/images/tabs/sonarr.png"       4
+  add_organizr_tab "Radarr"        "http://localhost:7878"  "plugins/images/tabs/radarr.png"       5
+  add_organizr_tab "Prowlarr"      "http://localhost:9696"  "plugins/images/tabs/prowlarr.png"     6
+  add_organizr_tab "Bazarr"        "http://localhost:6767"  "plugins/images/tabs/bazarr.png"       7
+  add_organizr_tab "qBittorrent"   "http://localhost:8081"  "plugins/images/tabs/qbittorrent.png"  8
+  add_organizr_tab "SABnzbd"       "http://localhost:8080"  "plugins/images/tabs/sabnzbd.png"      9
+else
+  warn "No API key — complete Organizr setup manually at $ORGANIZR_URL"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 18. END-TO-END VERIFICATION
 # ═══════════════════════════════════════════════════════════════════
 info "Running end-to-end verification..."
 
@@ -894,6 +1070,16 @@ fi
 # --- Jellyseerr ---
 JS_STATUS=$(curl -sf "$JELLYSEERR_URL/api/v1/settings/public" 2>/dev/null)
 check "Jellyseerr → initialized" "$(echo "$JS_STATUS" | jq '.initialized' 2>/dev/null)"
+
+# --- Organizr ---
+ORGANIZR_PING=$(curl -sf -o /dev/null -w "%{http_code}" "$ORGANIZR_URL" 2>/dev/null)
+check "Organizr → responds" "$([ "$ORGANIZR_PING" = "200" ] && echo true || echo false)"
+
+if [ -n "$ORGANIZR_API_KEY" ]; then
+  ORG_TABS_V=$(curl -sf "$ORGANIZR_URL/api/v2/tabs" -H "Token: $ORGANIZR_API_KEY" 2>/dev/null || echo "")
+  ORG_TAB_COUNT=$(echo "$ORG_TABS_V" | jq '[.response.data.tabs[] | select(.type == 1)] | length' 2>/dev/null || echo "0")
+  check "Organizr → service tabs (${ORG_TAB_COUNT})" "$([ "$ORG_TAB_COUNT" -gt 0 ] 2>/dev/null && echo true || echo false)"
+fi
 
 # --- Prowlarr search test ---
 # Search test — use a longer timeout and check indexer count as fallback

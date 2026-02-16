@@ -1,0 +1,122 @@
+# ─── Credentials ─────────────────────────────────────────────────
+
+[jellyfin]
+username = "unbalancedparen"
+password = "changeme123"
+
+[qbittorrent]
+username = "admin"
+password = "changeme123"
+
+[organizr]
+username = "unbalancedparen"
+password = "changeme123"
+email = "admin@media.local"
+
+# ─── General ────────────────────────────────────────────────────
+
+timezone = "America/New_York"
+
+[downloads]
+complete = "/downloads/torrents/complete"
+incomplete = "/downloads/torrents/incomplete"
+seeding_ratio = 2
+seeding_time_minutes = 10080
+
+[subtitles]
+languages = ["en"]
+providers = ["opensubtitlescom"]
+
+# ─── Quality (Recyclarr TRaSH Guide profiles) ──────────────────
+
+[quality]
+sonarr_profile = "WEB-1080p"
+sonarr_anime_profile = "Remux-1080p - Anime"
+radarr_profile = "HD Bluray + WEB"
+
+# ─── Indexers (Prowlarr) ───────────────────────────────────────
+
+[[indexers]]
+name = "1337x"
+definitionName = "1337x"
+enable = true
+flaresolverr = true
+
+[[indexers]]
+name = "EZTV"
+definitionName = "eztv"
+enable = true
+
+[[indexers]]
+name = "The Pirate Bay"
+definitionName = "thepiratebay"
+enable = true
+
+[[indexers]]
+name = "YTS"
+definitionName = "yts"
+enable = true
+
+[[indexers]]
+name = "Knaben"
+definitionName = "Knaben"
+enable = true
+
+[[indexers]]
+name = "LimeTorrents"
+definitionName = "limetorrents"
+enable = true
+
+[[indexers]]
+name = "Torrent Downloads"
+definitionName = "torrentdownloads"
+enable = true
+
+[[indexers]]
+name = "BitSearch"
+definitionName = "bitsearch"
+enable = true
+
+[[indexers]]
+name = "MegaPeer"
+definitionName = "megapeer"
+enable = true
+
+[[indexers]]
+name = "Nyaa.si"
+definitionName = "nyaasi"
+enable = true
+
+[[indexers]]
+name = "SubsPlease"
+definitionName = "SubsPlease"
+enable = true
+
+[[indexers]]
+name = "Mikan"
+definitionName = "mikan"
+enable = true
+
+[[indexers]]
+name = "Bangumi Moe"
+definitionName = "bangumi-moe"
+enable = true
+
+# Enable and add your API key if you have an NZBgeek account
+[[indexers]]
+name = "NZBgeek"
+definitionName = "NZBgeek"
+enable = false
+fields = { apiKey = "your-nzbgeek-api-key" }
+
+# ─── Usenet Providers (SABnzbd) ────────────────────────────────
+
+[[usenet_providers]]
+name = "Newshosting"
+enable = false
+host = "news.newshosting.com"
+port = 563
+ssl = true
+username = ""
+password = ""
+connections = 30
