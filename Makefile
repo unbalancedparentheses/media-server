@@ -2,9 +2,9 @@
 
 FLAKE := ~/media-server
 
-# Full setup from scratch (new computer)
-bootstrap:
-	./bootstrap.sh
+# Full setup — installs prereqs, starts containers, wires services (idempotent)
+bootstrap setup:
+	./setup.sh
 
 # Docker shortcuts
 up:
@@ -15,10 +15,6 @@ down:
 
 restart:
 	docker compose down && docker compose up -d
-
-# Re-run service wiring (idempotent)
-setup:
-	./setup.sh
 
 # First-time nix-darwin install
 install: switch

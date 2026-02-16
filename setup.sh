@@ -1,17 +1,130 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
+# ═══════════════════════════════════════════════════════════════════
+# Media Server — One-command setup (fresh install or re-run)
+# Usage: ./setup.sh
+# ═══════════════════════════════════════════════════════════════════
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
-CONFIG_DIR="$HOME/media/config"
+MEDIA_DIR="$HOME/media"
+CONFIG_DIR="$MEDIA_DIR/config"
 
-if [ ! -f "$CONFIG_FILE" ]; then
-  echo "Missing config.json — copy config.json.example and fill in your values"
-  exit 1
+# ─── Helpers ─────────────────────────────────────────────────────
+info()  { printf "\n\033[1;34m=> %s\033[0m\n" "$*"; }
+ok()    { printf "\033[1;32m   ✓ %s\033[0m\n" "$*"; }
+warn()  { printf "\033[1;33m   ! %s\033[0m\n" "$*"; }
+err()   { printf "\033[1;31m   ✗ %s\033[0m\n" "$*"; exit 1; }
+
+api() {
+  local method="$1" url="$2"; shift 2
+  curl -sf -X "$method" "$url" -H "Content-Type: application/json" "$@" 2>/dev/null
+}
+
+wait_for() {
+  local name="$1" url="$2" max=90 i=0
+  printf "   Waiting for %-15s" "$name..."
+  while ! curl -sf -o /dev/null --connect-timeout 2 "$url" 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -ge "$max" ] && echo " timeout!" && return 1
+    sleep 1
+  done
+  echo " up"
+}
+
+cfg() { jq -r "$1" "$CONFIG_FILE"; }
+
+get_api_key() {
+  local f="$CONFIG_DIR/$1/config.xml"
+  [ -f "$f" ] && sed -n 's/.*<ApiKey>\(.*\)<\/ApiKey>.*/\1/p' "$f" 2>/dev/null || echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# 1. PREREQUISITES
+# ═══════════════════════════════════════════════════════════════════
+info "Checking prerequisites..."
+
+# Homebrew
+if ! command -v brew &>/dev/null; then
+  info "Installing Homebrew..."
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
+  ok "Homebrew installed"
+else
+  ok "Homebrew"
 fi
 
-# ─── Read config ─────────────────────────────────────────────────
-cfg() { jq -r "$1" "$CONFIG_FILE"; }
+# Docker
+if ! command -v docker &>/dev/null; then
+  info "Installing Docker Desktop..."
+  brew install --cask docker
+  ok "Docker Desktop installed — please open it from Applications and wait for it to start"
+  echo ""
+  echo "  After Docker Desktop is running, re-run this script."
+  echo ""
+  exit 0
+elif ! docker info &>/dev/null; then
+  err "Docker is installed but not running. Start Docker Desktop and re-run this script."
+fi
+ok "Docker"
+
+# jq
+if ! command -v jq &>/dev/null; then
+  brew install jq
+  ok "jq installed"
+else
+  ok "jq"
+fi
+
+# config.json
+if [ ! -f "$CONFIG_FILE" ]; then
+  err "Missing config.json — copy config.json.example and fill in your values"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 2. DIRECTORY STRUCTURE
+# ═══════════════════════════════════════════════════════════════════
+info "Creating directory structure..."
+
+mkdir -p "$MEDIA_DIR"/{movies,tv,anime}
+mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
+mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
+mkdir -p "$MEDIA_DIR"/backups
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx}/logs
+
+ok "~/media/ directory tree ready"
+
+# ═══════════════════════════════════════════════════════════════════
+# 3. DOCKER COMPOSE
+# ═══════════════════════════════════════════════════════════════════
+info "Starting containers..."
+
+docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d
+
+ok "All containers started"
+
+# ═══════════════════════════════════════════════════════════════════
+# 4. /etc/hosts
+# ═══════════════════════════════════════════════════════════════════
+info "Checking /etc/hosts..."
+
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local"
+
+if ! grep -q "media.local" /etc/hosts 2>/dev/null; then
+  echo ""
+  echo "  Adding .media.local domains to /etc/hosts (requires sudo)..."
+  echo ""
+  sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"
+  ok "Hosts entries added"
+else
+  ok "Hosts entries already present"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 5. READ CONFIG
+# ═══════════════════════════════════════════════════════════════════
+info "Reading config..."
 
 JELLYFIN_USER=$(cfg '.jellyfin.username')
 JELLYFIN_PASS=$(cfg '.jellyfin.password')
@@ -42,33 +155,8 @@ SONARR_ANIME_INTERNAL="http://sonarr-anime:8989"
 RADARR_INTERNAL="http://radarr:7878"
 PROWLARR_INTERNAL="http://prowlarr:9696"
 
-# ─── Helpers ─────────────────────────────────────────────────────
-info()  { printf "\n\033[1;34m=> %s\033[0m\n" "$*"; }
-ok()    { printf "\033[1;32m   ✓ %s\033[0m\n" "$*"; }
-warn()  { printf "\033[1;33m   ! %s\033[0m\n" "$*"; }
-err()   { printf "\033[1;31m   ✗ %s\033[0m\n" "$*"; }
-
-api() {
-  local method="$1" url="$2"; shift 2
-  curl -sf -X "$method" "$url" -H "Content-Type: application/json" "$@" 2>/dev/null
-}
-
-wait_for() {
-  local name="$1" url="$2" max=90 i=0
-  printf "   Waiting for %-15s" "$name..."
-  while ! curl -sf -o /dev/null --connect-timeout 2 "$url" 2>/dev/null; do
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] && echo " timeout!" && return 1
-    sleep 1
-  done
-  echo " up"
-}
-
-get_api_key() {
-  local f="$CONFIG_DIR/$1/config.xml"
-  [ -f "$f" ] && sed -n 's/.*<ApiKey>\(.*\)<\/ApiKey>.*/\1/p' "$f" 2>/dev/null || echo ""
-}
-
+# ═══════════════════════════════════════════════════════════════════
+# 6. WAIT FOR SERVICES
 # ═══════════════════════════════════════════════════════════════════
 info "Waiting for all services..."
 wait_for "Jellyfin"     "$JELLYFIN_URL/health"
@@ -81,6 +169,8 @@ wait_for "SABnzbd"      "$SABNZBD_URL"
 wait_for "qBittorrent"  "$QBIT_URL"
 wait_for "Jellyseerr"   "$JELLYSEERR_URL"
 
+# ═══════════════════════════════════════════════════════════════════
+# 7. API KEYS
 # ═══════════════════════════════════════════════════════════════════
 info "Reading API keys..."
 
@@ -112,7 +202,7 @@ QBIT_PASS="$QBIT_CONFIGURED_PASS"
 ok "qBittorrent:  admin / $QBIT_PASS"
 
 # ═══════════════════════════════════════════════════════════════════
-# 1. QBITTORRENT
+# 8. QBITTORRENT
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring qBittorrent..."
 
@@ -154,7 +244,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 2. JELLYFIN
+# 9. JELLYFIN
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring Jellyfin..."
 
@@ -206,7 +296,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 2b. SABNZBD — create categories so Sonarr/Radarr can connect
+# 10. SABNZBD
 # ═══════════════════════════════════════════════════════════════════
 if [ -n "$SABNZBD_KEY" ]; then
   info "Configuring SABnzbd..."
@@ -229,7 +319,7 @@ if [ -n "$SABNZBD_KEY" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 3. SONARR / RADARR — root folders + download clients
+# 11. SONARR / RADARR — root folders + download clients
 # ═══════════════════════════════════════════════════════════════════
 configure_arr() {
   local name="$1" url="$2" key="$3" root_folder="$4" cat_field="$5"
@@ -271,7 +361,7 @@ configure_arr() {
 [ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "/media/movies" "movieCategory"
 
 # ═══════════════════════════════════════════════════════════════════
-# 4. PROWLARR — connect apps + FlareSolverr + indexers from config
+# 12. PROWLARR — connect apps + FlareSolverr + indexers
 # ═══════════════════════════════════════════════════════════════════
 if [ -n "$PROWLARR_KEY" ]; then
   info "Configuring Prowlarr..."
@@ -400,7 +490,7 @@ if [ -n "$PROWLARR_KEY" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 5. SABNZBD — add usenet providers from config
+# 13. SABNZBD — usenet providers
 # ═══════════════════════════════════════════════════════════════════
 PROVIDER_COUNT=$(cfg '.usenet_providers | length')
 if [ "$PROVIDER_COUNT" -gt 0 ] 2>/dev/null && [ -n "$SABNZBD_KEY" ]; then
@@ -439,7 +529,7 @@ if [ "$PROVIDER_COUNT" -gt 0 ] 2>/dev/null && [ -n "$SABNZBD_KEY" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 6. BAZARR — connect to Sonarr + Radarr (via config file)
+# 14. BAZARR — connect to Sonarr + Radarr
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring Bazarr..."
 
@@ -534,7 +624,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 7. JELLYSEERR — connect to Jellyfin + Sonarr + Radarr
+# 15. JELLYSEERR — connect to Jellyfin + Sonarr + Radarr
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring Jellyseerr..."
 
@@ -646,7 +736,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 8. RECYCLARR — generate config with real keys + profile names
+# 16. RECYCLARR
 # ═══════════════════════════════════════════════════════════════════
 info "Writing Recyclarr config..."
 RECYCLARR_CONFIG="$CONFIG_DIR/recyclarr/recyclarr.yml"
@@ -706,13 +796,27 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
+# DONE
+# ═══════════════════════════════════════════════════════════════════
 info "Done! All services connected."
 echo ""
 echo "  ┌──────────────────────────────────────────────────────────┐"
-echo "  │  Dashboard:    http://localhost                          │"
-echo "  │  Jellyfin:     http://localhost:8096  ($JELLYFIN_USER)  │"
-echo "  │  Jellyseerr:   http://localhost:5055  (request portal)  │"
+echo "  │                   Setup Complete!                        │"
+echo "  ├──────────────────────────────────────────────────────────┤"
+echo "  │                                                          │"
+echo "  │  Dashboard:    http://media.local                        │"
+echo "  │  Request:      http://jellyseerr.media.local             │"
+echo "  │  Watch:        http://jellyfin.media.local               │"
+echo "  │                                                          │"
+echo "  │  All services: http://media.local (links to everything)  │"
+echo "  │                                                          │"
 echo "  └──────────────────────────────────────────────────────────┘"
+echo ""
+echo "  Quick start:"
+echo "    1. Go to http://jellyseerr.media.local"
+echo "    2. Search for a series or movie"
+echo "    3. Click Request"
+echo "    4. Watch at http://jellyfin.media.local"
 echo ""
 echo "  Connections:"
 echo "    Prowlarr  → Sonarr, Sonarr Anime, Radarr, FlareSolverr"
