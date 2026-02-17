@@ -360,6 +360,31 @@ if [ -n "$JELLYFIN_TOKEN" ]; then
     api POST "$JELLYFIN_URL/Auth/Keys?app=MediaServer" -H "X-Emby-Token: $JELLYFIN_TOKEN" >/dev/null 2>&1 || true
   JELLYFIN_API_KEY=$(api GET "$JELLYFIN_URL/Auth/Keys" -H "X-Emby-Token: $JELLYFIN_TOKEN" 2>/dev/null | jq -r '.Items[-1].AccessToken // empty' 2>/dev/null || echo "")
   [ -n "$JELLYFIN_API_KEY" ] && ok "API key: $JELLYFIN_API_KEY"
+
+  # Enable real-time monitoring and daily scans on all libraries
+  LIBS_JSON=$(api GET "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JELLYFIN_TOKEN" 2>/dev/null || echo "[]")
+  echo "$LIBS_JSON" | jq -c '.[]' 2>/dev/null | while IFS= read -r LIB; do
+    LIB_NAME=$(echo "$LIB" | jq -r '.Name')
+    LIB_ID=$(echo "$LIB" | jq -r '.ItemId')
+    LIB_OPTIONS=$(echo "$LIB" | jq -c '.LibraryOptions' 2>/dev/null)
+    if [ -n "$LIB_OPTIONS" ] && [ "$LIB_OPTIONS" != "null" ]; then
+      UPDATED_OPTIONS=$(echo "$LIB_OPTIONS" | jq -c '.EnableRealtimeMonitor = true | .AutomaticRefreshIntervalDays = 1')
+      api POST "$JELLYFIN_URL/Library/VirtualFolders/LibraryOptions" \
+        -H "X-Emby-Token: $JELLYFIN_TOKEN" \
+        -d "{\"Id\":\"$LIB_ID\",\"LibraryOptions\":$UPDATED_OPTIONS}" >/dev/null 2>&1 && \
+        ok "Library '$LIB_NAME': real-time monitoring + daily scan" || warn "Could not update '$LIB_NAME' options"
+    fi
+  done
+
+  # Reduce library monitor delay to 15 seconds for faster content detection
+  SYS_CONFIG=$(api GET "$JELLYFIN_URL/System/Configuration" -H "X-Emby-Token: $JELLYFIN_TOKEN" 2>/dev/null || echo "")
+  if [ -n "$SYS_CONFIG" ] && [ "$SYS_CONFIG" != "null" ]; then
+    UPDATED_SYS=$(echo "$SYS_CONFIG" | jq -c '.LibraryMonitorDelay = 15')
+    api POST "$JELLYFIN_URL/System/Configuration" \
+      -H "X-Emby-Token: $JELLYFIN_TOKEN" \
+      -d "$UPDATED_SYS" >/dev/null 2>&1 && \
+      ok "Library monitor delay: 15s" || warn "Could not set monitor delay"
+  fi
 else
   warn "Could not authenticate"
 fi
@@ -429,6 +454,20 @@ configure_arr() {
         {"name":"apiKey","value":"'"$SABNZBD_KEY"'"},{"name":"'"$cat_field"'","value":"'"$name"'"}]
     }' >/dev/null 2>&1 && ok "SABnzbd connected (category: $name)" || warn "Could not add SABnzbd"
   elif [ -n "$SABNZBD_KEY" ]; then ok "SABnzbd connected"; fi
+
+  # Add Jellyfin notification connection (triggers library scan on import/upgrade)
+  if [ -n "$JELLYFIN_API_KEY" ]; then
+    EXISTING_NOTIF=$(api GET "$url/api/v3/notification" -H "$H" | jq -r '.[].name' 2>/dev/null || echo "")
+    if ! echo "$EXISTING_NOTIF" | grep -q "^Jellyfin$"; then
+      api POST "$url/api/v3/notification" -H "$H" -d '{
+        "name":"Jellyfin","implementation":"MediaBrowser","configContract":"MediaBrowserSettings",
+        "onDownload":true,"onUpgrade":true,"onRename":true,
+        "fields":[{"name":"host","value":"jellyfin"},{"name":"port","value":8096},
+          {"name":"useSsl","value":false},{"name":"apiKey","value":"'"$JELLYFIN_API_KEY"'"},
+          {"name":"updateLibrary","value":true}]
+      }' >/dev/null 2>&1 && ok "Jellyfin notification connected" || warn "Could not add Jellyfin notification"
+    else ok "Jellyfin notification connected"; fi
+  fi
 
   # Configure web UI authentication (Sonarr v4 / Radarr v5 enable auth by default)
   HOST_CONFIG=$(api GET "$url/api/v3/config/host" -H "$H" 2>/dev/null || echo "")
@@ -665,7 +704,7 @@ if [ -n "$BAZARR_CONFIG" ]; then
   ok "Config: $BAZARR_CONFIG"
 
   # Use python3 to do targeted updates (preserves all existing config)
-  if python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" << 'PYEOF'
+  if python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" "$SUBTITLE_LANGS" << 'PYEOF'
 import sys
 import json
 
@@ -673,6 +712,7 @@ config_path = sys.argv[1]
 sonarr_key = sys.argv[2]
 radarr_key = sys.argv[3]
 subtitle_providers = sys.argv[4] if len(sys.argv) > 4 else ''
+subtitle_langs = sys.argv[5] if len(sys.argv) > 5 else ''
 
 with open(config_path, 'r') as f:
     lines = f.readlines()
@@ -737,6 +777,11 @@ if subtitle_providers:
     providers_list = json.dumps(subtitle_providers.split(','))
     set_value('general', 'enabled_providers', providers_list)
 
+# Enable default language profiles for series and movies
+if subtitle_langs:
+    set_value('general', 'serie_default_enabled', True)
+    set_value('general', 'movie_default_enabled', True)
+
 with open(config_path, 'w') as f:
     f.writelines(lines)
 
@@ -752,10 +797,47 @@ else
   warn "Bazarr config file not found"
 fi
 
-# Bazarr auth — set via config file (no host config API like *arr)
+# Configure Bazarr language profiles via API (form-data POST to settings endpoint)
+# Run BEFORE auth setup since the settings API may rewrite config.yaml
+if [ -n "$BAZARR_CONFIG" ] && [ -n "$SUBTITLE_LANGS" ]; then
+  BAZARR_API_KEY_VAL=$(sed -n '/^auth:/,/^[^ ]/{s/^  apikey: *//p;}' "$BAZARR_CONFIG" 2>/dev/null | head -1)
+  if [ -n "$BAZARR_API_KEY_VAL" ]; then
+    wait_for "Bazarr" "$BAZARR_URL"
+    EXISTING_PROFILES=$(curl -sf "$BAZARR_URL/api/system/languages/profiles?apikey=$BAZARR_API_KEY_VAL" 2>/dev/null || echo "[]")
+    PROFILE_COUNT=$(echo "$EXISTING_PROFILES" | jq 'length' 2>/dev/null || echo "0")
+
+    if [ "$PROFILE_COUNT" = "0" ] || [ -z "$PROFILE_COUNT" ]; then
+      # Build language items for the profile
+      LANG_ITEMS="[]"
+      IDX=0
+      LANG_ENABLED_ARGS=()
+      IFS=',' read -ra LANGS <<< "$SUBTITLE_LANGS"
+      for lang in "${LANGS[@]}"; do
+        LANG_ITEMS=$(echo "$LANG_ITEMS" | jq --arg code "$lang" --argjson idx "$IDX" \
+          '. + [{"id": $idx, "language": $code, "hi": false, "forced": false}]')
+        LANG_ENABLED_ARGS+=(-d "languages-enabled=$lang")
+        IDX=$((IDX + 1))
+      done
+
+      PROFILE_JSON=$(jq -n --argjson items "$LANG_ITEMS" \
+        '[{"profileId":1,"name":"Default","cutoff":null,"items":$items,"mustContain":"","mustNotContain":"","originalFormat":null}]')
+
+      curl -sf -X POST "$BAZARR_URL/api/system/settings?apikey=$BAZARR_API_KEY_VAL" \
+        "${LANG_ENABLED_ARGS[@]}" \
+        --data-urlencode "languages-profiles=$PROFILE_JSON" \
+        -d "settings-general-serie_default_profile=1" \
+        -d "settings-general-movie_default_profile=1" >/dev/null 2>&1 && \
+        ok "Language profile: Default ($(echo "$SUBTITLE_LANGS" | tr ',' ' '))" || warn "Could not create language profile"
+    else
+      ok "Language profiles already configured ($PROFILE_COUNT)"
+    fi
+  fi
+fi
+
+# Bazarr auth — set via config file and restart (must run after settings API to avoid being overwritten)
 if [ -n "$BAZARR_CONFIG" ]; then
-  BAZARR_AUTH_SET=$(grep -c "auth_type" "$BAZARR_CONFIG" 2>/dev/null || echo "0")
-  if [ "$BAZARR_AUTH_SET" = "0" ] || grep -q "auth_type: ''" "$BAZARR_CONFIG" 2>/dev/null; then
+  BAZARR_AUTH_TYPE=$(sed -n '/^auth:/,/^[^ ]/{s/^  type: *//p;}' "$BAZARR_CONFIG" 2>/dev/null | head -1)
+  if [ -z "$BAZARR_AUTH_TYPE" ] || [ "$BAZARR_AUTH_TYPE" = "null" ] || [ "$BAZARR_AUTH_TYPE" = "''" ]; then
     if python3 - "$BAZARR_CONFIG" "$JELLYFIN_USER" "$JELLYFIN_PASS" << 'PYEOF'
 import sys
 config_path, user, password = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -1266,8 +1348,20 @@ if [ -n "$JF_TOKEN_V" ]; then
       '[.[] | select(.Name == $n) | .Locations[] | select(. == $p)] | length > 0' /tmp/jf_verify.json 2>/dev/null)
     check "Jellyfin → $ln → $lpath" "$HAS"
   done
+  REALTIME=$(jq 'all(.[]; .LibraryOptions.EnableRealtimeMonitor == true)' /tmp/jf_verify.json 2>/dev/null)
+  check "Jellyfin → real-time monitoring" "$REALTIME"
+  DAILY_SCAN=$(jq 'all(.[]; .LibraryOptions.AutomaticRefreshIntervalDays == 1)' /tmp/jf_verify.json 2>/dev/null)
+  check "Jellyfin → daily scan" "$DAILY_SCAN"
   rm -f /tmp/jf_verify.json
 fi
+
+# --- Jellyfin notifications in Sonarr/Radarr ---
+SONARR_NOTIF=$(curl -sf "$SONARR_URL/api/v3/notification" -H "X-Api-Key: $SONARR_KEY" 2>/dev/null || echo "[]")
+check "Sonarr → Jellyfin notification" "$(echo "$SONARR_NOTIF" | jq 'any(.[]; .name == "Jellyfin")' 2>/dev/null)"
+SONARR_ANIME_NOTIF=$(curl -sf "$SONARR_ANIME_URL/api/v3/notification" -H "X-Api-Key: $SONARR_ANIME_KEY" 2>/dev/null || echo "[]")
+check "Sonarr Anime → Jellyfin notification" "$(echo "$SONARR_ANIME_NOTIF" | jq 'any(.[]; .name == "Jellyfin")' 2>/dev/null)"
+RADARR_NOTIF=$(curl -sf "$RADARR_URL/api/v3/notification" -H "X-Api-Key: $RADARR_KEY" 2>/dev/null || echo "[]")
+check "Radarr → Jellyfin notification" "$(echo "$RADARR_NOTIF" | jq 'any(.[]; .name == "Jellyfin")' 2>/dev/null)"
 
 # --- Jellyseerr ---
 JS_STATUS=$(curl -sf "$JELLYSEERR_URL/api/v1/settings/public" 2>/dev/null)

@@ -24,7 +24,7 @@ seeding_ratio = 2
 seeding_time_minutes = 10080
 
 [subtitles]
-languages = ["en"]
+languages = ["en", "es"]
 providers = ["opensubtitlescom"]
 
 # ─── Quality (Recyclarr TRaSH Guide profiles) ──────────────────
