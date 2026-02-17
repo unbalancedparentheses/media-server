@@ -327,6 +327,14 @@ check "Landing page → downloads widget" "$(echo "$LANDING" | grep -q 'qbt/torr
 QBT_PROXY=$(curl -sf http://localhost/api/qbt/torrents/info 2>/dev/null || echo "")
 check "Landing page → qBittorrent proxy" "$(echo "$QBT_PROXY" | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
 
+# API proxy endpoints for widgets
+check "Proxy → Sonarr calendar" "$(curl -sf http://localhost/api/sonarr/calendar 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
+check "Proxy → Sonarr Anime calendar" "$(curl -sf http://localhost/api/sonarr-anime/calendar 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
+check "Proxy → Radarr calendar" "$(curl -sf http://localhost/api/radarr/calendar 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
+check "Proxy → Jellyfin latest" "$(curl -sf 'http://localhost/api/jellyfin/Items?SortBy=DateCreated&SortOrder=Descending&Limit=3&Recursive=true&IncludeItemTypes=Movie,Series' 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
+check "Proxy → Jellyseerr requests" "$(curl -sf http://localhost/api/jellyseerr/request 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
+check "Proxy → SABnzbd queue" "$(curl -sf 'http://localhost/api/sabnzbd/?mode=queue&output=json' 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
+
 # ═══════════════════════════════════════════════════════════════════
 # 12. DOCKER CONTAINERS
 # ═══════════════════════════════════════════════════════════════════

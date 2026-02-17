@@ -54,11 +54,49 @@
   .dl-pct{font-size:0.8rem;font-weight:600}
   .dl-speed{font-size:0.6rem;color:#7a7a9a;margin-top:0.15rem}
   .dl-eta{font-size:0.6rem;color:#7a7a9a;margin-top:0.1rem}
+  /* Widget grid — two-column for smaller panels */
+  .widget-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.75rem}
+  @media(max-width:768px){.widget-grid{grid-template-columns:1fr}}
+  /* Widget panel (shared by calendar, recent, requests, disk) */
+  .w-panel{background:#1a1a2e;border:1px solid #2a2a4a;border-radius:10px;overflow:hidden}
+  .w-header{display:flex;justify-content:space-between;align-items:center;padding:0.8rem 1.2rem;border-bottom:1px solid #2a2a4a}
+  .w-header-title{font-size:0.85rem;font-weight:600}
+  .w-header-sub{font-size:0.65rem;color:#7a7a9a}
+  .w-empty{padding:2rem;text-align:center;color:#4a4a6a;font-size:0.85rem}
+  .w-list{max-height:320px;overflow-y:auto}
+  .w-item{display:flex;align-items:center;gap:0.8rem;padding:0.6rem 1.2rem;border-bottom:1px solid #1f1f35}
+  .w-item:last-child{border-bottom:none}
+  .w-item-icon{font-size:0.9rem;flex-shrink:0;width:20px;text-align:center}
+  .w-item-info{flex:1;min-width:0}
+  .w-item-title{font-size:0.8rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .w-item-sub{font-size:0.65rem;color:#7a7a9a;margin-top:0.15rem}
+  .w-item-right{flex-shrink:0;text-align:right}
+  /* Calendar date groups */
+  .cal-date{font-size:0.65rem;font-weight:600;color:#7a7a9a;padding:0.5rem 1.2rem 0.3rem;text-transform:uppercase;letter-spacing:0.05em;background:#14142a}
+  .cal-ep{color:#4ade80}
+  .cal-movie{color:#e94560}
+  /* Request status badges */
+  .badge{font-size:0.6rem;font-weight:600;padding:0.15rem 0.5rem;border-radius:4px;text-transform:uppercase;letter-spacing:0.03em}
+  .badge-pending{background:#f59e0b20;color:#f59e0b}
+  .badge-approved{background:#3b82f620;color:#3b82f6}
+  .badge-available{background:#4ade8020;color:#4ade80}
+  .badge-declined{background:#ef444420;color:#ef4444}
+  /* Disk gauge */
+  .disk-gauge{padding:1.2rem;text-align:center}
+  .disk-bar-wrap{width:100%;height:10px;background:#2a2a4a;border-radius:5px;margin:0.8rem 0}
+  .disk-bar{height:100%;border-radius:5px;transition:width 0.5s ease}
+  .disk-bar.ok{background:#4ade80}
+  .disk-bar.warn{background:#f59e0b}
+  .disk-bar.crit{background:#ef4444}
+  .disk-label{font-size:0.8rem;font-weight:500}
+  .disk-sub{font-size:0.7rem;color:#7a7a9a;margin-top:0.3rem}
 </style></head>
 <body>
   <div class="header"><h1><span>Media</span> Server</h1><p>Service dashboard</p></div>
   <div class="content">
     <div id="app"></div>
+
+    <!-- Downloads: qBittorrent -->
     <div class="section">
       <div class="section-title">Active Transfers</div>
       <div class="dl-panel">
@@ -67,6 +105,60 @@
           <div class="dl-stats" id="dl-stats"></div>
         </div>
         <div id="dl-list"><div class="dl-empty">Loading...</div></div>
+      </div>
+    </div>
+
+    <!-- Downloads: SABnzbd -->
+    <div class="section">
+      <div class="dl-panel">
+        <div class="dl-header">
+          <div class="dl-header-title">SABnzbd</div>
+          <div class="dl-stats" id="sab-stats"></div>
+        </div>
+        <div id="sab-list"><div class="dl-empty">Loading...</div></div>
+      </div>
+    </div>
+
+    <!-- Two-column widget grid -->
+    <div class="section">
+      <div class="widget-grid">
+
+        <!-- Calendar -->
+        <div class="w-panel">
+          <div class="w-header">
+            <div class="w-header-title">Upcoming</div>
+            <div class="w-header-sub" id="cal-sub"></div>
+          </div>
+          <div class="w-list" id="cal-list"><div class="w-empty">Loading...</div></div>
+        </div>
+
+        <!-- Recently Added -->
+        <div class="w-panel">
+          <div class="w-header">
+            <div class="w-header-title">Recently Added</div>
+            <div class="w-header-sub" id="recent-sub"></div>
+          </div>
+          <div class="w-list" id="recent-list"><div class="w-empty">Loading...</div></div>
+        </div>
+
+        <!-- Jellyseerr Requests -->
+        <div class="w-panel">
+          <div class="w-header">
+            <div class="w-header-title">Requests</div>
+            <div class="w-header-sub" id="req-sub"></div>
+          </div>
+          <div class="w-list" id="req-list"><div class="w-empty">Loading...</div></div>
+        </div>
+
+        <!-- Disk Space -->
+        <div class="w-panel">
+          <div class="w-header">
+            <div class="w-header-title">Disk Space</div>
+            <div class="w-header-sub" id="disk-sub"></div>
+          </div>
+          <div id="disk-content"><div class="w-empty">Loading...</div></div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -131,7 +223,7 @@
     checkHealth();
     setInterval(checkHealth,30000);
 
-    // Downloads widget
+    // ── Shared helpers ──
     function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
     function fmtSize(b){
       if(b<1024)return b+"B";
@@ -151,6 +243,17 @@
       if(secs<86400)return Math.floor(secs/3600)+'h '+Math.floor((secs%3600)/60)+'m';
       return Math.floor(secs/86400)+'d '+Math.floor((secs%86400)/3600)+'h';
     }
+    function isoDate(d){return d.toISOString().split('T')[0];}
+    function shortDate(s){
+      var d=new Date(s);
+      var today=new Date();today.setHours(0,0,0,0);
+      var diff=Math.floor((d-today)/86400000);
+      if(diff===0)return'Today';
+      if(diff===1)return'Tomorrow';
+      return d.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+    }
+
+    // ── qBittorrent Downloads ──
     function stateIcon(st){
       if(st==="downloading"||st==="forcedDL"||st==="metaDL")return['downloading','\u25BC'];
       if(st==="uploading"||st==="forcedUP"||st==="stalledUP"||st==="queuedUP")return['seeding','\u25B2'];
@@ -179,7 +282,6 @@
         statsEl.innerHTML='<span class="down">\u25BC '+fmtSpeed(totalDown)+'</span><span class="up">\u25B2 '+fmtSpeed(totalUp)+'</span><span>'+torrents.length+' torrent'+(torrents.length!==1?'s':'')+'</span>';
         var list=document.getElementById("dl-list");
         if(!torrents.length){list.innerHTML='<div class="dl-empty">No active torrents</div>';return;}
-        // Sort: downloading first, then by progress
         torrents.sort(function(a,b){
           var aD=a.state.indexOf("DL")!==-1||a.state==="downloading"?0:1;
           var bD=b.state.indexOf("DL")!==-1||b.state==="downloading"?0:1;
@@ -212,5 +314,187 @@
     }
     refreshDownloads();
     setInterval(refreshDownloads,5000);
+
+    // ── SABnzbd Downloads ──
+    function refreshSab(){
+      Promise.all([
+        fetch('/api/sabnzbd/?mode=queue&output=json').then(function(r){return r.json()}),
+        fetch('/api/sabnzbd/?mode=history&output=json&limit=5').then(function(r){return r.json()})
+      ]).then(function(results){
+        var queue=results[0].queue||{};
+        var history=results[1].history||{};
+        var slots=queue.slots||[];
+        var histSlots=(history.slots||[]).slice(0,5);
+        var statsEl=document.getElementById("sab-stats");
+        var speed=queue.speed||'0';
+        var left=queue.timeleft||'';
+        statsEl.innerHTML='<span class="down">\u25BC '+esc(speed)+'</span>'+(left?'<span>ETA: '+esc(left)+'</span>':'')+'<span>'+slots.length+' active</span>';
+        var list=document.getElementById("sab-list");
+        if(!slots.length&&!histSlots.length){list.innerHTML='<div class="dl-empty">No active downloads</div>';return;}
+        var html='';
+        slots.forEach(function(s){
+          var pct=Math.round(parseFloat(s.percentage)||0);
+          html+='<div class="dl-item">';
+          html+='<div class="dl-icon downloading">\u25BC</div>';
+          html+='<div class="dl-info">';
+          html+='<div class="dl-name" title="'+esc(s.filename)+'">'+esc(s.filename)+'</div>';
+          html+='<div class="dl-meta"><span>Downloading</span><span>'+esc(s.size)+'</span>'+(s.cat?'<span>'+esc(s.cat)+'</span>':'')+'</div>';
+          html+='<div class="dl-bar-wrap"><div class="dl-bar" style="width:'+pct+'%"></div></div>';
+          html+='</div>';
+          html+='<div class="dl-right"><div class="dl-pct">'+pct+'%</div><div class="dl-speed">'+esc(s.timeleft||'')+'</div></div>';
+          html+='</div>';
+        });
+        histSlots.forEach(function(s){
+          var ok=s.status==='Completed';
+          html+='<div class="dl-item">';
+          html+='<div class="dl-icon '+(ok?'seeding':'stalled')+'">'+(ok?'\u2714':'\u2716')+'</div>';
+          html+='<div class="dl-info">';
+          html+='<div class="dl-name" title="'+esc(s.name)+'">'+esc(s.name)+'</div>';
+          html+='<div class="dl-meta"><span>'+esc(s.status)+'</span><span>'+esc(s.size)+'</span>'+(s.category?'<span>'+esc(s.category)+'</span>':'')+'</div>';
+          html+='</div>';
+          html+='<div class="dl-right"><div class="dl-pct" style="color:'+(ok?'#4ade80':'#ef4444')+'">'+(ok?'Done':'Fail')+'</div></div>';
+          html+='</div>';
+        });
+        list.innerHTML=html;
+      }).catch(function(){
+        document.getElementById("sab-list").innerHTML='<div class="dl-empty">Cannot connect to SABnzbd</div>';
+      });
+    }
+    refreshSab();
+    setInterval(refreshSab,5000);
+
+    // ── Calendar (Sonarr + Sonarr Anime + Radarr) ──
+    function refreshCalendar(){
+      var today=new Date();
+      var end7=new Date(today);end7.setDate(end7.getDate()+7);
+      var end90=new Date(today);end90.setDate(end90.getDate()+90);
+      var start=isoDate(today),endW=isoDate(end7),endM=isoDate(end90);
+      Promise.all([
+        fetch('/api/sonarr/calendar?start='+start+'&end='+endW).then(function(r){return r.json()}).catch(function(){return[]}),
+        fetch('/api/sonarr-anime/calendar?start='+start+'&end='+endW).then(function(r){return r.json()}).catch(function(){return[]}),
+        fetch('/api/radarr/calendar?start='+start+'&end='+endM).then(function(r){return r.json()}).catch(function(){return[]})
+      ]).then(function(results){
+        var items=[];
+        results[0].forEach(function(ep){
+          items.push({date:ep.airDateUtc||ep.airDate||'',title:ep.series?ep.series.title:'Unknown',sub:'S'+String(ep.seasonNumber).padStart(2,'0')+'E'+String(ep.episodeNumber).padStart(2,'0')+' - '+(ep.title||''),type:'ep'});
+        });
+        results[1].forEach(function(ep){
+          items.push({date:ep.airDateUtc||ep.airDate||'',title:ep.series?ep.series.title:'Unknown',sub:'S'+String(ep.seasonNumber).padStart(2,'0')+'E'+String(ep.episodeNumber).padStart(2,'0')+' - '+(ep.title||''),type:'ep'});
+        });
+        results[2].forEach(function(m){
+          items.push({date:m.inCinemas||m.digitalRelease||m.physicalRelease||'',title:m.title||'Unknown',sub:m.year?String(m.year):'',type:'movie'});
+        });
+        items.sort(function(a,b){return(a.date||'').localeCompare(b.date||'')});
+        document.getElementById("cal-sub").textContent=items.length+' upcoming';
+        var list=document.getElementById("cal-list");
+        if(!items.length){list.innerHTML='<div class="w-empty">Nothing upcoming</div>';return;}
+        var html='',lastDate='';
+        items.forEach(function(it){
+          var d=it.date?it.date.split('T')[0]:'';
+          if(d!==lastDate){html+='<div class="cal-date">'+shortDate(d)+'</div>';lastDate=d;}
+          html+='<div class="w-item">';
+          html+='<div class="w-item-icon '+(it.type==='ep'?'cal-ep':'cal-movie')+'">'+(it.type==='ep'?'\uD83D\uDCFA':'\uD83C\uDFA5')+'</div>';
+          html+='<div class="w-item-info"><div class="w-item-title">'+esc(it.title)+'</div><div class="w-item-sub">'+esc(it.sub)+'</div></div>';
+          html+='</div>';
+        });
+        list.innerHTML=html;
+      }).catch(function(){
+        document.getElementById("cal-list").innerHTML='<div class="w-empty">Cannot load calendar</div>';
+      });
+    }
+    refreshCalendar();
+    setInterval(refreshCalendar,300000);
+
+    // ── Recently Added (Jellyfin) ──
+    function refreshRecent(){
+      fetch('/api/jellyfin/Items?SortBy=DateCreated&SortOrder=Descending&Limit=10&Recursive=true&IncludeItemTypes=Movie,Series&Fields=DateCreated').then(function(r){return r.json()}).then(function(data){
+        var items=(data&&data.Items)||[];
+        document.getElementById("recent-sub").textContent=items.length+' items';
+        var list=document.getElementById("recent-list");
+        if(!items.length){list.innerHTML='<div class="w-empty">No recent media</div>';return;}
+        var html='';
+        items.forEach(function(it){
+          var type=it.Type||'';
+          var ico=type==='Movie'?'\uD83C\uDFA5':type==='Series'?'\uD83D\uDCFA':'\uD83C\uDFB5';
+          var sub=type;
+          if(it.ProductionYear)sub+=' ('+it.ProductionYear+')';
+          if(it.DateCreated){
+            var d=new Date(it.DateCreated);
+            sub+=' - added '+d.toLocaleDateString();
+          }
+          html+='<div class="w-item">';
+          html+='<div class="w-item-icon">'+ico+'</div>';
+          html+='<div class="w-item-info"><div class="w-item-title">'+esc(it.Name||'Unknown')+'</div><div class="w-item-sub">'+esc(sub)+'</div></div>';
+          html+='</div>';
+        });
+        list.innerHTML=html;
+      }).catch(function(){
+        document.getElementById("recent-list").innerHTML='<div class="w-empty">Cannot connect to Jellyfin</div>';
+      });
+    }
+    refreshRecent();
+    setInterval(refreshRecent,120000);
+
+    // ── Jellyseerr Requests ──
+    function refreshRequests(){
+      fetch('/api/jellyseerr/request?take=10&sort=added&skip=0').then(function(r){return r.json()}).then(function(data){
+        var results=data.results||[];
+        document.getElementById("req-sub").textContent=(data.pageInfo?data.pageInfo.results:results.length)+' total';
+        var list=document.getElementById("req-list");
+        if(!results.length){list.innerHTML='<div class="w-empty">No requests</div>';return;}
+        var html='';
+        results.forEach(function(req){
+          var media=req.media||{};
+          var title=media.title||media.name||(req.type==='movie'?'Movie':'TV Show');
+          // Try to get title from mediaInfo
+          if(req.type==='movie'&&req.media&&req.media.title)title=req.media.title;
+          if(req.type==='tv'&&req.media&&req.media.name)title=req.media.name;
+          var status=req.status;
+          var badgeClass='badge-pending',badgeText='Pending';
+          if(status===2){badgeClass='badge-approved';badgeText='Approved';}
+          else if(status===3){badgeClass='badge-declined';badgeText='Declined';}
+          if(media.status===5){badgeClass='badge-available';badgeText='Available';}
+          else if(media.status===4){badgeClass='badge-approved';badgeText='Processing';}
+          var ico=req.type==='movie'?'\uD83C\uDFA5':'\uD83D\uDCFA';
+          var sub=req.type==='movie'?'Movie':'TV Show';
+          if(req.requestedBy&&req.requestedBy.displayName)sub+=' - '+req.requestedBy.displayName;
+          html+='<div class="w-item">';
+          html+='<div class="w-item-icon">'+ico+'</div>';
+          html+='<div class="w-item-info"><div class="w-item-title">'+esc(title)+'</div><div class="w-item-sub">'+esc(sub)+'</div></div>';
+          html+='<div class="w-item-right"><span class="badge '+badgeClass+'">'+badgeText+'</span></div>';
+          html+='</div>';
+        });
+        list.innerHTML=html;
+      }).catch(function(){
+        document.getElementById("req-list").innerHTML='<div class="w-empty">Cannot connect to Jellyseerr</div>';
+      });
+    }
+    refreshRequests();
+    setInterval(refreshRequests,30000);
+
+    // ── Disk Space (via qBittorrent sync/maindata) ──
+    function refreshDisk(){
+      fetch('/api/qbt/sync/maindata').then(function(r){return r.json()}).then(function(data){
+        var state=data.server_state||{};
+        var free=state.free_space_on_disk||0;
+        var el=document.getElementById("disk-content");
+        // qBittorrent only reports free space, not total — show free space as a gauge
+        // Estimate usage: fetch alldata via preferences for save_path info
+        var freeGB=(free/1073741824).toFixed(1);
+        document.getElementById("disk-sub").textContent='Downloads drive';
+        var cls='ok';
+        if(free<53687091200)cls='warn'; // <50GB
+        if(free<10737418240)cls='crit'; // <10GB
+        el.innerHTML='<div class="disk-gauge">'
+          +'<div class="disk-label">'+freeGB+' GB free</div>'
+          +'<div class="disk-bar-wrap"><div class="disk-bar '+cls+'" style="width:'+Math.min(100,Math.max(5,free/1099511627776*100))+'%"></div></div>'
+          +'<div class="disk-sub">'+((free<53687091200)?'Low disk space warning':'Healthy')+'</div>'
+          +'</div>';
+      }).catch(function(){
+        document.getElementById("disk-content").innerHTML='<div class="w-empty">Cannot read disk info</div>';
+      });
+    }
+    refreshDisk();
+    setInterval(refreshDisk,60000);
   </script>
 </body></html>
