@@ -110,13 +110,20 @@ enable = false
 fields = { apiKey = "your-nzbgeek-api-key" }
 
 # ─── Usenet Providers (SABnzbd) ────────────────────────────────
+# Fill in your provider details and set enable = true.
+# Common providers:
+#   Newshosting:    news.newshosting.com     port 563  ssl=true  connections=30
+#   Eweka:          news.eweka.nl            port 563  ssl=true  connections=20
+#   Frugal Usenet:  news.frugalusenet.com    port 563  ssl=true  connections=20
+#   UsenetExpress:  news.usenetexpress.com   port 563  ssl=true  connections=20
+#   Easynews:       news.easynews.com        port 563  ssl=true  connections=20
 
 [[usenet_providers]]
-name = "Newshosting"
+name = "usenet"
 enable = false
-host = "news.newshosting.com"
+host = ""
 port = 563
 ssl = true
 username = ""
 password = ""
-connections = 30
+connections = 20
