@@ -12,3 +12,4 @@ result-*
 
 # Secrets — NEVER commit these
 config.toml
+.env

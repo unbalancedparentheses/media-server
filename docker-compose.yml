@@ -1,15 +1,20 @@
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # --- Media Server ---
   jellyfin:
     image: jellyfin/jellyfin:latest
     container_name: jellyfin
-    ports:
-      - "8096:8096"
     volumes:
       - ~/media/config/jellyfin:/config
       - ~/media/movies:/media/movies
       - ~/media/tv:/media/tv
       - ~/media/anime:/media/anime
+    logging: *logging
     restart: unless-stopped
 
   # --- TV ---
@@ -17,30 +22,28 @@ services:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
     environment:
-      - PUID=501
-      - PGID=20
-      - TZ=America/New_York
-    ports:
-      - "8989:8989"
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
     volumes:
       - ~/media/config/sonarr:/config
       - ~/media/tv:/media/tv
       - ~/media/downloads:/downloads
+    logging: *logging
     restart: unless-stopped
 
   sonarr-anime:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr-anime
     environment:
-      - PUID=501
-      - PGID=20
-      - TZ=America/New_York
-    ports:
-      - "8990:8989"
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
     volumes:
       - ~/media/config/sonarr-anime:/config
       - ~/media/anime:/media/anime
       - ~/media/downloads:/downloads
+    logging: *logging
     restart: unless-stopped
 
   # --- Movies ---
@@ -48,15 +51,14 @@ services:
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
     environment:
-      - PUID=501
-      - PGID=20
-      - TZ=America/New_York
-    ports:
-      - "7878:7878"
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
     volumes:
       - ~/media/config/radarr:/config
       - ~/media/movies:/media/movies
       - ~/media/downloads:/downloads
+    logging: *logging
     restart: unless-stopped
 
   # --- Indexers ---
@@ -64,13 +66,12 @@ services:
     image: lscr.io/linuxserver/prowlarr:latest
     container_name: prowlarr
     environment:
-      - PUID=501
-      - PGID=20
-      - TZ=America/New_York
-    ports:
-      - "9696:9696"
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
     volumes:
       - ~/media/config/prowlarr:/config
+    logging: *logging
     restart: unless-stopped
 
   # --- Subtitles ---
@@ -78,16 +79,15 @@ services:
     image: lscr.io/linuxserver/bazarr:latest
     container_name: bazarr
     environment:
-      - PUID=501
-      - PGID=20
-      - TZ=America/New_York
-    ports:
-      - "6767:6767"
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
     volumes:
       - ~/media/config/bazarr:/config
       - ~/media/movies:/media/movies
       - ~/media/tv:/media/tv
       - ~/media/anime:/media/anime
+    logging: *logging
     restart: unless-stopped
 
   # --- Downloaders ---
@@ -95,31 +95,30 @@ services:
     image: lscr.io/linuxserver/sabnzbd:latest
     container_name: sabnzbd
     environment:
-      - PUID=501
-      - PGID=20
-      - TZ=America/New_York
-    ports:
-      - "8080:8080"
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
     volumes:
       - ~/media/config/sabnzbd:/config
       - ~/media/downloads:/downloads
+    logging: *logging
     restart: unless-stopped
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
     environment:
-      - PUID=501
-      - PGID=20
-      - TZ=America/New_York
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
       - WEBUI_PORT=8081
     ports:
-      - "8081:8081"
       - "6881:6881"
       - "6881:6881/udp"
     volumes:
       - ~/media/config/qbittorrent:/config
       - ~/media/downloads:/downloads
+    logging: *logging
     restart: unless-stopped
 
   # --- Request Management ---
@@ -127,31 +126,31 @@ services:
     image: fallenbagel/jellyseerr:latest
     container_name: jellyseerr
     environment:
-      - TZ=America/New_York
-    ports:
-      - "5055:5055"
+      - TZ=${TZ:-America/New_York}
     volumes:
       - ~/media/config/jellyseerr:/app/config
+    logging: *logging
     restart: unless-stopped
 
-  # --- Cloudflare Bypass for Prowlarr ---
+  # --- Cloudflare Bypass for Prowlarr (internal only) ---
   flaresolverr:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
     environment:
-      - TZ=America/New_York
-    ports:
-      - "8191:8191"
+      - TZ=${TZ:-America/New_York}
+    logging: *logging
     restart: unless-stopped
 
-  # --- Quality Profile Sync ---
+  # --- Quality Profile Sync (weekly) ---
   recyclarr:
     image: recyclarr/recyclarr:latest
     container_name: recyclarr
     environment:
-      - TZ=America/New_York
+      - TZ=${TZ:-America/New_York}
+      - CRON_SCHEDULE=@weekly
     volumes:
       - ~/media/config/recyclarr:/config
+    logging: *logging
     restart: unless-stopped
 
   # --- Dashboard ---
@@ -159,16 +158,15 @@ services:
     image: organizr/organizr:latest
     container_name: organizr
     environment:
-      - PUID=501
-      - PGID=20
-      - TZ=America/New_York
-    ports:
-      - "9090:80"
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
     volumes:
       - ~/media/config/organizr:/config
+    logging: *logging
     restart: unless-stopped
 
-  # --- Reverse Proxy + Dashboard ---
+  # --- Reverse Proxy (single entry point) ---
   nginx:
     image: nginx:alpine
     container_name: media-nginx
@@ -188,4 +186,5 @@ services:
       - qbittorrent
       - jellyseerr
       - organizr
+    logging: *logging
     restart: unless-stopped
