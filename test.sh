@@ -267,6 +267,22 @@ check_arr_auth() {
 [ -n "$RADARR_KEY" ] && check_arr_auth "Radarr" "$RADARR_URL" "$RADARR_KEY"
 [ -n "$PROWLARR_KEY" ] && check_arr_auth "Prowlarr" "$PROWLARR_URL" "$PROWLARR_KEY" "v1"
 
+# SABnzbd auth
+if [ -n "$SABNZBD_KEY" ]; then
+  SAB_AUTH_USER=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=misc&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.config.misc.username // empty' 2>/dev/null)
+  check "SABnzbd → auth configured" "$([ -n "$SAB_AUTH_USER" ] && echo true || echo false)"
+fi
+
+# Bazarr auth
+BAZARR_CONFIG_FILE=""
+for p in "$CONFIG_DIR/bazarr/config/config/config.yaml" "$CONFIG_DIR/bazarr/config/config.yaml"; do
+  [ -f "$p" ] && BAZARR_CONFIG_FILE="$p" && break
+done
+if [ -n "$BAZARR_CONFIG_FILE" ]; then
+  BAZARR_AUTH_TYPE=$(grep -A1 '^auth:' "$BAZARR_CONFIG_FILE" 2>/dev/null | grep 'type:' | grep -v "''" | head -1)
+  check "Bazarr → auth configured" "$([ -n "$BAZARR_AUTH_TYPE" ] && echo true || echo false)"
+fi
+
 # ═══════════════════════════════════════════════════════════════════
 # 9. ORGANIZR
 # ═══════════════════════════════════════════════════════════════════
