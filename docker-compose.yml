@@ -9,6 +9,8 @@ services:
   jellyfin:
     image: jellyfin/jellyfin:latest
     container_name: jellyfin
+    ports:
+      - "8096:8096"
     volumes:
       - ~/media/config/jellyfin:/config
       - ~/media/movies:/media/movies
@@ -25,6 +27,8 @@ services:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
+    ports:
+      - "8989:8989"
     volumes:
       - ~/media/config/sonarr:/config
       - ~/media/tv:/media/tv
@@ -39,6 +43,8 @@ services:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
+    ports:
+      - "8990:8989"
     volumes:
       - ~/media/config/sonarr-anime:/config
       - ~/media/anime:/media/anime
@@ -54,6 +60,8 @@ services:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
+    ports:
+      - "7878:7878"
     volumes:
       - ~/media/config/radarr:/config
       - ~/media/movies:/media/movies
@@ -69,6 +77,8 @@ services:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
+    ports:
+      - "9696:9696"
     volumes:
       - ~/media/config/prowlarr:/config
     logging: *logging
@@ -82,6 +92,8 @@ services:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
+    ports:
+      - "6767:6767"
     volumes:
       - ~/media/config/bazarr:/config
       - ~/media/movies:/media/movies
@@ -98,6 +110,8 @@ services:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
+    ports:
+      - "8080:8080"
     volumes:
       - ~/media/config/sabnzbd:/config
       - ~/media/downloads:/downloads
@@ -113,6 +127,7 @@ services:
       - TZ=${TZ:-America/New_York}
       - WEBUI_PORT=8081
     ports:
+      - "8081:8081"
       - "6881:6881"
       - "6881:6881/udp"
     volumes:
@@ -127,6 +142,8 @@ services:
     container_name: jellyseerr
     environment:
       - TZ=${TZ:-America/New_York}
+    ports:
+      - "5055:5055"
     volumes:
       - ~/media/config/jellyseerr:/app/config
     logging: *logging
@@ -161,12 +178,14 @@ services:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
+    ports:
+      - "9090:80"
     volumes:
       - ~/media/config/organizr:/config
     logging: *logging
     restart: unless-stopped
 
-  # --- Reverse Proxy (single entry point) ---
+  # --- Reverse Proxy + Landing Page ---
   nginx:
     image: nginx:alpine
     container_name: media-nginx

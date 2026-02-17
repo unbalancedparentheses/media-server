@@ -124,27 +124,7 @@ SABEOF
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 3. /etc/hosts (must be set before services are accessed via nginx)
-# ═══════════════════════════════════════════════════════════════════
-info "Checking /etc/hosts..."
-
-DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local organizr.media.local"
-
-if grep -q "media.local" /etc/hosts 2>/dev/null; then
-  ok "Hosts entries already present"
-else
-  echo ""
-  echo "  Adding .media.local domains to /etc/hosts (requires sudo)..."
-  echo ""
-  if sudo -n true 2>/dev/null || sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"; then
-    ok "Hosts entries added"
-  else
-    err "Could not update /etc/hosts — run: echo '127.0.0.1 $DOMAINS' | sudo tee -a /etc/hosts"
-  fi
-fi
-
-# ═══════════════════════════════════════════════════════════════════
-# 4. DOCKER COMPOSE
+# 3. DOCKER COMPOSE
 # ═══════════════════════════════════════════════════════════════════
 info "Generating .env for Docker Compose..."
 
@@ -161,6 +141,27 @@ info "Starting containers..."
 docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d
 
 ok "All containers started"
+
+# ═══════════════════════════════════════════════════════════════════
+# 4. /etc/hosts
+# ═══════════════════════════════════════════════════════════════════
+info "Checking /etc/hosts..."
+
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local organizr.media.local"
+
+if grep -q "media.local" /etc/hosts 2>/dev/null; then
+  ok "Hosts entries already present"
+else
+  echo ""
+  echo "  Adding .media.local domains to /etc/hosts (requires sudo)..."
+  echo ""
+  if sudo -n true 2>/dev/null || sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"; then
+    ok "Hosts entries added"
+  else
+    warn "Could not update /etc/hosts (no sudo). Run manually:"
+    echo "    echo '127.0.0.1 $DOMAINS' | sudo tee -a /etc/hosts"
+  fi
+fi
 
 # ═══════════════════════════════════════════════════════════════════
 # 5. READ CONFIG
@@ -185,16 +186,16 @@ ORGANIZR_USER=$(cfg '.organizr.username')
 ORGANIZR_PASS=$(cfg '.organizr.password')
 ORGANIZR_EMAIL=$(cfg '.organizr.email')
 
-QBIT_URL="http://qbittorrent.media.local"
-JELLYFIN_URL="http://jellyfin.media.local"
-SONARR_URL="http://sonarr.media.local"
-SONARR_ANIME_URL="http://sonarr-anime.media.local"
-RADARR_URL="http://radarr.media.local"
-PROWLARR_URL="http://prowlarr.media.local"
-BAZARR_URL="http://bazarr.media.local"
-SABNZBD_URL="http://sabnzbd.media.local"
-JELLYSEERR_URL="http://jellyseerr.media.local"
-ORGANIZR_URL="http://organizr.media.local"
+QBIT_URL="http://localhost:8081"
+JELLYFIN_URL="http://localhost:8096"
+SONARR_URL="http://localhost:8989"
+SONARR_ANIME_URL="http://localhost:8990"
+RADARR_URL="http://localhost:7878"
+PROWLARR_URL="http://localhost:9696"
+BAZARR_URL="http://localhost:6767"
+SABNZBD_URL="http://localhost:8080"
+JELLYSEERR_URL="http://localhost:5055"
+ORGANIZR_URL="http://localhost:9090"
 
 SONARR_INTERNAL="http://sonarr:8989"
 SONARR_ANIME_INTERNAL="http://sonarr-anime:8989"
@@ -205,7 +206,6 @@ PROWLARR_INTERNAL="http://prowlarr:9696"
 # 6. WAIT FOR SERVICES
 # ═══════════════════════════════════════════════════════════════════
 info "Waiting for all services..."
-wait_for "nginx"        "http://localhost"
 wait_for "Jellyfin"     "$JELLYFIN_URL/health"
 wait_for "Sonarr"       "$SONARR_URL/ping"
 wait_for "Sonarr Anime" "$SONARR_ANIME_URL/ping"
@@ -887,7 +887,7 @@ if [ -n "$JS_COOKIE" ]; then
       api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d '{
         "name":"Sonarr","hostname":"sonarr","port":8989,"useSsl":false,"apiKey":"'"$SONARR_KEY"'",
         "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/tv",
-        "is4k":false,"enableSeasonFolders":true,"isDefault":true,"externalUrl":"http://sonarr.media.local",
+        "is4k":false,"enableSeasonFolders":true,"isDefault":true,"externalUrl":"http://localhost:8989",
         "enableSearch":true
       }' >/dev/null 2>&1 && ok "Sonarr connected" || warn "Could not add Sonarr"
     }
@@ -898,7 +898,7 @@ if [ -n "$JS_COOKIE" ]; then
       api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d '{
         "name":"Sonarr Anime","hostname":"sonarr-anime","port":8989,"useSsl":false,"apiKey":"'"$SONARR_ANIME_KEY"'",
         "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/anime",
-        "is4k":false,"enableSeasonFolders":true,"isDefault":false,"externalUrl":"http://sonarr-anime.media.local",
+        "is4k":false,"enableSeasonFolders":true,"isDefault":false,"externalUrl":"http://localhost:8990",
         "seriesType":"anime","animeSeriesType":"anime",
         "enableSearch":true
       }' >/dev/null 2>&1 && ok "Sonarr Anime connected" || warn "Could not add Sonarr Anime"
@@ -927,7 +927,7 @@ if [ -n "$JS_COOKIE" ]; then
       api POST "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" -d '{
         "name":"Radarr","hostname":"radarr","port":7878,"useSsl":false,"apiKey":"'"$RADARR_KEY"'",
         "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/movies",
-        "is4k":false,"isDefault":true,"externalUrl":"http://radarr.media.local","minimumAvailability":"released",
+        "is4k":false,"isDefault":true,"externalUrl":"http://localhost:7878","minimumAvailability":"released",
         "enableSearch":true
       }' >/dev/null 2>&1 && ok "Radarr connected" || warn "Could not add Radarr"
     }
@@ -1109,15 +1109,15 @@ if [ -n "$ORGANIZR_API_KEY" ]; then
     fi
   }
 
-  add_organizr_tab "Jellyseerr"    "http://jellyseerr.media.local"    "plugins/images/tabs/overseerr.png"    1
-  add_organizr_tab "Jellyfin"      "http://jellyfin.media.local"      "plugins/images/tabs/jellyfin.png"     2
-  add_organizr_tab "Sonarr"        "http://sonarr.media.local"        "plugins/images/tabs/sonarr.png"       3
-  add_organizr_tab "Sonarr Anime"  "http://sonarr-anime.media.local"  "plugins/images/tabs/sonarr.png"       4
-  add_organizr_tab "Radarr"        "http://radarr.media.local"        "plugins/images/tabs/radarr.png"       5
-  add_organizr_tab "Prowlarr"      "http://prowlarr.media.local"      "plugins/images/tabs/prowlarr.png"     6
-  add_organizr_tab "Bazarr"        "http://bazarr.media.local"        "plugins/images/tabs/bazarr.png"       7
-  add_organizr_tab "qBittorrent"   "http://qbittorrent.media.local"   "plugins/images/tabs/qbittorrent.png"  8
-  add_organizr_tab "SABnzbd"       "http://sabnzbd.media.local"       "plugins/images/tabs/sabnzbd.png"      9
+  add_organizr_tab "Jellyseerr"    "http://localhost:5055"  "plugins/images/tabs/overseerr.png"    1
+  add_organizr_tab "Jellyfin"      "http://localhost:8096"  "plugins/images/tabs/jellyfin.png"     2
+  add_organizr_tab "Sonarr"        "http://localhost:8989"  "plugins/images/tabs/sonarr.png"       3
+  add_organizr_tab "Sonarr Anime"  "http://localhost:8990"  "plugins/images/tabs/sonarr.png"       4
+  add_organizr_tab "Radarr"        "http://localhost:7878"  "plugins/images/tabs/radarr.png"       5
+  add_organizr_tab "Prowlarr"      "http://localhost:9696"  "plugins/images/tabs/prowlarr.png"     6
+  add_organizr_tab "Bazarr"        "http://localhost:6767"  "plugins/images/tabs/bazarr.png"       7
+  add_organizr_tab "qBittorrent"   "http://localhost:8081"  "plugins/images/tabs/qbittorrent.png"  8
+  add_organizr_tab "SABnzbd"       "http://localhost:8080"  "plugins/images/tabs/sabnzbd.png"      9
 else
   warn "No API key — complete Organizr setup manually at $ORGANIZR_URL"
 fi
