@@ -11,5 +11,4 @@ result-*
 .DS_Store
 
 # Secrets — NEVER commit these
-# If you need to share config.json, remove passwords first
-# config.json is tracked but contains default passwords — change them!
+config.toml
