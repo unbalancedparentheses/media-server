@@ -426,6 +426,22 @@ configure_arr() {
 [ -n "$SONARR_ANIME_KEY" ] && configure_arr "sonarr-anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "/media/anime" "tvCategory"
 [ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "/media/movies" "movieCategory"
 
+# Enable "Unknown" quality in default profiles (public indexers often have unparseable names)
+enable_unknown_quality() {
+  local url="$1" key="$2" api_ver="${3:-v3}"
+  local H="X-Api-Key: $key"
+  local PROFILE=$(api GET "$url/api/$api_ver/qualityprofile/1" -H "$H" 2>/dev/null || echo "")
+  [ -z "$PROFILE" ] || [ "$PROFILE" = "null" ] && return
+  local UNKNOWN_ALLOWED=$(echo "$PROFILE" | jq '[.items[] | select(.quality.id == 0) | .allowed][0]' 2>/dev/null)
+  if [ "$UNKNOWN_ALLOWED" = "false" ]; then
+    local UPDATED=$(echo "$PROFILE" | jq '.items = [.items[] | if (.quality.id == 0) then .allowed = true else . end]')
+    api PUT "$url/api/$api_ver/qualityprofile/1" -H "$H" -d "$UPDATED" >/dev/null 2>&1 && \
+      ok "Quality: enabled Unknown quality" || true
+  fi
+}
+[ -n "$SONARR_KEY" ]       && enable_unknown_quality "$SONARR_URL"       "$SONARR_KEY"
+[ -n "$SONARR_ANIME_KEY" ] && enable_unknown_quality "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
+
 # ═══════════════════════════════════════════════════════════════════
 # 12. PROWLARR — connect apps + FlareSolverr + indexers
 # ═══════════════════════════════════════════════════════════════════
@@ -787,7 +803,8 @@ if [ -n "$JS_COOKIE" ]; then
       api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d '{
         "name":"Sonarr","hostname":"sonarr","port":8989,"useSsl":false,"apiKey":"'"$SONARR_KEY"'",
         "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/tv",
-        "is4k":false,"enableSeasonFolders":true,"isDefault":true,"externalUrl":"http://localhost:8989"
+        "is4k":false,"enableSeasonFolders":true,"isDefault":true,"externalUrl":"http://localhost:8989",
+        "enableSearch":true
       }' >/dev/null 2>&1 && ok "Sonarr connected" || warn "Could not add Sonarr"
     }
     [ -n "$SONARR_ANIME_KEY" ] && {
@@ -798,10 +815,23 @@ if [ -n "$JS_COOKIE" ]; then
         "name":"Sonarr Anime","hostname":"sonarr-anime","port":8989,"useSsl":false,"apiKey":"'"$SONARR_ANIME_KEY"'",
         "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/anime",
         "is4k":false,"enableSeasonFolders":true,"isDefault":false,"externalUrl":"http://localhost:8990",
-        "seriesType":"anime","animeSeriesType":"anime"
+        "seriesType":"anime","animeSeriesType":"anime",
+        "enableSearch":true
       }' >/dev/null 2>&1 && ok "Sonarr Anime connected" || warn "Could not add Sonarr Anime"
     }
-  else ok "Sonarr already connected"; fi
+  else
+    # Ensure enableSearch is set on existing connections
+    for JS_SONARR in $(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null); do
+      JS_SID=$(echo "$JS_SONARR" | jq -r '.id')
+      JS_SEARCH=$(echo "$JS_SONARR" | jq -r '.enableSearch // false')
+      if [ "$JS_SEARCH" != "true" ]; then
+        UPDATED_JS=$(echo "$JS_SONARR" | jq '.enableSearch = true')
+        api PUT "$JELLYSEERR_URL/api/v1/settings/sonarr/$JS_SID" "${JA[@]}" -d "$UPDATED_JS" >/dev/null 2>&1 && \
+          ok "Sonarr $JS_SID: enableSearch set" || true
+      fi
+    done
+    ok "Sonarr already connected"
+  fi
 
   # Add Radarr
   EXISTING_JS_RADARR=$(api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
@@ -813,10 +843,23 @@ if [ -n "$JS_COOKIE" ]; then
       api POST "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" -d '{
         "name":"Radarr","hostname":"radarr","port":7878,"useSsl":false,"apiKey":"'"$RADARR_KEY"'",
         "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/movies",
-        "is4k":false,"isDefault":true,"externalUrl":"http://localhost:7878","minimumAvailability":"released"
+        "is4k":false,"isDefault":true,"externalUrl":"http://localhost:7878","minimumAvailability":"released",
+        "enableSearch":true
       }' >/dev/null 2>&1 && ok "Radarr connected" || warn "Could not add Radarr"
     }
-  else ok "Radarr already connected"; fi
+  else
+    # Ensure enableSearch is set on existing connections
+    for JS_RADARR in $(api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null); do
+      JS_RID=$(echo "$JS_RADARR" | jq -r '.id')
+      JS_RSEARCH=$(echo "$JS_RADARR" | jq -r '.enableSearch // false')
+      if [ "$JS_RSEARCH" != "true" ]; then
+        UPDATED_JR=$(echo "$JS_RADARR" | jq '.enableSearch = true')
+        api PUT "$JELLYSEERR_URL/api/v1/settings/radarr/$JS_RID" "${JA[@]}" -d "$UPDATED_JR" >/dev/null 2>&1 && \
+          ok "Radarr $JS_RID: enableSearch set" || true
+      fi
+    done
+    ok "Radarr already connected"
+  fi
 
   api POST "$JELLYSEERR_URL/api/v1/settings/initialize" "${JA[@]}" >/dev/null 2>&1 || true
   ok "Setup finalized"
@@ -1070,6 +1113,14 @@ fi
 # --- Jellyseerr ---
 JS_STATUS=$(curl -sf "$JELLYSEERR_URL/api/v1/settings/public" 2>/dev/null)
 check "Jellyseerr → initialized" "$(echo "$JS_STATUS" | jq '.initialized' 2>/dev/null)"
+
+if [ -n "$JS_COOKIE" ]; then
+  JA_V=(-b "connect.sid=$JS_COOKIE")
+  JS_SONARR_V=$(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA_V[@]}" 2>/dev/null || echo "[]")
+  check "Jellyseerr → Sonarr enableSearch" "$(echo "$JS_SONARR_V" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)"
+  JS_RADARR_V=$(api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA_V[@]}" 2>/dev/null || echo "[]")
+  check "Jellyseerr → Radarr enableSearch" "$(echo "$JS_RADARR_V" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)"
+fi
 
 # --- Organizr ---
 ORGANIZR_PING=$(curl -sf -o /dev/null -w "%{http_code}" "$ORGANIZR_URL" 2>/dev/null)
