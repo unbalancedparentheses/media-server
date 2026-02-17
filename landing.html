@@ -20,7 +20,7 @@
   .card-info{flex:1;min-width:0}
   .card-name{font-size:0.95rem;font-weight:600}
   .card-desc{font-size:0.75rem;color:#7a7a9a;margin-top:0.15rem}
-  .card-port{font-size:0.65rem;color:#e94560;font-weight:500;margin-top:0.2rem}
+  .card-url{font-size:0.65rem;color:#e94560;font-weight:500;margin-top:0.2rem}
   .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#3a3a5a;transition:background 0.3s ease}
   .dot.up{background:#4ade80}
   .dot.down{background:#ef4444}
@@ -71,7 +71,6 @@
     </div>
   </div>
   <script>
-    var h=location.hostname;
     var icons={
       Jellyseerr:'\uD83C\uDFAC',Jellyfin:'\u25B6\uFE0F',
       Sonarr:'\uD83D\uDCFA','Sonarr Anime':'\uD83C\uDF1F',
@@ -80,22 +79,22 @@
     };
     var sections=[
       ["Watch & Request","cat-media",[
-        [5055,"Jellyseerr","Request movies & TV"],
-        [8096,"Jellyfin","Stream your library"]
+        ["jellyseerr","Jellyseerr","Request movies & TV"],
+        ["jellyfin","Jellyfin","Stream your library"]
       ]],
       ["Library Management","cat-manage",[
-        [8989,"Sonarr","TV show automation"],
-        [8990,"Sonarr Anime","Anime series"],
-        [7878,"Radarr","Movie automation"],
-        [9696,"Prowlarr","Indexer management"],
-        [6767,"Bazarr","Subtitle downloads"]
+        ["sonarr","Sonarr","TV show automation"],
+        ["sonarr-anime","Sonarr Anime","Anime series"],
+        ["radarr","Radarr","Movie automation"],
+        ["prowlarr","Prowlarr","Indexer management"],
+        ["bazarr","Bazarr","Subtitle downloads"]
       ]],
       ["Downloads","cat-download",[
-        [8081,"qBittorrent","Torrent client"],
-        [8080,"SABnzbd","Usenet client"]
+        ["qbittorrent","qBittorrent","Torrent client"],
+        ["sabnzbd","SABnzbd","Usenet client"]
       ]],
       ["Tools","cat-tools",[
-        [9090,"Organizr","Unified dashboard"]
+        ["organizr","Organizr","Unified dashboard"]
       ]]
     ];
 
@@ -105,14 +104,16 @@
     sections.forEach(function(sec){
       gridHtml+='<div class="section"><div class="section-title">'+sec[0]+'</div><div class="grid">';
       sec[2].forEach(function(s){
-        var ico=icons[s[1]]||'\u25CF';
-        gridHtml+='<a href="http://'+h+':'+s[0]+'" class="card '+sec[1]+'">'
+        var sub=s[0],name=s[1],desc=s[2];
+        var url='http://'+sub+'.media.local';
+        var ico=icons[name]||'\u25CF';
+        gridHtml+='<a href="'+url+'" class="card '+sec[1]+'">'
           +'<div class="icon">'+ico+'</div>'
-          +'<div class="card-info"><div class="card-name">'+s[1]+'</div>'
-          +'<div class="card-desc">'+s[2]+'</div>'
-          +'<div class="card-port">:'+s[0]+'</div></div>'
-          +'<div class="dot" id="d'+s[0]+'"></div></a>';
-        allServices.push(s[0]);
+          +'<div class="card-info"><div class="card-name">'+name+'</div>'
+          +'<div class="card-desc">'+desc+'</div>'
+          +'<div class="card-url">'+sub+'.media.local</div></div>'
+          +'<div class="dot" id="d-'+sub+'"></div></a>';
+        allServices.push(sub);
       });
       gridHtml+='</div></div>';
     });
@@ -120,10 +121,10 @@
 
     // Health checks — run on load and every 30s
     function checkHealth(){
-      allServices.forEach(function(port){
-        var d=document.getElementById("d"+port);
+      allServices.forEach(function(sub){
+        var d=document.getElementById("d-"+sub);
         if(!d)return;
-        fetch("http://"+h+":"+port,{mode:"no-cors",signal:AbortSignal.timeout(3000)})
+        fetch("http://"+sub+".media.local",{mode:"no-cors",signal:AbortSignal.timeout(3000)})
           .then(function(){d.className="dot up"})
           .catch(function(){d.className="dot down"});
       });

@@ -70,17 +70,17 @@ for p in "$CONFIG_DIR/organizr/www/organizr/data/config/config.php"; do
   [ -f "$p" ] && ORGANIZR_API_KEY=$(sed -n "s/.*'organizrAPI' => '\([^']*\)'.*/\1/p" "$p" 2>/dev/null || echo "")
 done
 
-# ─── URLs ────────────────────────────────────────────────────────
-JELLYFIN_URL="http://localhost:8096"
-SONARR_URL="http://localhost:8989"
-SONARR_ANIME_URL="http://localhost:8990"
-RADARR_URL="http://localhost:7878"
-PROWLARR_URL="http://localhost:9696"
-BAZARR_URL="http://localhost:6767"
-SABNZBD_URL="http://localhost:8080"
-QBIT_URL="http://localhost:8081"
-JELLYSEERR_URL="http://localhost:5055"
-ORGANIZR_URL="http://localhost:9090"
+# ─── URLs (all services accessed through nginx reverse proxy) ────
+JELLYFIN_URL="http://jellyfin.media.local"
+SONARR_URL="http://sonarr.media.local"
+SONARR_ANIME_URL="http://sonarr-anime.media.local"
+RADARR_URL="http://radarr.media.local"
+PROWLARR_URL="http://prowlarr.media.local"
+BAZARR_URL="http://bazarr.media.local"
+SABNZBD_URL="http://sabnzbd.media.local"
+QBIT_URL="http://qbittorrent.media.local"
+JELLYSEERR_URL="http://jellyseerr.media.local"
+ORGANIZR_URL="http://organizr.media.local"
 
 echo ""
 echo "  ┌──────────────────────────────────────────────────────────┐"
