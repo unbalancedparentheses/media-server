@@ -202,8 +202,27 @@ if [ -n "$JF_TOKEN" ]; then
       '[.[] | select(.Name == $n) | .Locations[] | select(. == $p)] | length > 0' /tmp/jf_test.json 2>/dev/null)
     check "Jellyfin → library: $ln" "$HAS"
   done
+  REALTIME=$(jq 'all(.[]; .LibraryOptions.EnableRealtimeMonitor == true)' /tmp/jf_test.json 2>/dev/null)
+  check "Jellyfin → real-time monitoring" "$REALTIME"
+  DAILY_SCAN=$(jq 'all(.[]; .LibraryOptions.AutomaticRefreshIntervalDays == 1)' /tmp/jf_test.json 2>/dev/null)
+  check "Jellyfin → daily scan" "$DAILY_SCAN"
   rm -f /tmp/jf_test.json
 fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 5.5 JELLYFIN SYNC (notifications in Sonarr/Radarr)
+# ═══════════════════════════════════════════════════════════════════
+info "Jellyfin sync..."
+
+check_jellyfin_notification() {
+  local name="$1" url="$2" key="$3"
+  local NOTIF=$(api GET "$url/api/v3/notification" -H "X-Api-Key: $key" || echo "[]")
+  check "$name → Jellyfin notification" "$(echo "$NOTIF" | jq 'any(.[]; .name == "Jellyfin")' 2>/dev/null)"
+}
+
+[ -n "$SONARR_KEY" ] && check_jellyfin_notification "Sonarr" "$SONARR_URL" "$SONARR_KEY"
+[ -n "$SONARR_ANIME_KEY" ] && check_jellyfin_notification "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
+[ -n "$RADARR_KEY" ] && check_jellyfin_notification "Radarr" "$RADARR_URL" "$RADARR_KEY"
 
 # ═══════════════════════════════════════════════════════════════════
 # 6. JELLYSEERR
@@ -279,8 +298,8 @@ for p in "$CONFIG_DIR/bazarr/config/config/config.yaml" "$CONFIG_DIR/bazarr/conf
   [ -f "$p" ] && BAZARR_CONFIG_FILE="$p" && break
 done
 if [ -n "$BAZARR_CONFIG_FILE" ]; then
-  BAZARR_AUTH_TYPE=$(grep -A1 '^auth:' "$BAZARR_CONFIG_FILE" 2>/dev/null | grep 'type:' | grep -v "''" | head -1)
-  check "Bazarr → auth configured" "$([ -n "$BAZARR_AUTH_TYPE" ] && echo true || echo false)"
+  BAZARR_AUTH_USER=$(sed -n '/^auth:/,/^[^ ]/{s/^  username: *//p;}' "$BAZARR_CONFIG_FILE" 2>/dev/null | head -1 || echo "")
+  check "Bazarr → auth configured" "$([ -n "$BAZARR_AUTH_USER" ] && [ "$BAZARR_AUTH_USER" != "''" ] && echo true || echo false)"
 fi
 
 # ═══════════════════════════════════════════════════════════════════
