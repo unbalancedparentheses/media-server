@@ -735,6 +735,73 @@ else
   warn "Bazarr config file not found"
 fi
 
+# Bazarr auth — set via config file (no host config API like *arr)
+if [ -n "$BAZARR_CONFIG" ]; then
+  BAZARR_AUTH_SET=$(grep -c "auth_type" "$BAZARR_CONFIG" 2>/dev/null || echo "0")
+  if [ "$BAZARR_AUTH_SET" = "0" ] || grep -q "auth_type: ''" "$BAZARR_CONFIG" 2>/dev/null; then
+    if python3 - "$BAZARR_CONFIG" "$JELLYFIN_USER" "$JELLYFIN_PASS" << 'PYEOF'
+import sys
+config_path, user, password = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(config_path, 'r') as f:
+    lines = f.readlines()
+# Find or create auth section
+auth_idx = None
+for i, line in enumerate(lines):
+    if line.strip() == 'auth:':
+        auth_idx = i
+        break
+if auth_idx is None:
+    lines.append('\nauth:\n')
+    auth_idx = len(lines) - 1
+# Remove existing auth keys and rewrite
+new_lines = []
+in_auth = False
+for i, line in enumerate(lines):
+    if line.strip() == 'auth:':
+        in_auth = True
+        new_lines.append(line)
+        new_lines.append("  type: 'forms'\n")
+        new_lines.append(f"  username: '{user}'\n")
+        new_lines.append(f"  password: '{password}'\n")
+        continue
+    if in_auth:
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#') and not line[0].isspace():
+            in_auth = False
+            new_lines.append(line)
+        elif stripped.split(':')[0].strip() in ('type', 'username', 'password'):
+            continue
+        else:
+            new_lines.append(line)
+    else:
+        new_lines.append(line)
+with open(config_path, 'w') as f:
+    f.writelines(new_lines)
+print("OK")
+PYEOF
+    then
+      ok "Bazarr auth set: $JELLYFIN_USER"
+      docker restart bazarr >/dev/null 2>&1 || true
+    else
+      warn "Could not set Bazarr auth"
+    fi
+  else
+    ok "Bazarr auth already configured"
+  fi
+fi
+
+# SABnzbd auth — set username/password via API
+if [ -n "$SABNZBD_KEY" ]; then
+  SAB_AUTH_USER=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=misc&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.config.misc.username // empty' 2>/dev/null)
+  if [ -z "$SAB_AUTH_USER" ]; then
+    curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=username&value=$JELLYFIN_USER&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
+    curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=password&value=$JELLYFIN_PASS&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
+    ok "SABnzbd auth set: $JELLYFIN_USER"
+  else
+    ok "SABnzbd auth: $SAB_AUTH_USER"
+  fi
+fi
+
 # ═══════════════════════════════════════════════════════════════════
 # 15. JELLYSEERR — connect to Jellyfin + Sonarr + Radarr
 # ═══════════════════════════════════════════════════════════════════
@@ -930,6 +997,10 @@ radarr:
           - name: $RADARR_PROFILE
 YAML
   ok "Config written"
+
+  # Trigger initial sync
+  docker exec recyclarr recyclarr sync >/dev/null 2>&1 && \
+    ok "Recyclarr sync complete" || warn "Recyclarr sync failed (will retry on next container restart)"
 else
   warn "Missing API keys, skipping"
 fi
