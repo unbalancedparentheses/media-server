@@ -11,6 +11,10 @@ CONFIG_FILE="$SCRIPT_DIR/config.toml"
 MEDIA_DIR="$HOME/media"
 CONFIG_DIR="$MEDIA_DIR/config"
 
+# Clean up temp files on exit
+cleanup() { rm -f /tmp/prowlarr_indexer.json /tmp/jf_verify.json /tmp/prowlarr_verify.json /tmp/js_settings_tmp.json; }
+trap cleanup EXIT
+
 # ─── Helpers ─────────────────────────────────────────────────────
 info()  { printf "\n\033[1;34m=> %s\033[0m\n" "$*"; }
 ok()    { printf "\033[1;32m   ✓ %s\033[0m\n" "$*"; }
@@ -262,7 +266,11 @@ if [ -n "$QBIT_COOKIE" ]; then
       \"temp_path_enabled\": true,
       \"web_ui_port\": 8081,
       \"max_ratio\": $SEED_RATIO,
-      \"max_seeding_time\": $SEED_TIME
+      \"max_seeding_time\": $SEED_TIME,
+      \"up_limit\": 102400,
+      \"web_ui_csrf_protection_enabled\": false,
+      \"bypass_auth_subnet_whitelist_enabled\": true,
+      \"bypass_auth_subnet_whitelist\": \"$(docker network inspect media-server_default -f '{{(index .IPAM.Config 0).Subnet}}' 2>/dev/null || echo '192.168.0.0/16')\"
     }" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"
 
   for cat in sonarr sonarr-anime radarr; do
@@ -487,7 +495,7 @@ if [ -n "$PROWLARR_KEY" ]; then
       "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
       "enable":true,"protocol":"torrent","priority":1,
       "fields":[{"name":"host","value":"qbittorrent"},{"name":"port","value":8081},
-        {"name":"username","value":"admin"},{"name":"password","value":"'"$QBIT_PASS"'"},
+        {"name":"username","value":"'"$QBIT_USER"'"},{"name":"password","value":"'"$QBIT_PASS"'"},
         {"name":"category","value":"prowlarr"}]
     }' >/dev/null 2>&1 && ok "qBittorrent connected to Prowlarr" || true
   fi
@@ -640,7 +648,7 @@ if [ -n "$BAZARR_CONFIG" ]; then
   ok "Config: $BAZARR_CONFIG"
 
   # Use python3 to do targeted updates (preserves all existing config)
-  python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" << 'PYEOF'
+  if python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" << 'PYEOF'
 import sys
 import json
 
@@ -717,8 +725,7 @@ with open(config_path, 'w') as f:
 
 print("OK")
 PYEOF
-
-  if [ $? -eq 0 ]; then
+  then
     ok "Sonarr + Radarr configured"
     docker restart bazarr >/dev/null 2>&1 && ok "Bazarr restarted" || true
   else
@@ -757,7 +764,7 @@ if [ "$JS_INITIALIZED" != "true" ]; then
     ' "$JS_SETTINGS" 2>/dev/null)
 
     if [ -n "$UPDATED" ]; then
-      echo "$UPDATED" > "$JS_SETTINGS"
+      echo "$UPDATED" > /tmp/js_settings_tmp.json && mv /tmp/js_settings_tmp.json "$JS_SETTINGS"
       docker restart jellyseerr >/dev/null 2>&1
       ok "Jellyfin server pre-configured"
       sleep 8
@@ -821,7 +828,7 @@ if [ -n "$JS_COOKIE" ]; then
     }
   else
     # Ensure enableSearch is set on existing connections
-    for JS_SONARR in $(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null); do
+    api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null | while IFS= read -r JS_SONARR; do
       JS_SID=$(echo "$JS_SONARR" | jq -r '.id')
       JS_SEARCH=$(echo "$JS_SONARR" | jq -r '.enableSearch // false')
       if [ "$JS_SEARCH" != "true" ]; then
@@ -849,7 +856,7 @@ if [ -n "$JS_COOKIE" ]; then
     }
   else
     # Ensure enableSearch is set on existing connections
-    for JS_RADARR in $(api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null); do
+    api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null | while IFS= read -r JS_RADARR; do
       JS_RID=$(echo "$JS_RADARR" | jq -r '.id')
       JS_RSEARCH=$(echo "$JS_RADARR" | jq -r '.enableSearch // false')
       if [ "$JS_RSEARCH" != "true" ]; then

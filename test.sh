@@ -297,7 +297,22 @@ info "Health checks..."
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# 11. DOCKER CONTAINERS
+# 11. LANDING PAGE & PROXY
+# ═══════════════════════════════════════════════════════════════════
+info "Landing page..."
+
+LANDING_HEADERS=$(curl -sf -D - -o /dev/null http://localhost 2>/dev/null || echo "")
+LANDING=$(curl -sf http://localhost 2>/dev/null || echo "")
+check "Landing page → serves HTML" "$(echo "$LANDING" | grep -q 'Media.*Server' && echo true || echo false)"
+check "Landing page → Content-Type text/html" "$(echo "$LANDING_HEADERS" | grep -qi 'content-type.*text/html' && echo true || echo false)"
+check "Landing page → service grid" "$(echo "$LANDING" | grep -q 'Jellyfin' && echo true || echo false)"
+check "Landing page → downloads widget" "$(echo "$LANDING" | grep -q 'qbt/torrents' && echo true || echo false)"
+
+QBT_PROXY=$(curl -sf http://localhost/api/qbt/torrents/info 2>/dev/null || echo "")
+check "Landing page → qBittorrent proxy" "$(echo "$QBT_PROXY" | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
+
+# ═══════════════════════════════════════════════════════════════════
+# 12. DOCKER CONTAINERS
 # ═══════════════════════════════════════════════════════════════════
 info "Docker containers..."
 
