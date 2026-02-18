@@ -169,14 +169,17 @@ Sets the timezone for all containers. Affects scheduled tasks (Recyclarr syncs, 
 
 ## Remote access
 
-The setup installs [Tailscale](https://tailscale.com) for secure remote access without port forwarding or complex VPN configuration. Tailscale creates a private network (called a tailnet) between your devices — your media server gets a stable IP that's reachable from any device signed into the same Tailscale account.
+The setup installs [Tailscale](https://tailscale.com) and configures HTTPS via Tailscale Serve. After signing in, your media server is accessible from any device on your Tailscale network with valid HTTPS certificates:
 
-After installing and signing in to Tailscale, your media server is accessible from anywhere:
+- `https://<hostname>.ts.net:8096` — Jellyfin
+- `https://<hostname>.ts.net:5055` — Jellyseerr
+- `https://<hostname>.ts.net` — landing page
 
-- `http://<tailscale-ip>:8096` — Jellyfin (watch your content)
-- `http://<tailscale-ip>:5055` — Jellyseerr (request new content)
+Your hostname is shown in the setup completion banner. You can also find it with:
 
-Run `/Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4` to find your Tailscale IP.
+    /Applications/Tailscale.app/Contents/MacOS/Tailscale status --json | jq -r '.Self.DNSName'
+
+Tailscale Serve provides real HTTPS with Let's Encrypt certificates via Tailscale's ACME integration — no Nginx changes or manual cert management needed. TLS is terminated by Tailscale and proxied to local HTTP services.
 
 You can also share access with family or friends by inviting them to your tailnet. They'll be able to reach Jellyfin and Jellyseerr from their own devices without being on your local network.
 
