@@ -3,8 +3,11 @@ set -eo pipefail
 
 # ═══════════════════════════════════════════════════════════════════
 # Media Server — One-command setup (fresh install or re-run)
-# Usage: ./setup.sh            Full setup + verification
-#        ./setup.sh --test     Run verification only
+# Usage: ./setup.sh                      Full setup + verification
+#        ./setup.sh --test               Run verification only
+#        ./setup.sh --update             Backup + pull latest images + restart
+#        ./setup.sh --backup             Backup service configs
+#        ./setup.sh --restore <file>     Restore configs from backup
 # ═══════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -45,10 +48,119 @@ get_api_key() {
   [ -f "$f" ] && sed -n 's/.*<ApiKey>\(.*\)<\/ApiKey>.*/\1/p' "$f" 2>/dev/null || echo ""
 }
 
-# ─── Test-only mode ──────────────────────────────────────────────
-TEST_ONLY=false
-if [ "${1:-}" = "--test" ]; then
-  TEST_ONLY=true
+# ─── Mode selection ──────────────────────────────────────────────
+case "${1:-}" in
+  --test)    MODE=test ;;
+  --update)  MODE=update ;;
+  --backup)  MODE=backup ;;
+  --restore) MODE=restore; RESTORE_FILE="${2:-}" ;;
+  "")        MODE=setup ;;
+  *)         echo "Usage: ./setup.sh [--test|--update|--backup|--restore <file>]"; exit 1 ;;
+esac
+
+BACKUP_DIR="$MEDIA_DIR/backups"
+MAX_BACKUPS=10
+COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+
+# ─── Backup function ────────────────────────────────────────────
+do_backup() {
+  [ ! -d "$CONFIG_DIR" ] && err "Config directory not found: $CONFIG_DIR"
+  mkdir -p "$BACKUP_DIR"
+
+  local timestamp backup_file services dir backup_size backup_count remove_count
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  backup_file="$BACKUP_DIR/media-server_${timestamp}.tar.gz"
+
+  info "Backing up service configs..."
+
+  services=""
+  for dir in "$CONFIG_DIR"/*/; do
+    [ -d "$dir" ] && services="$services $(basename "$dir")"
+  done
+  ok "Services:$services"
+
+  tar czf "$backup_file" -C "$MEDIA_DIR" config/ 2>/dev/null
+  backup_size=$(du -sh "$backup_file" | cut -f1)
+  ok "Created: $backup_file ($backup_size)"
+
+  backup_count=$(ls -1 "$BACKUP_DIR"/media-server_*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$backup_count" -gt "$MAX_BACKUPS" ]; then
+    remove_count=$((backup_count - MAX_BACKUPS))
+    ls -1t "$BACKUP_DIR"/media-server_*.tar.gz | tail -n "$remove_count" | while read -r old; do
+      rm -f "$old"
+      ok "Pruned: $(basename "$old")"
+    done
+  fi
+
+  echo ""
+  echo "  Backups in $BACKUP_DIR ($backup_count total, keeping last $MAX_BACKUPS)"
+  echo "  Restore with: ./setup.sh --restore $backup_file"
+  echo ""
+}
+
+# ─── Restore function ───────────────────────────────────────────
+do_restore() {
+  [ -z "$RESTORE_FILE" ] && err "Usage: ./setup.sh --restore <backup-file>"
+  [ ! -f "$RESTORE_FILE" ] && err "Backup file not found: $RESTORE_FILE"
+
+  info "Restoring from $RESTORE_FILE..."
+  echo "  This will overwrite current configs in $CONFIG_DIR"
+  echo ""
+  read -r -p "  Continue? [y/N] " confirm
+  [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "  Aborted."; exit 0; }
+
+  info "Stopping containers..."
+  docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+
+  info "Extracting backup..."
+  tar xzf "$RESTORE_FILE" -C "$MEDIA_DIR"
+  ok "Configs restored"
+
+  info "Starting containers..."
+  docker compose -f "$COMPOSE_FILE" up -d
+  ok "All containers started"
+
+  echo ""
+  echo "  Restore complete. Run ./setup.sh --test to verify."
+  echo ""
+}
+
+# ─── Update function ────────────────────────────────────────────
+do_update() {
+  [ ! -f "$COMPOSE_FILE" ] && err "docker-compose.yml not found"
+  docker info &>/dev/null || err "Docker is not running"
+
+  info "Creating pre-update backup..."
+  do_backup
+
+  info "Pulling latest images..."
+  docker compose -f "$COMPOSE_FILE" pull
+
+  info "Restarting containers with new images..."
+  docker compose -f "$COMPOSE_FILE" up -d
+
+  info "Current image versions..."
+  docker compose -f "$COMPOSE_FILE" images --format "table {{.Service}}\t{{.Tag}}\t{{.Size}}"
+
+  local old_images
+  old_images=$(docker images --filter "dangling=true" -q 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$old_images" -gt 0 ]; then
+    info "Cleaning up $old_images old image(s)..."
+    docker image prune -f >/dev/null 2>&1
+    ok "Old images removed"
+  fi
+
+  echo ""
+  echo "  Update complete. Run ./setup.sh --test to verify."
+  echo ""
+}
+
+# ─── Mode dispatch ──────────────────────────────────────────────
+if [ "$MODE" = "backup" ];  then do_backup; exit 0; fi
+if [ "$MODE" = "restore" ]; then do_restore; exit 0; fi
+if [ "$MODE" = "update" ];  then do_update; exit 0; fi
+
+if [ "$MODE" = "test" ]; then
   command -v jq  >/dev/null 2>&1 || { echo "jq is required"; exit 1; }
   command -v yq  >/dev/null 2>&1 || { echo "yq is required"; exit 1; }
   [ -f "$CONFIG_FILE" ] || { echo "config.toml not found"; exit 1; }
@@ -87,7 +199,7 @@ if [ "${1:-}" = "--test" ]; then
   done
 fi
 
-if [ "$TEST_ONLY" != "true" ]; then
+if [ "$MODE" = "setup" ]; then
 # ═══════════════════════════════════════════════════════════════════
 # 1. PREREQUISITES
 # ═══════════════════════════════════════════════════════════════════
@@ -1319,7 +1431,7 @@ ok "api-proxy.conf written"
 docker exec media-nginx nginx -s reload >/dev/null 2>&1 && \
   ok "nginx reloaded" || warn "Could not reload nginx (will apply on next restart)"
 
-fi  # end setup-only sections
+fi  # end setup mode
 
 # ═══════════════════════════════════════════════════════════════════
 # 18. END-TO-END VERIFICATION
@@ -1605,7 +1717,7 @@ else
 fi
 echo ""
 
-[ "$TEST_ONLY" = "true" ] && exit "$TESTS_FAILED"
+[ "$MODE" = "test" ] && exit "$TESTS_FAILED"
 
 # ═══════════════════════════════════════════════════════════════════
 # DONE
