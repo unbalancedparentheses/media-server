@@ -245,11 +245,35 @@ else
   ok "yq"
 fi
 
+# Tailscale (remote access)
+if ! command -v /Applications/Tailscale.app/Contents/MacOS/Tailscale &>/dev/null; then
+  info "Installing Tailscale..."
+  brew install --cask tailscale
+  ok "Tailscale installed"
+else
+  ok "Tailscale"
+fi
+
 # config.toml
 if [ ! -f "$CONFIG_FILE" ]; then
   err "Missing config.toml — copy config.toml.example and fill in your values"
 fi
 CONFIG_JSON=$(yq -p toml -o json '.' "$CONFIG_FILE")
+
+# Check Tailscale connection
+TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+if ! "$TS_CLI" status &>/dev/null; then
+  warn "Tailscale is not connected"
+  echo "  Open Tailscale from the menu bar and sign in to enable remote access."
+  echo "  You can skip this — local access will still work."
+  echo ""
+  read -r -p "  Press Enter to continue..."
+else
+  TS_IP=$("$TS_CLI" ip -4 2>/dev/null || echo "")
+  if [ -n "$TS_IP" ]; then
+    ok "Tailscale connected ($TS_IP)"
+  fi
+fi
 
 # ═══════════════════════════════════════════════════════════════════
 # 2. DIRECTORY STRUCTURE
@@ -1702,7 +1726,26 @@ for container in jellyfin sonarr sonarr-anime radarr prowlarr bazarr sabnzbd qbi
   check "Container: $container" "$([ "$STATUS" = "running" ] && echo true || echo false)"
 done
 
-# --- 14. Summary ---
+# --- 14. Tailscale ---
+info "Tailscale..."
+TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+if command -v "$TS_CLI" &>/dev/null; then
+  pass "Tailscale installed"
+  if "$TS_CLI" status &>/dev/null; then
+    TS_IP=$("$TS_CLI" ip -4 2>/dev/null || echo "")
+    if [ -n "$TS_IP" ]; then
+      pass "Tailscale connected ($TS_IP)"
+    else
+      fail "Tailscale connected but no IPv4 address"
+    fi
+  else
+    skip "Tailscale not connected (remote access unavailable)"
+  fi
+else
+  skip "Tailscale not installed"
+fi
+
+# --- 15. Summary ---
 TOTAL=$((TESTS_PASSED + TESTS_FAILED))
 echo ""
 echo "  ────────────────────────────────────────────────────────────"
@@ -1733,6 +1776,12 @@ echo "  │  Watch:        http://jellyfin.media.local               │"
 echo "  │                                                          │"
 echo "  │  All services: http://media.local (links to everything)  │"
 echo "  │                                                          │"
+TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+TS_IP=$("$TS_CLI" ip -4 2>/dev/null || echo "")
+if [ -n "$TS_IP" ]; then
+echo "  │  Remote:      http://$TS_IP:8096 (Jellyfin)$(printf '%*s' $((15 - ${#TS_IP})) '')│"
+echo "  │                                                          │"
+fi
 echo "  └──────────────────────────────────────────────────────────┘"
 echo ""
 echo "  Quick start:"
