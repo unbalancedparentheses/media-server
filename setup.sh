@@ -262,6 +262,8 @@ CONFIG_JSON=$(yq -p toml -o json '.' "$CONFIG_FILE")
 
 # Check Tailscale connection
 TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+TS_IP=""
+TS_HOSTNAME=""
 if ! "$TS_CLI" status &>/dev/null; then
   warn "Tailscale is not connected"
   echo "  Open Tailscale from the menu bar and sign in to enable remote access."
@@ -270,8 +272,15 @@ if ! "$TS_CLI" status &>/dev/null; then
   read -r -p "  Press Enter to continue..."
 else
   TS_IP=$("$TS_CLI" ip -4 2>/dev/null || echo "")
+  TS_HOSTNAME=$("$TS_CLI" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
   if [ -n "$TS_IP" ]; then
     ok "Tailscale connected ($TS_IP)"
+  fi
+  if [ -n "$TS_HOSTNAME" ]; then
+    info "Configuring Tailscale HTTPS..."
+    "$TS_CLI" serve --bg --https=443 / proxy http://127.0.0.1:80 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
+    "$TS_CLI" serve --bg --https=8096 / proxy http://127.0.0.1:8096 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
+    "$TS_CLI" serve --bg --https=5055 / proxy http://127.0.0.1:5055 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
   fi
 fi
 
@@ -1738,6 +1747,12 @@ if command -v "$TS_CLI" &>/dev/null; then
     else
       fail "Tailscale connected but no IPv4 address"
     fi
+    SERVE_STATUS=$("$TS_CLI" serve status 2>/dev/null || echo "")
+    if echo "$SERVE_STATUS" | grep -q "https"; then
+      pass "Tailscale HTTPS configured"
+    else
+      skip "Tailscale HTTPS not configured"
+    fi
   else
     skip "Tailscale not connected (remote access unavailable)"
   fi
@@ -1777,9 +1792,10 @@ echo "  │                                                          │"
 echo "  │  All services: http://media.local (links to everything)  │"
 echo "  │                                                          │"
 TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-TS_IP=$("$TS_CLI" ip -4 2>/dev/null || echo "")
-if [ -n "$TS_IP" ]; then
-echo "  │  Remote:      http://$TS_IP:8096 (Jellyfin)$(printf '%*s' $((15 - ${#TS_IP})) '')│"
+TS_HOSTNAME=$("$TS_CLI" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
+if [ -n "$TS_HOSTNAME" ]; then
+echo "  │  Remote:      https://$TS_HOSTNAME:8096 (Jellyfin)$(printf '%*s' $((12 - ${#TS_HOSTNAME})) '')│"
+echo "  │               https://$TS_HOSTNAME:5055 (Jellyseerr)$(printf '%*s' $((9 - ${#TS_HOSTNAME})) '')│"
 echo "  │                                                          │"
 fi
 echo "  └──────────────────────────────────────────────────────────┘"
