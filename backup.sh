@@ -42,7 +42,7 @@ if [ "$1" = "--restore" ]; then
   ok "All containers started"
 
   echo ""
-  echo "  Restore complete. Run ./test.sh to verify."
+  echo "  Restore complete. Run ./setup.sh --test to verify."
   echo ""
   exit 0
 fi
