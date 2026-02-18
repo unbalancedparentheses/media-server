@@ -41,5 +41,5 @@ if [ "$OLD_IMAGES" -gt 0 ]; then
 fi
 
 echo ""
-echo "  Update complete. Run ./test.sh to verify."
+echo "  Update complete. Run ./setup.sh --test to verify."
 echo ""
