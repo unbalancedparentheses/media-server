@@ -250,6 +250,12 @@ if [ -n "$JELLYSEERR_KEY" ]; then
 
   JS_RADARR_SEARCH=$(echo "$JS_RADARR" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)
   check "Jellyseerr → Radarr enableSearch" "$JS_RADARR_SEARCH"
+
+  # Libraries enabled (required for availability sync)
+  JS_JELLYFIN=$(api GET "$JELLYSEERR_URL/api/v1/settings/jellyfin" -H "$JH" || echo "{}")
+  JS_LIB_ENABLED=$(echo "$JS_JELLYFIN" | jq '[.libraries[] | select(.enabled == true)] | length' 2>/dev/null || echo "0")
+  JS_LIB_TOTAL=$(echo "$JS_JELLYFIN" | jq '.libraries | length' 2>/dev/null || echo "0")
+  check "Jellyseerr → libraries enabled ($JS_LIB_ENABLED/$JS_LIB_TOTAL)" "$([ "$JS_LIB_ENABLED" -gt 0 ] && echo true || echo false)"
 fi
 
 # ═══════════════════════════════════════════════════════════════════

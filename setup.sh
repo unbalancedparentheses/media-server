@@ -461,7 +461,7 @@ configure_arr() {
     if ! echo "$EXISTING_NOTIF" | grep -q "^Jellyfin$"; then
       api POST "$url/api/v3/notification" -H "$H" -d '{
         "name":"Jellyfin","implementation":"MediaBrowser","configContract":"MediaBrowserSettings",
-        "onDownload":true,"onUpgrade":true,"onRename":true,
+        "enable":true,"onDownload":true,"onUpgrade":true,"onRename":true,
         "fields":[{"name":"host","value":"jellyfin"},{"name":"port","value":8096},
           {"name":"useSsl","value":false},{"name":"apiKey","value":"'"$JELLYFIN_API_KEY"'"},
           {"name":"updateLibrary","value":true}]
@@ -958,11 +958,11 @@ done
 if [ -n "$JS_COOKIE" ]; then
   JA=(-b "connect.sid=$JS_COOKIE")
 
-  # Sync & enable Jellyfin libraries
-  LIBRARIES=$(api GET "$JELLYSEERR_URL/api/v1/settings/jellyfin/library" "${JA[@]}" 2>/dev/null || echo "[]")
+  # Sync & enable Jellyfin libraries (GET ?sync=true fetches, GET ?enable=ids saves)
+  LIBRARIES=$(api GET "$JELLYSEERR_URL/api/v1/settings/jellyfin/library?sync=true" "${JA[@]}" 2>/dev/null || echo "[]")
   if echo "$LIBRARIES" | jq -e '.[0]' >/dev/null 2>&1; then
-    ENABLED=$(echo "$LIBRARIES" | jq '[.[] | .enabled = true]')
-    api POST "$JELLYSEERR_URL/api/v1/settings/jellyfin/library" "${JA[@]}" -d "$ENABLED" >/dev/null 2>&1 && \
+    LIB_IDS=$(echo "$LIBRARIES" | jq -r '.[].id' | paste -sd ',' -)
+    api GET "$JELLYSEERR_URL/api/v1/settings/jellyfin/library?enable=$LIB_IDS" "${JA[@]}" >/dev/null 2>&1 && \
       ok "Libraries synced" || true
   fi
 
@@ -1373,6 +1373,9 @@ if [ -n "$JS_COOKIE" ]; then
   check "Jellyseerr → Sonarr enableSearch" "$(echo "$JS_SONARR_V" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)"
   JS_RADARR_V=$(api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA_V[@]}" 2>/dev/null || echo "[]")
   check "Jellyseerr → Radarr enableSearch" "$(echo "$JS_RADARR_V" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)"
+  JS_JELLYFIN_V=$(api GET "$JELLYSEERR_URL/api/v1/settings/jellyfin" "${JA_V[@]}" 2>/dev/null || echo "{}")
+  JS_LIB_EN=$(echo "$JS_JELLYFIN_V" | jq '[.libraries[] | select(.enabled == true)] | length' 2>/dev/null || echo "0")
+  check "Jellyseerr → libraries enabled ($JS_LIB_EN)" "$([ "$JS_LIB_EN" -gt 0 ] && echo true || echo false)"
 fi
 
 # --- Organizr ---
