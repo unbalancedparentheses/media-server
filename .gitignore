@@ -2,11 +2,6 @@
 /media/
 *.log
 
-# Nix build artifacts
-result
-result-*
-.direnv/
-
 # macOS
 .DS_Store
 
