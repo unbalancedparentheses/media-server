@@ -80,11 +80,11 @@ Indexers and usenet providers are also configured in `config.toml` — see the e
 ## Usage
 
 ```bash
-./setup.sh            # Full setup (idempotent, safe to re-run)
-./setup.sh --test     # Run verification checks only
-./update.sh           # Pull latest images and restart
-./backup.sh           # Backup all service configs
-./backup.sh --restore ~/media/backups/media-server_20240101_120000.tar.gz
+./setup.sh                      # Full setup (idempotent, safe to re-run)
+./setup.sh --test               # Run verification checks only
+./setup.sh --update             # Backup + pull latest images + restart
+./setup.sh --backup             # Backup all service configs
+./setup.sh --restore <file>     # Restore configs from backup
 ```
 
 ## Ports
