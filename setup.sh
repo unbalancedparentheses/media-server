@@ -277,10 +277,15 @@ else
     ok "Tailscale connected ($TS_IP)"
   fi
   if [ -n "$TS_HOSTNAME" ]; then
-    info "Configuring Tailscale HTTPS..."
-    "$TS_CLI" serve --bg --https=443 / proxy http://127.0.0.1:80 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
-    "$TS_CLI" serve --bg --https=8096 / proxy http://127.0.0.1:8096 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
-    "$TS_CLI" serve --bg --https=5055 / proxy http://127.0.0.1:5055 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
+    SERVE_STATUS=$("$TS_CLI" serve status 2>/dev/null || echo "")
+    if echo "$SERVE_STATUS" | grep -q "https.*443" && echo "$SERVE_STATUS" | grep -q "https.*8096" && echo "$SERVE_STATUS" | grep -q "https.*5055"; then
+      ok "Tailscale HTTPS already configured"
+    else
+      info "Configuring Tailscale HTTPS..."
+      "$TS_CLI" serve --bg --https=443 / proxy http://127.0.0.1:80 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
+      "$TS_CLI" serve --bg --https=8096 / proxy http://127.0.0.1:8096 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
+      "$TS_CLI" serve --bg --https=5055 / proxy http://127.0.0.1:5055 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
+    fi
   fi
 fi
 
@@ -1781,28 +1786,29 @@ echo ""
 # DONE
 # ═══════════════════════════════════════════════════════════════════
 echo ""
-echo "  ┌──────────────────────────────────────────────────────────┐"
-echo "  │                   Setup Complete!                        │"
-echo "  ├──────────────────────────────────────────────────────────┤"
-echo "  │                                                          │"
-echo "  │  Dashboard:    http://media.local                        │"
-echo "  │  Request:      http://jellyseerr.media.local             │"
-echo "  │  Watch:        http://jellyfin.media.local               │"
-echo "  │                                                          │"
-echo "  │  All services: http://media.local (links to everything)  │"
-echo "  │                                                          │"
+echo "  Setup Complete!"
+echo ""
+echo "  Local:"
+echo "    Dashboard:    http://media.local"
+echo "    Request:      http://jellyseerr.media.local"
+echo "    Watch:        http://jellyfin.media.local"
+echo "    All services: http://media.local"
+echo ""
 TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 TS_HOSTNAME=$("$TS_CLI" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
 if [ -n "$TS_HOSTNAME" ]; then
-echo "  │  Remote:      https://$TS_HOSTNAME:8096 (Jellyfin)$(printf '%*s' $((12 - ${#TS_HOSTNAME})) '')│"
-echo "  │               https://$TS_HOSTNAME:5055 (Jellyseerr)$(printf '%*s' $((9 - ${#TS_HOSTNAME})) '')│"
-echo "  │                                                          │"
-fi
-echo "  └──────────────────────────────────────────────────────────┘"
+echo "  Remote (HTTPS):"
+echo "    Jellyfin:     https://$TS_HOSTNAME:8096"
+echo "    Jellyseerr:   https://$TS_HOSTNAME:5055"
+echo "    Landing page: https://$TS_HOSTNAME"
 echo ""
+fi
 echo "  Quick start:"
 echo "    1. Go to http://jellyseerr.media.local"
 echo "    2. Search for a series or movie"
 echo "    3. Click Request"
 echo "    4. Watch at http://jellyfin.media.local"
+if [ -n "$TS_HOSTNAME" ]; then
+echo "    Remote? Use https://$TS_HOSTNAME:8096"
+fi
 echo ""
