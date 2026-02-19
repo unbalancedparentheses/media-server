@@ -18,6 +18,12 @@ services:
       - ~/media/anime:/media/anime
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8096/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # --- TV ---
   sonarr:
@@ -35,6 +41,19 @@ services:
       - ~/media/downloads:/downloads
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8989/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+      sabnzbd:
+        condition: service_healthy
 
   sonarr-anime:
     image: lscr.io/linuxserver/sonarr:latest
@@ -51,6 +70,19 @@ services:
       - ~/media/downloads:/downloads
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8989/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+      sabnzbd:
+        condition: service_healthy
 
   # --- Movies ---
   radarr:
@@ -68,6 +100,19 @@ services:
       - ~/media/downloads:/downloads
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7878/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+      sabnzbd:
+        condition: service_healthy
 
   # --- Indexers ---
   prowlarr:
@@ -83,6 +128,15 @@ services:
       - ~/media/config/prowlarr:/config
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9696/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      flaresolverr:
+        condition: service_healthy
 
   # --- Subtitles ---
   bazarr:
@@ -101,6 +155,12 @@ services:
       - ~/media/anime:/media/anime
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6767"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # --- Downloaders ---
   sabnzbd:
@@ -117,6 +177,12 @@ services:
       - ~/media/downloads:/downloads
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -135,6 +201,12 @@ services:
       - ~/media/downloads:/downloads
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # --- Request Management ---
   jellyseerr:
@@ -148,6 +220,21 @@ services:
       - ~/media/config/jellyseerr:/app/config
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5055/api/v1/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      jellyfin:
+        condition: service_healthy
+      sonarr:
+        condition: service_healthy
+      sonarr-anime:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
 
   # --- Cloudflare Bypass for Prowlarr (internal only) ---
   flaresolverr:
@@ -157,6 +244,12 @@ services:
       - TZ=${TZ:-America/New_York}
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8191/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # --- Quality Profile Sync (weekly) ---
   recyclarr:
@@ -169,6 +262,13 @@ services:
       - ~/media/config/recyclarr:/config
     logging: *logging
     restart: unless-stopped
+    depends_on:
+      sonarr:
+        condition: service_healthy
+      sonarr-anime:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
 
   # --- Dashboard ---
   organizr:
@@ -184,6 +284,12 @@ services:
       - ~/media/config/organizr:/config
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # --- Reverse Proxy + Landing Page ---
   nginx:
@@ -196,15 +302,31 @@ services:
       - ./landing.html:/usr/share/nginx/landing/index.html:ro
       - ~/media/config/nginx/api-proxy.conf:/etc/nginx/api-proxy.conf:ro
     depends_on:
-      - jellyfin
-      - sonarr
-      - sonarr-anime
-      - radarr
-      - prowlarr
-      - bazarr
-      - sabnzbd
-      - qbittorrent
-      - jellyseerr
-      - organizr
+      jellyfin:
+        condition: service_healthy
+      sonarr:
+        condition: service_healthy
+      sonarr-anime:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+      prowlarr:
+        condition: service_healthy
+      bazarr:
+        condition: service_healthy
+      sabnzbd:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+      jellyseerr:
+        condition: service_healthy
+      organizr:
+        condition: service_healthy
     logging: *logging
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
