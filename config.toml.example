@@ -108,6 +108,24 @@ definitionName = "NZBgeek"
 enable = false
 fields = { apiKey = "your-nzbgeek-api-key" }
 
+# ─── VPN (Gluetun — routes torrent traffic through VPN) ───────
+# Supports 30+ providers: Mullvad, ProtonVPN, NordVPN, Surfshark, etc.
+# See https://github.com/qdm12/gluetun-wiki for provider-specific config
+
+[vpn]
+enable = false
+provider = "mullvad"           # VPN provider name
+type = "wireguard"             # "wireguard" or "openvpn"
+wireguard_private_key = ""     # Your WireGuard private key
+wireguard_addresses = ""       # Your WireGuard address (e.g., "10.x.x.x/32")
+server_countries = ""          # Preferred server country (e.g., "Switzerland")
+
+# ─── YouTube Archive (TubeArchivist) ─────────────────────────
+
+[tubearchivist]
+username = "admin"
+password = "changeme"
+
 # ─── Usenet Providers (SABnzbd) ────────────────────────────────
 # Fill in your provider details and set enable = true.
 # Common providers:

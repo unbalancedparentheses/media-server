@@ -16,10 +16,14 @@ A fully automated media pipeline — request a movie or TV show, and it gets dow
 - **Sonarr Anime** — a second Sonarr instance dedicated to anime, with separate quality profiles and anime-specific indexers (Nyaa, SubsPlease, Mikan). Keeps anime organized separately from regular TV shows
 - **Radarr** — same as Sonarr but for movies. Monitors your movie wishlist, searches for releases, and imports them with proper naming and metadata
 - **Prowlarr** — centralized indexer manager. Instead of configuring indexers separately in Sonarr and Radarr, you add them once in Prowlarr and it syncs them everywhere. Supports both torrent indexers and usenet indexers
-- **Bazarr** — automatic subtitle downloader. Watches your libraries and fetches subtitles from OpenSubtitles and other providers. Configured for English and Spanish by default, but you can add any language
-- **qBittorrent** — torrent download client. Sonarr/Radarr send downloads here. Configured with seeding ratios and time limits from your config so torrents are cleaned up automatically
+- **Bazarr** — automatic subtitle downloader. Watches your libraries and fetches subtitles from OpenSubtitles and other providers. English subtitles are always downloaded; Spanish subtitles are fetched when available. You can customize languages in config.toml
+- **Gluetun** — lightweight VPN client container. Routes qBittorrent traffic through a VPN tunnel (Mullvad, ProtonVPN, NordVPN, etc.) so your ISP and torrent peers never see your real IP. Built-in kill switch prevents leaks if the VPN drops. Only download traffic goes through the VPN — Jellyfin, Sonarr, etc. use your normal connection. Optional — disabled by default
+- **qBittorrent** — torrent download client, routed through Gluetun VPN. Sonarr/Radarr send downloads here. Configured with seeding ratios and time limits from your config so torrents are cleaned up automatically
 - **SABnzbd** — usenet download client. If you have a usenet provider (Newshosting, Eweka, etc.), Sonarr/Radarr will use this for NZB downloads. Faster and more private than torrents, but requires a paid provider subscription
+- **Autobrr** — monitors IRC announce channels and RSS feeds for new releases on private trackers. Grabs releases within seconds of upload and pushes them to Sonarr/Radarr or directly to qBittorrent/SABnzbd. Essential for maintaining ratio on private trackers
 - **Recyclarr** — syncs quality profiles from TRaSH Guides (community-maintained best practices for Sonarr/Radarr). Runs weekly to keep your quality preferences, custom formats, and release scoring up to date
+- **TubeArchivist** — self-hosted YouTube media server. Subscribe to channels, download videos, and watch them with a clean web UI. Full-text search, metadata, thumbnails, and offline playback. Uses Elasticsearch for fast search
+- **Tdarr** — distributed transcode automation. Scans your media libraries and converts files to a target codec (e.g., H.264 to H.265/HEVC) to save 40-50% storage. Runs in the background with configurable worker limits. Includes health checking for corrupt files
 - **FlareSolverr** — a headless browser that solves Cloudflare challenges. Some torrent indexers (like 1337x) use Cloudflare protection — FlareSolverr lets Prowlarr access them without manual intervention
 - **Nginx** — reverse proxy that maps `.media.local` domains to each service (e.g., `jellyfin.media.local`). Also serves a landing page with links and live API widgets showing system status
 
@@ -137,6 +141,30 @@ connections = 20
 
 If you have a usenet provider subscription, fill in the connection details and set `enable = true`. SABnzbd will use this to download NZBs that Sonarr/Radarr find. Common providers include Newshosting, Eweka, Frugal Usenet, UsenetExpress, and Easynews — all use port 563 with SSL.
 
+### VPN
+
+```toml
+[vpn]
+enable = false
+provider = "mullvad"
+type = "wireguard"
+wireguard_private_key = ""
+wireguard_addresses = ""
+server_countries = "Switzerland"
+```
+
+Routes all torrent traffic through a VPN tunnel via [Gluetun](https://github.com/qdm12/gluetun). Supports 30+ providers (Mullvad, ProtonVPN, NordVPN, Surfshark, etc.). When enabled, qBittorrent's network is routed through Gluetun — your ISP and torrent peers never see your real IP. If the VPN drops, traffic stops entirely (kill switch). Set `enable = true` and fill in your provider credentials.
+
+### YouTube archive
+
+```toml
+[tubearchivist]
+username = "admin"
+password = "changeme"
+```
+
+Login credentials for TubeArchivist. Subscribe to YouTube channels and download videos for offline viewing with full-text search.
+
 ### Other
 
 ```toml
@@ -195,6 +223,9 @@ All services are accessible on localhost and via `.media.local` domains (added t
 | Bazarr | 6767 | http://bazarr.media.local |
 | qBittorrent | 8081 | http://qbittorrent.media.local |
 | SABnzbd | 8080 | http://sabnzbd.media.local |
+| TubeArchivist | 8000 | http://tubearchivist.media.local |
+| Tdarr | 8265 | http://tdarr.media.local |
+| Autobrr | 7474 | http://autobrr.media.local |
 | Homepage | 3002 | http://homepage.media.local |
 
 ## Directory structure
@@ -206,6 +237,8 @@ All media and configuration lives under `~/media/`:
 ├── movies/                     # Movie library (Radarr imports here)
 ├── tv/                         # TV show library (Sonarr imports here)
 ├── anime/                      # Anime library (Sonarr Anime imports here)
+├── youtube/                    # YouTube archive (TubeArchivist downloads here)
+├── transcode_cache/            # Tdarr transcoding working directory
 ├── downloads/
 │   ├── torrents/
 │   │   ├── complete/           # Finished torrent downloads (qBittorrent)

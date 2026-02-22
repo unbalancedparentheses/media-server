@@ -162,6 +162,38 @@ services:
       retries: 3
       start_period: 60s
 
+  # --- VPN (routes torrent traffic through VPN tunnel) ---
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TZ=${TZ:-America/New_York}
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER:-mullvad}
+      - VPN_TYPE=${VPN_TYPE:-wireguard}
+      # Provider-specific credentials — set in .env or config.toml
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
+      - SERVER_COUNTRIES=${VPN_SERVER_COUNTRIES:-}
+    ports:
+      # qBittorrent ports (routed through VPN)
+      - "127.0.0.1:8081:8081"
+      - "6881:6881"
+      - "6881:6881/udp"
+    volumes:
+      - ~/media/config/gluetun:/gluetun
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081 2>/dev/null || curl -fsS http://localhost:8081 >/dev/null 2>&1 || wget -q --spider https://1.1.1.1 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # --- Downloaders ---
   sabnzbd:
     image: lscr.io/linuxserver/sabnzbd:latest
@@ -187,15 +219,13 @@ services:
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
+    network_mode: "service:gluetun"
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
       - WEBUI_PORT=8081
-    ports:
-      - "8081:8081"
-      - "6881:6881"
-      - "6881:6881/udp"
+    # Ports are exposed via gluetun container (VPN tunnel)
     volumes:
       - ~/media/config/qbittorrent:/config
       - ~/media/downloads:/downloads
@@ -207,6 +237,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    depends_on:
+      gluetun:
+        condition: service_healthy
 
   # --- Request Management ---
   jellyseerr:
@@ -351,6 +384,34 @@ services:
       retries: 3
       start_period: 30s
 
+  # --- Download Automation (IRC/RSS for private trackers) ---
+  autobrr:
+    image: ghcr.io/autobrr/autobrr:latest
+    container_name: autobrr
+    user: "${PUID:-501}:${PGID:-20}"
+    environment:
+      - TZ=${TZ:-America/New_York}
+      - AUTOBRR__HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:7474:7474"
+    volumes:
+      - ~/media/config/autobrr:/config
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474/api/healthz/liveness || curl -fsS http://localhost:7474/api/healthz/liveness >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      prowlarr:
+        condition: service_started
+      qbittorrent:
+        condition: service_started
+      sabnzbd:
+        condition: service_started
+
   # --- Download Extraction ---
   unpackerr:
     image: golift/unpackerr:latest
@@ -371,6 +432,113 @@ services:
         condition: service_healthy
       lidarr:
         condition: service_healthy
+
+  # --- YouTube Archiving ---
+  tubearchivist:
+    image: bbilly1/tubearchivist:latest
+    container_name: tubearchivist
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - TZ=${TZ:-America/New_York}
+      - ES_URL=http://archivist-es:9200
+      - REDIS_CON=redis://archivist-redis:6379
+      - HOST_UID=${PUID:-501}
+      - HOST_GID=${PGID:-20}
+      - TA_HOST=http://tubearchivist.media.local
+      - TA_USERNAME=${TA_USERNAME:-admin}
+      - TA_PASSWORD=${TA_PASSWORD:-changeme}
+      - ELASTIC_PASSWORD=${TA_ELASTIC_PASSWORD:-changeme}
+    volumes:
+      - ~/media/youtube:/youtube
+      - ~/media/config/tubearchivist/cache:/cache
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8000/api/ping || curl -fsS http://localhost:8000/api/ping >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      archivist-es:
+        condition: service_healthy
+      archivist-redis:
+        condition: service_healthy
+
+  archivist-es:
+    image: elasticsearch:8.17.0
+    container_name: archivist-es
+    environment:
+      - ELASTIC_PASSWORD=${TA_ELASTIC_PASSWORD:-changeme}
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=true
+      - discovery.type=single-node
+      - path.repo=/usr/share/elasticsearch/data/snapshot
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ~/media/config/archivist-es:/usr/share/elasticsearch/data
+    logging: *logging
+    restart: unless-stopped
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -u elastic:${TA_ELASTIC_PASSWORD:-changeme} http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  archivist-redis:
+    image: redis:7-alpine
+    container_name: archivist-redis
+    volumes:
+      - ~/media/config/archivist-redis:/data
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # --- Transcoding Automation ---
+  tdarr:
+    image: ghcr.io/haveagitgat/tdarr:latest
+    container_name: tdarr
+    environment:
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
+      - serverIP=0.0.0.0
+      - serverPort=8266
+      - webUIPort=8265
+      - internalNode=true
+      - inContainer=true
+      - ffmpegVersion=7
+      - nodeName=InternalNode
+    ports:
+      - "127.0.0.1:8265:8265"
+      - "127.0.0.1:8266:8266"
+    volumes:
+      - ~/media/config/tdarr/server:/app/server
+      - ~/media/config/tdarr/configs:/app/configs
+      - ~/media/config/tdarr/logs:/app/logs
+      - ~/media/movies:/media/movies
+      - ~/media/tv:/media/tv
+      - ~/media/anime:/media/anime
+      - ~/media/transcode_cache:/temp
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8265 || curl -fsS http://localhost:8265 >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # --- Photos ---
   immich:

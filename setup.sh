@@ -204,6 +204,9 @@ if [ "$MODE" = "test" ]; then
   NAVIDROME_URL="http://localhost:4533"
   KAVITA_URL="http://localhost:5001"
   IMMICH_URL="http://localhost:2283"
+  TUBEARCHIVIST_URL="http://localhost:8000"
+  TDARR_URL="http://localhost:8265"
+  AUTOBRR_URL="http://localhost:7474"
   SCRUTINY_URL="http://localhost:9091"
   GITEA_URL="http://localhost:3000"
   UPTIME_KUMA_URL="http://localhost:3001"
@@ -310,7 +313,8 @@ mkdir -p "$MEDIA_DIR"/{movies,tv,anime,music,books,photos}
 mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
-mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
+mkdir -p "$MEDIA_DIR"/{youtube,transcode_cache}
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,autobrr,gluetun,tubearchivist/cache,archivist-es,archivist-redis,tdarr/server,tdarr/configs,tdarr/logs,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
@@ -346,11 +350,38 @@ else
   IMMICH_DB_PASS=$(openssl rand -hex 16)
 fi
 
+# VPN settings (optional)
+VPN_ENABLE=$(cfg '.vpn.enable // false')
+VPN_PROVIDER=$(cfg '.vpn.provider // "mullvad"')
+VPN_TYPE=$(cfg '.vpn.type // "wireguard"')
+VPN_WG_KEY=$(cfg '.vpn.wireguard_private_key // ""')
+VPN_WG_ADDR=$(cfg '.vpn.wireguard_addresses // ""')
+VPN_COUNTRIES=$(cfg '.vpn.server_countries // ""')
+
+# TubeArchivist settings
+TA_USER=$(cfg '.tubearchivist.username // "admin"')
+TA_PASS=$(cfg '.tubearchivist.password // "changeme"')
+
+# Generate a stable TubeArchivist ES password (reuse existing if present)
+if [ -f "$SCRIPT_DIR/.env" ] && grep -q "^TA_ELASTIC_PASSWORD=" "$SCRIPT_DIR/.env" 2>/dev/null; then
+  TA_ES_PASS=$(sed -n 's/^TA_ELASTIC_PASSWORD=//p' "$SCRIPT_DIR/.env")
+else
+  TA_ES_PASS=$(openssl rand -hex 16)
+fi
+
 cat > "$SCRIPT_DIR/.env" << EOF
 PUID=$(id -u)
 PGID=$(id -g)
 TZ=$TZ_VALUE
 IMMICH_DB_PASSWORD=$IMMICH_DB_PASS
+VPN_SERVICE_PROVIDER=$VPN_PROVIDER
+VPN_TYPE=$VPN_TYPE
+WIREGUARD_PRIVATE_KEY=$VPN_WG_KEY
+WIREGUARD_ADDRESSES=$VPN_WG_ADDR
+VPN_SERVER_COUNTRIES=$VPN_COUNTRIES
+TA_USERNAME=$TA_USER
+TA_PASSWORD=$TA_PASS
+TA_ELASTIC_PASSWORD=$TA_ES_PASS
 EOF
 ok ".env (PUID=$(id -u), PGID=$(id -g), TZ=$TZ_VALUE)"
 
@@ -365,7 +396,7 @@ ok "All containers started"
 # ═══════════════════════════════════════════════════════════════════
 info "Checking /etc/hosts..."
 
-DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local tubearchivist.media.local tdarr.media.local autobrr.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
 
 if grep -q "media.local" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
@@ -415,6 +446,9 @@ LAZYLIBRARIAN_URL="http://localhost:5299"
 NAVIDROME_URL="http://localhost:4533"
 KAVITA_URL="http://localhost:5001"
 IMMICH_URL="http://localhost:2283"
+TUBEARCHIVIST_URL="http://localhost:8000"
+TDARR_URL="http://localhost:8265"
+AUTOBRR_URL="http://localhost:7474"
 SCRUTINY_URL="http://localhost:9091"
 GITEA_URL="http://localhost:3000"
 UPTIME_KUMA_URL="http://localhost:3001"
@@ -443,6 +477,9 @@ wait_for "Lidarr"       "$LIDARR_URL/ping"
 wait_for "LazyLibrarian" "$LAZYLIBRARIAN_URL"
 wait_for "Navidrome"    "$NAVIDROME_URL/ping"
 wait_for "Kavita"       "$KAVITA_URL"
+wait_for "Autobrr"      "$AUTOBRR_URL/api/healthz/liveness"
+wait_for "TubeArchivist" "$TUBEARCHIVIST_URL/api/ping"
+wait_for "Tdarr"        "$TDARR_URL"
 wait_for "Immich"       "$IMMICH_URL/api/server/ping"
 wait_for "Gitea"        "$GITEA_URL/api/v1/version"
 wait_for "Uptime Kuma"  "$UPTIME_KUMA_URL"
@@ -1775,6 +1812,9 @@ for svc_url in \
   "Navidrome:$NAVIDROME_URL/ping" \
   "Kavita:$KAVITA_URL" \
   "Immich:$IMMICH_URL/api/server/ping" \
+  "TubeArchivist:$TUBEARCHIVIST_URL/api/ping" \
+  "Tdarr:$TDARR_URL" \
+  "Autobrr:$AUTOBRR_URL/api/healthz/liveness" \
   "Scrutiny:$SCRUTINY_URL/api/health" \
   "Gitea:$GITEA_URL/api/v1/version" \
   "Uptime Kuma:$UPTIME_KUMA_URL" \
@@ -1996,7 +2036,7 @@ check "Proxy → SABnzbd queue" "$(curl -sf 'http://localhost/api/sabnzbd/?mode=
 # --- 13. Docker containers ---
 info "Docker containers..."
 
-for container in jellyfin sonarr sonarr-anime radarr lidarr lazylibrarian prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
+for container in jellyfin sonarr sonarr-anime radarr lidarr lazylibrarian prowlarr bazarr sabnzbd gluetun qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr autobrr tubearchivist archivist-es archivist-redis tdarr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
   STATUS=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "missing")
   check "Container: $container" "$([ "$STATUS" = "running" ] && echo true || echo false)"
 done
