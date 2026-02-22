@@ -188,6 +188,8 @@ if [ "$MODE" = "test" ]; then
   SONARR_KEY=$(get_api_key "sonarr")
   SONARR_ANIME_KEY=$(get_api_key "sonarr-anime")
   RADARR_KEY=$(get_api_key "radarr")
+  LIDARR_KEY=$(get_api_key "lidarr")
+  READARR_KEY=$(get_api_key "readarr")
   PROWLARR_KEY=$(get_api_key "prowlarr")
   SABNZBD_KEY=""
   [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ] && SABNZBD_KEY=$(sed -n 's/^api_key = *//p' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null || echo "")
@@ -197,6 +199,13 @@ if [ "$MODE" = "test" ]; then
   for p in "$CONFIG_DIR/organizr/www/organizr/data/config/config.php"; do
     [ -f "$p" ] && ORGANIZR_API_KEY=$(sed -n "s/.*'organizrAPI' => '\([^']*\)'.*/\1/p" "$p" 2>/dev/null || echo "")
   done
+
+  LIDARR_URL="http://localhost:8686"
+  READARR_URL="http://localhost:8787"
+  NAVIDROME_URL="http://localhost:4533"
+  KAVITA_URL="http://localhost:5000"
+  IMMICH_URL="http://localhost:2283"
+  SCRUTINY_URL="http://localhost:9091"
 fi
 
 if [ "$MODE" = "setup" ]; then
@@ -294,11 +303,11 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 info "Creating directory structure..."
 
-mkdir -p "$MEDIA_DIR"/{movies,tv,anime}
+mkdir -p "$MEDIA_DIR"/{movies,tv,anime,music,books,photos}
 mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
-mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,organizr}/logs
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,organizr,lidarr,readarr,navidrome,kavita,unpackerr,immich-ml,immich-postgres,scrutiny}/logs
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
@@ -344,7 +353,7 @@ ok "All containers started"
 # ═══════════════════════════════════════════════════════════════════
 info "Checking /etc/hosts..."
 
-DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local organizr.media.local"
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local organizr.media.local lidarr.media.local readarr.media.local navidrome.media.local kavita.media.local immich.media.local scrutiny.media.local"
 
 if grep -q "media.local" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
@@ -394,10 +403,19 @@ SABNZBD_URL="http://localhost:8080"
 JELLYSEERR_URL="http://localhost:5055"
 ORGANIZR_URL="http://localhost:9090"
 
+LIDARR_URL="http://localhost:8686"
+READARR_URL="http://localhost:8787"
+NAVIDROME_URL="http://localhost:4533"
+KAVITA_URL="http://localhost:5000"
+IMMICH_URL="http://localhost:2283"
+SCRUTINY_URL="http://localhost:9091"
+
 SONARR_INTERNAL="http://sonarr:8989"
 SONARR_ANIME_INTERNAL="http://sonarr-anime:8989"
 RADARR_INTERNAL="http://radarr:7878"
 PROWLARR_INTERNAL="http://prowlarr:9696"
+LIDARR_INTERNAL="http://lidarr:8686"
+READARR_INTERNAL="http://readarr:8787"
 
 # ═══════════════════════════════════════════════════════════════════
 # 6. WAIT FOR SERVICES
@@ -413,6 +431,11 @@ wait_for "SABnzbd"      "$SABNZBD_URL"
 wait_for "qBittorrent"  "$QBIT_URL"
 wait_for "Jellyseerr"   "$JELLYSEERR_URL"
 wait_for "Organizr"     "$ORGANIZR_URL"
+wait_for "Lidarr"       "$LIDARR_URL/ping"
+wait_for "Readarr"      "$READARR_URL/ping"
+wait_for "Navidrome"    "$NAVIDROME_URL/ping"
+wait_for "Kavita"       "$KAVITA_URL"
+wait_for "Immich"       "$IMMICH_URL/api/server/ping"
 
 # ═══════════════════════════════════════════════════════════════════
 # 7. API KEYS
@@ -422,6 +445,8 @@ info "Reading API keys..."
 SONARR_KEY=$(get_api_key "sonarr")
 SONARR_ANIME_KEY=$(get_api_key "sonarr-anime")
 RADARR_KEY=$(get_api_key "radarr")
+LIDARR_KEY=$(get_api_key "lidarr")
+READARR_KEY=$(get_api_key "readarr")
 PROWLARR_KEY=$(get_api_key "prowlarr")
 SABNZBD_KEY=""
 if [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ]; then
@@ -445,6 +470,8 @@ JELLYSEERR_KEY=""
 [ -n "$SONARR_KEY" ]       && ok "Sonarr:       $SONARR_KEY"       || err "Sonarr key not found"
 [ -n "$SONARR_ANIME_KEY" ] && ok "Sonarr Anime: $SONARR_ANIME_KEY" || err "Sonarr Anime key not found"
 [ -n "$RADARR_KEY" ]       && ok "Radarr:       $RADARR_KEY"       || err "Radarr key not found"
+[ -n "$LIDARR_KEY" ]       && ok "Lidarr:       $LIDARR_KEY"       || err "Lidarr key not found"
+[ -n "$READARR_KEY" ]      && ok "Readarr:      $READARR_KEY"      || err "Readarr key not found"
 [ -n "$PROWLARR_KEY" ]     && ok "Prowlarr:     $PROWLARR_KEY"     || err "Prowlarr key not found"
 [ -n "$SABNZBD_KEY" ]      && ok "SABnzbd:      $SABNZBD_KEY"      || warn "SABnzbd key not found"
 [ -n "$JELLYSEERR_KEY" ]   && ok "Jellyseerr:   ${JELLYSEERR_KEY:0:8}..."  || warn "Jellyseerr key not found (will read after setup)"
@@ -1299,6 +1326,64 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
+# 16.5 UNPACKERR
+# ═══════════════════════════════════════════════════════════════════
+info "Writing Unpackerr config..."
+
+UNPACKERR_CONF="$CONFIG_DIR/unpackerr/unpackerr.conf"
+mkdir -p "$(dirname "$UNPACKERR_CONF")"
+
+cat > "$UNPACKERR_CONF" << UNPACKEOF
+## Unpackerr — auto-generated by setup.sh
+
+[[sonarr]]
+url = "http://sonarr:8989"
+api_key = "$SONARR_KEY"
+paths = ["/downloads"]
+
+[[sonarr]]
+url = "http://sonarr-anime:8989"
+api_key = "$SONARR_ANIME_KEY"
+paths = ["/downloads"]
+
+[[radarr]]
+url = "http://radarr:7878"
+api_key = "$RADARR_KEY"
+paths = ["/downloads"]
+
+[[lidarr]]
+url = "http://lidarr:8686"
+api_key = "$LIDARR_KEY"
+paths = ["/downloads"]
+
+[[readarr]]
+url = "http://readarr:8787"
+api_key = "$READARR_KEY"
+paths = ["/downloads"]
+UNPACKEOF
+
+ok "Config written"
+docker restart unpackerr >/dev/null 2>&1 && ok "Unpackerr restarted with new config" || true
+
+# ═══════════════════════════════════════════════════════════════════
+# 16.6 LIDARR & READARR — configure download clients and root folders
+# ═══════════════════════════════════════════════════════════════════
+info "Configuring Lidarr..."
+[ -n "$LIDARR_KEY" ] && configure_arr "lidarr" "$LIDARR_URL" "$LIDARR_KEY" "/media/music" "musicCategory"
+
+info "Configuring Readarr..."
+[ -n "$READARR_KEY" ] && configure_arr "readarr" "$READARR_URL" "$READARR_KEY" "/media/books" "bookCategory"
+
+# Add Lidarr and Readarr to Prowlarr
+if [ -n "$PROWLARR_KEY" ]; then
+  PH="X-Api-Key: $PROWLARR_KEY"
+  MUSIC_CATS='[3000,3010,3020,3030,3040,3050,3060]'
+  BOOKS_CATS='[7000,7010,7020,7030,7040,7050,7060]'
+  [ -n "$LIDARR_KEY" ]  && add_prowlarr_app "Lidarr"  "Lidarr"  "$LIDARR_INTERNAL"  "$LIDARR_KEY"  "$MUSIC_CATS"
+  [ -n "$READARR_KEY" ] && add_prowlarr_app "Readarr" "Readarr" "$READARR_INTERNAL" "$READARR_KEY" "$BOOKS_CATS"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
 # 17. ORGANIZR — dashboard with tabs for all services
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring Organizr..."
@@ -1401,6 +1486,12 @@ if [ -n "$ORGANIZR_API_KEY" ]; then
   add_organizr_tab "Bazarr"        "http://localhost:6767"  "plugins/images/tabs/bazarr.png"       7
   add_organizr_tab "qBittorrent"   "http://localhost:8081"  "plugins/images/tabs/qbittorrent.png"  8
   add_organizr_tab "SABnzbd"       "http://localhost:8080"  "plugins/images/tabs/sabnzbd.png"      9
+  add_organizr_tab "Lidarr"        "http://localhost:8686"  "plugins/images/tabs/lidarr.png"       10
+  add_organizr_tab "Navidrome"     "http://localhost:4533"  "plugins/images/tabs/navidrome.png"    11
+  add_organizr_tab "Readarr"       "http://localhost:8787"  "plugins/images/tabs/readarr.png"      12
+  add_organizr_tab "Kavita"        "http://localhost:5000"  "plugins/images/tabs/kavita.png"       13
+  add_organizr_tab "Immich"        "http://localhost:2283"  "plugins/images/tabs/immich.png"       14
+  add_organizr_tab "Scrutiny"      "http://localhost:9091"  "plugins/images/tabs/scrutiny.png"     15
 else
   warn "No API key — complete Organizr setup manually at $ORGANIZR_URL"
 fi
@@ -1506,7 +1597,13 @@ for svc_url in \
   "SABnzbd:$SABNZBD_URL" \
   "qBittorrent:$QBIT_URL" \
   "Jellyseerr:$JELLYSEERR_URL" \
-  "Organizr:$ORGANIZR_URL"; do
+  "Organizr:$ORGANIZR_URL" \
+  "Lidarr:$LIDARR_URL/ping" \
+  "Readarr:$READARR_URL/ping" \
+  "Navidrome:$NAVIDROME_URL/ping" \
+  "Kavita:$KAVITA_URL" \
+  "Immich:$IMMICH_URL/api/server/ping" \
+  "Scrutiny:$SCRUTINY_URL/api/health"; do
   name="${svc_url%%:*}"
   url="${svc_url#*:}"
   HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || echo "000")
@@ -1735,7 +1832,7 @@ check "Proxy → SABnzbd queue" "$(curl -sf 'http://localhost/api/sabnzbd/?mode=
 # --- 13. Docker containers ---
 info "Docker containers..."
 
-for container in jellyfin sonarr sonarr-anime radarr prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr organizr media-nginx recyclarr; do
+for container in jellyfin sonarr sonarr-anime radarr lidarr readarr prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr organizr media-nginx recyclarr unpackerr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny; do
   STATUS=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "missing")
   check "Container: $container" "$([ "$STATUS" = "running" ] && echo true || echo false)"
 done

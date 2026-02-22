@@ -251,6 +251,219 @@ services:
       retries: 3
       start_period: 60s
 
+  # --- Music ---
+  lidarr:
+    image: lscr.io/linuxserver/lidarr:latest
+    container_name: lidarr
+    environment:
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
+    ports:
+      - "8686:8686"
+    volumes:
+      - ~/media/config/lidarr:/config
+      - ~/media/music:/media/music
+      - ~/media/downloads:/downloads
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8686/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+      sabnzbd:
+        condition: service_healthy
+
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    environment:
+      - ND_SCANSCHEDULE=1m
+      - ND_LOGLEVEL=info
+      - ND_MUSICFOLDER=/music
+    ports:
+      - "4533:4533"
+    volumes:
+      - ~/media/config/navidrome:/data
+      - ~/media/music:/music:ro
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4533/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # --- Books ---
+  readarr:
+    image: lscr.io/linuxserver/readarr:develop
+    container_name: readarr
+    environment:
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
+    ports:
+      - "8787:8787"
+    volumes:
+      - ~/media/config/readarr:/config
+      - ~/media/books:/media/books
+      - ~/media/downloads:/downloads
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      prowlarr:
+        condition: service_healthy
+      qbittorrent:
+        condition: service_healthy
+      sabnzbd:
+        condition: service_healthy
+
+  kavita:
+    image: jvmilazz0/kavita:latest
+    container_name: kavita
+    ports:
+      - "5000:5000"
+    volumes:
+      - ~/media/config/kavita:/kavita/config
+      - ~/media/books:/media/books:ro
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # --- Download Extraction ---
+  unpackerr:
+    image: golift/unpackerr:latest
+    container_name: unpackerr
+    environment:
+      - TZ=${TZ:-America/New_York}
+    volumes:
+      - ~/media/config/unpackerr:/etc/unpackerr
+      - ~/media/downloads:/downloads
+    logging: *logging
+    restart: unless-stopped
+    depends_on:
+      sonarr:
+        condition: service_healthy
+      sonarr-anime:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+      lidarr:
+        condition: service_healthy
+      readarr:
+        condition: service_healthy
+
+  # --- Photos ---
+  immich:
+    image: ghcr.io/immich-app/immich-server:release
+    container_name: immich
+    ports:
+      - "2283:2283"
+    environment:
+      - TZ=${TZ:-America/New_York}
+      - DB_HOSTNAME=immich-postgres
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=postgres
+      - DB_DATABASE_NAME=immich
+      - REDIS_HOSTNAME=immich-redis
+    volumes:
+      - ~/media/photos:/usr/src/app/upload
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2283/api/server/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      immich-redis:
+        condition: service_healthy
+      immich-postgres:
+        condition: service_healthy
+
+  immich-machine-learning:
+    image: ghcr.io/immich-app/immich-machine-learning:release
+    container_name: immich-machine-learning
+    volumes:
+      - ~/media/config/immich-ml:/cache
+    logging: *logging
+    restart: unless-stopped
+
+  immich-redis:
+    image: redis:6.2-alpine
+    container_name: immich-redis
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  immich-postgres:
+    image: tensorchord/pgvecto-rs:pg14-v0.2.0
+    container_name: immich-postgres
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=immich
+      - POSTGRES_INITDB_ARGS=--data-checksums
+    volumes:
+      - ~/media/config/immich-postgres:/var/lib/postgresql/data
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d immich"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # --- Disk Health ---
+  scrutiny:
+    image: ghcr.io/analogj/scrutiny:master-omnibus
+    container_name: scrutiny
+    cap_add:
+      - SYS_RAWIO
+    ports:
+      - "9091:8080"
+    volumes:
+      - ~/media/config/scrutiny:/opt/scrutiny/config
+      - /run/udev:/run/udev:ro
+    # Add your disk devices below, e.g.:
+    # devices:
+    #   - /dev/sda
+    #   - /dev/sdb
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # --- Quality Profile Sync (weekly) ---
   recyclarr:
     image: recyclarr/recyclarr:latest
@@ -321,6 +534,16 @@ services:
       jellyseerr:
         condition: service_healthy
       organizr:
+        condition: service_healthy
+      lidarr:
+        condition: service_healthy
+      readarr:
+        condition: service_healthy
+      navidrome:
+        condition: service_healthy
+      kavita:
+        condition: service_healthy
+      immich:
         condition: service_healthy
     logging: *logging
     restart: unless-stopped
