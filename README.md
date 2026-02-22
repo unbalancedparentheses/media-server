@@ -1,6 +1,6 @@
 # media-server
 
-One-command self-hosted media server. 35+ Docker containers, fully automated, pre-wired, and verified. Request a movie and it's downloaded, organized, subtitled, and ready to watch.
+One-command self-hosted media server. 40+ Docker containers, fully automated, pre-wired, and verified. Request a movie and it's downloaded, organized, subtitled, and ready to watch.
 
 ```
 bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)

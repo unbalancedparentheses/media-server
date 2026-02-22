@@ -769,7 +769,7 @@ services:
     image: ghcr.io/open-webui/open-webui:main
     container_name: open-webui
     ports:
-      - "127.0.0.1:3100:8080"
+      - "3100:8080"
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
     volumes:
@@ -804,7 +804,7 @@ services:
     image: amir20/dozzle:latest
     container_name: dozzle
     ports:
-      - "127.0.0.1:9999:8080"
+      - "9999:8080"
     environment:
       - DOZZLE_ENABLE_ACTIONS=true
     volumes:
@@ -845,7 +845,7 @@ services:
     image: henrygd/beszel:latest
     container_name: beszel
     ports:
-      - "127.0.0.1:8090:8090"
+      - "8090:8090"
     volumes:
       - ~/media/config/beszel:/beszel_data
     extra_hosts:

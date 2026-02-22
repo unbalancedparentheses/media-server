@@ -126,6 +126,13 @@ server_countries = ""          # Preferred server country (e.g., "Switzerland")
 username = "admin"
 password = "changeme"
 
+# ─── System Monitoring (Beszel) ────────────────────────────────
+# After starting Beszel hub (http://localhost:8090), create an account,
+# click "Add System", and paste the generated key below.
+
+[beszel]
+agent_key = ""
+
 # ─── Usenet Providers (SABnzbd) ────────────────────────────────
 # Fill in your provider details and set enable = true.
 # Common providers:
