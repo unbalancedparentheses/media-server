@@ -49,11 +49,11 @@ services:
       start_period: 60s
     depends_on:
       prowlarr:
-        condition: service_healthy
+        condition: service_started
       qbittorrent:
-        condition: service_healthy
+        condition: service_started
       sabnzbd:
-        condition: service_healthy
+        condition: service_started
 
   sonarr-anime:
     image: lscr.io/linuxserver/sonarr:latest
@@ -78,11 +78,11 @@ services:
       start_period: 60s
     depends_on:
       prowlarr:
-        condition: service_healthy
+        condition: service_started
       qbittorrent:
-        condition: service_healthy
+        condition: service_started
       sabnzbd:
-        condition: service_healthy
+        condition: service_started
 
   # --- Movies ---
   radarr:
@@ -108,11 +108,11 @@ services:
       start_period: 60s
     depends_on:
       prowlarr:
-        condition: service_healthy
+        condition: service_started
       qbittorrent:
-        condition: service_healthy
+        condition: service_started
       sabnzbd:
-        condition: service_healthy
+        condition: service_started
 
   # --- Indexers ---
   prowlarr:
@@ -136,7 +136,7 @@ services:
       start_period: 60s
     depends_on:
       flaresolverr:
-        condition: service_healthy
+        condition: service_started
 
   # --- Subtitles ---
   bazarr:
@@ -228,13 +228,13 @@ services:
       start_period: 60s
     depends_on:
       jellyfin:
-        condition: service_healthy
+        condition: service_started
       sonarr:
-        condition: service_healthy
+        condition: service_started
       sonarr-anime:
-        condition: service_healthy
+        condition: service_started
       radarr:
-        condition: service_healthy
+        condition: service_started
 
   # --- Cloudflare Bypass for Prowlarr (internal only) ---
   flaresolverr:
@@ -244,8 +244,12 @@ services:
       - TZ=${TZ:-America/New_York}
     logging: *logging
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8191/health')"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8191/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -275,17 +279,17 @@ services:
       start_period: 60s
     depends_on:
       prowlarr:
-        condition: service_healthy
+        condition: service_started
       qbittorrent:
-        condition: service_healthy
+        condition: service_started
       sabnzbd:
-        condition: service_healthy
+        condition: service_started
 
   navidrome:
     image: deluan/navidrome:latest
     container_name: navidrome
     environment:
-      - ND_SCANSCHEDULE=1m
+      - ND_SCANSCHEDULE=15m
       - ND_LOGLEVEL=info
       - ND_MUSICFOLDER=/music
     ports:
@@ -326,11 +330,11 @@ services:
       start_period: 60s
     depends_on:
       prowlarr:
-        condition: service_healthy
+        condition: service_started
       qbittorrent:
-        condition: service_healthy
+        condition: service_started
       sabnzbd:
-        condition: service_healthy
+        condition: service_started
 
   kavita:
     image: jvmilazz0/kavita:latest
@@ -382,7 +386,7 @@ services:
       - TZ=${TZ:-America/New_York}
       - DB_HOSTNAME=immich-postgres
       - DB_USERNAME=postgres
-      - DB_PASSWORD=${IMMICH_DB_PASSWORD:-changeme}
+      - DB_PASSWORD=${IMMICH_DB_PASSWORD}
       - DB_DATABASE_NAME=immich
       - REDIS_HOSTNAME=immich-redis
     volumes:
@@ -435,7 +439,7 @@ services:
     image: tensorchord/pgvecto-rs:pg14-v0.2.0
     container_name: immich-postgres
     environment:
-      - POSTGRES_PASSWORD=${IMMICH_DB_PASSWORD:-changeme}
+      - POSTGRES_PASSWORD=${IMMICH_DB_PASSWORD}
       - POSTGRES_USER=postgres
       - POSTGRES_DB=immich
       - POSTGRES_INITDB_ARGS=--data-checksums
@@ -443,6 +447,7 @@ services:
       - ~/media/config/immich-postgres:/var/lib/postgresql/data
     logging: *logging
     restart: unless-stopped
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d immich"]
       interval: 30s
@@ -564,35 +569,6 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./landing.html:/usr/share/nginx/landing/index.html:ro
       - ~/media/config/nginx/api-proxy.conf:/etc/nginx/api-proxy.conf:ro
-    depends_on:
-      jellyfin:
-        condition: service_healthy
-      sonarr:
-        condition: service_healthy
-      sonarr-anime:
-        condition: service_healthy
-      radarr:
-        condition: service_healthy
-      prowlarr:
-        condition: service_healthy
-      bazarr:
-        condition: service_healthy
-      sabnzbd:
-        condition: service_healthy
-      qbittorrent:
-        condition: service_healthy
-      jellyseerr:
-        condition: service_healthy
-      lidarr:
-        condition: service_healthy
-      readarr:
-        condition: service_healthy
-      navidrome:
-        condition: service_healthy
-      kavita:
-        condition: service_healthy
-      immich:
-        condition: service_healthy
     logging: *logging
     restart: unless-stopped
     healthcheck:
