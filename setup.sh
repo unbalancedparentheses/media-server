@@ -65,6 +65,15 @@ esac
 BACKUP_DIR="$MEDIA_DIR/backups"
 MAX_BACKUPS=10
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
+OVERRIDE_FILE="$SCRIPT_DIR/docker-compose.override.yml"
+# Helper: docker compose with both base and override files
+dc() {
+  if [ -f "$OVERRIDE_FILE" ]; then
+    docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE_FILE" "$@"
+  else
+    docker compose -f "$COMPOSE_FILE" "$@"
+  fi
+}
 
 # ─── Backup function ────────────────────────────────────────────
 do_backup() {
@@ -120,14 +129,14 @@ do_restore() {
   [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "  Aborted."; exit 0; }
 
   info "Stopping containers..."
-  docker compose -f "$COMPOSE_FILE" down 2>/dev/null || true
+  dc down 2>/dev/null || true
 
   info "Extracting backup..."
   tar xzf "$RESTORE_FILE" -C "$MEDIA_DIR"
   ok "Configs restored"
 
   info "Starting containers..."
-  docker compose -f "$COMPOSE_FILE" up -d
+  dc up -d
   ok "All containers started"
 
   echo ""
@@ -144,13 +153,13 @@ do_update() {
   do_backup
 
   info "Pulling latest images..."
-  docker compose -f "$COMPOSE_FILE" pull
+  dc pull
 
   info "Restarting containers with new images..."
-  docker compose -f "$COMPOSE_FILE" up -d
+  dc up -d
 
   info "Current image versions..."
-  docker compose -f "$COMPOSE_FILE" images --format "table {{.Service}}\t{{.Tag}}\t{{.Size}}"
+  dc images --format "table {{.Service}}\t{{.Tag}}\t{{.Size}}"
 
   local old_images
   old_images=$(docker images --filter "dangling=true" -q 2>/dev/null | wc -l | tr -d ' ')
@@ -413,8 +422,7 @@ ok ".env (PUID=$(id -u), PGID=$(id -g), TZ=$TZ_VALUE)"
 # Generate docker-compose.override.yml for qBittorrent VPN routing
 info "Generating docker-compose.override.yml..."
 if [ "$VPN_ENABLE" = "true" ]; then
-  cat > "$SCRIPT_DIR/docker-compose.override.yml" << 'OVEOF'
-services:
+  OVERRIDE_CONTENT='services:
   gluetun:
     ports:
       - "8081:8081"
@@ -422,18 +430,20 @@ services:
     network_mode: "service:gluetun"
     depends_on:
       gluetun:
-        condition: service_healthy
-OVEOF
-  ok "VPN enabled: qBittorrent routed through gluetun"
+        condition: service_healthy'
+  OVERRIDE_MSG="VPN enabled: qBittorrent routed through gluetun"
 else
-  cat > "$SCRIPT_DIR/docker-compose.override.yml" << 'OVEOF'
-services:
+  OVERRIDE_CONTENT='services:
   qbittorrent:
     ports:
-      - "8081:8081"
-OVEOF
-  ok "VPN disabled: qBittorrent ports exposed directly"
+      - "8081:8081"'
+  OVERRIDE_MSG="VPN disabled: qBittorrent ports exposed directly"
 fi
+# Only write if content changed (avoids unnecessary container recreation)
+if [ ! -f "$SCRIPT_DIR/docker-compose.override.yml" ] || [ "$(cat "$SCRIPT_DIR/docker-compose.override.yml")" != "$OVERRIDE_CONTENT" ]; then
+  printf '%s\n' "$OVERRIDE_CONTENT" > "$SCRIPT_DIR/docker-compose.override.yml"
+fi
+ok "$OVERRIDE_MSG"
 
 # Generate CrowdSec acquisition config for nginx logs
 info "Generating CrowdSec acquisition config..."
@@ -452,7 +462,7 @@ ok "acquis.yaml (reads nginx container logs)"
 
 info "Starting containers..."
 
-docker compose -f "$SCRIPT_DIR/docker-compose.yml" up -d
+dc up -d
 
 ok "All containers started"
 
