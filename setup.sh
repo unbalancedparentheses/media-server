@@ -297,9 +297,9 @@ else
       ok "Tailscale HTTPS already configured"
     else
       info "Configuring Tailscale HTTPS..."
-      "$TS_CLI" serve --bg --yes --https=443 http://127.0.0.1:80 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
-      "$TS_CLI" serve --bg --yes --https=8096 http://127.0.0.1:8096 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
-      "$TS_CLI" serve --bg --yes --https=5055 http://127.0.0.1:5055 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
+      timeout 10 "$TS_CLI" serve --bg --yes --https=443 http://127.0.0.1:80 </dev/null 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
+      timeout 10 "$TS_CLI" serve --bg --yes --https=8096 http://127.0.0.1:8096 </dev/null 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
+      timeout 10 "$TS_CLI" serve --bg --yes --https=5055 http://127.0.0.1:5055 </dev/null 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
     fi
   fi
 fi
@@ -552,8 +552,9 @@ if [ -n "$QBIT_COOKIE" ]; then
       \"max_ratio\": $SEED_RATIO,
       \"max_seeding_time\": $SEED_TIME,
       \"up_limit\": 102400,
-      \"web_ui_csrf_protection_enabled\": true,
-      \"bypass_auth_subnet_whitelist_enabled\": false
+      \"web_ui_csrf_protection_enabled\": false,
+      \"bypass_auth_subnet_whitelist_enabled\": true,
+      \"bypass_auth_subnet_whitelist\": \"172.16.0.0/12,192.168.0.0/16\"
     }" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"
 
   for cat in sonarr sonarr-anime radarr lidarr; do
