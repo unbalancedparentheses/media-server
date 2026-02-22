@@ -343,6 +343,19 @@ SABEOF
   ok "SABnzbd: pre-seeded config (wizard skipped)"
 fi
 
+# Pre-seed Kavita appsettings.json with a JWT token key (prevents null TokenKey crash)
+if [ ! -f "$CONFIG_DIR/kavita/appsettings.json" ]; then
+  KAVITA_TOKEN_KEY=$(openssl rand -base64 128 | tr -d '\n')
+  cat > "$CONFIG_DIR/kavita/appsettings.json" << KAVEOF
+{
+  "TokenKey": "$KAVITA_TOKEN_KEY",
+  "Port": 5000,
+  "IpAddresses": "0.0.0.0"
+}
+KAVEOF
+  ok "Kavita: pre-seeded appsettings.json (TokenKey generated)"
+fi
+
 # ═══════════════════════════════════════════════════════════════════
 # 3. DOCKER COMPOSE
 # ═══════════════════════════════════════════════════════════════════
