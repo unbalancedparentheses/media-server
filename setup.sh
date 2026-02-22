@@ -1980,6 +1980,11 @@ for svc_url in \
   name="${svc_url%%:*}"
   url="${svc_url#*:}"
   HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
+  # Retry once after 5s if service appears down (may still be restarting)
+  if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
+    sleep 5
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
+  fi
   check "$name responds ($HTTP_CODE)" "$([ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ] && echo true || echo false)"
 done
 
