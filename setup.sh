@@ -16,7 +16,8 @@ MEDIA_DIR="$HOME/media"
 CONFIG_DIR="$MEDIA_DIR/config"
 
 # Clean up temp files on exit
-cleanup() { rm -f /tmp/prowlarr_indexer.json /tmp/jf_verify.json /tmp/js_settings_tmp.json; }
+TMPDIR_SETUP=$(mktemp -d)
+cleanup() { rm -rf "$TMPDIR_SETUP"; }
 trap cleanup EXIT
 
 # ─── Helpers ─────────────────────────────────────────────────────
@@ -78,6 +79,12 @@ do_backup() {
     [ -d "$dir" ] && services="$services $(basename "$dir")"
   done
   ok "Services:$services"
+
+  # Dump Immich Postgres before tarring (file copy of a running DB is unsafe)
+  if docker inspect immich-postgres &>/dev/null; then
+    docker exec immich-postgres pg_dump -U postgres immich > "$CONFIG_DIR/immich-postgres/immich_dump.sql" 2>/dev/null && \
+      ok "Immich Postgres dumped" || warn "Could not dump Immich Postgres"
+  fi
 
   tar czf "$backup_file" -C "$MEDIA_DIR" config/ 2>/dev/null
   backup_size=$(du -sh "$backup_file" | cut -f1)
@@ -170,10 +177,6 @@ if [ "$MODE" = "test" ]; then
   JELLYFIN_PASS=$(cfg '.jellyfin.password')
   QBIT_USER=$(cfg '.qbittorrent.username')
   QBIT_PASS=$(cfg '.qbittorrent.password')
-  ORGANIZR_USER=$(cfg '.organizr.username')
-  ORGANIZR_PASS=$(cfg '.organizr.password')
-  ORGANIZR_EMAIL=$(cfg '.organizr.email')
-
   QBIT_URL="http://localhost:8081"
   JELLYFIN_URL="http://localhost:8096"
   SONARR_URL="http://localhost:8989"
@@ -183,7 +186,6 @@ if [ "$MODE" = "test" ]; then
   BAZARR_URL="http://localhost:6767"
   SABNZBD_URL="http://localhost:8080"
   JELLYSEERR_URL="http://localhost:5055"
-  ORGANIZR_URL="http://localhost:9090"
 
   SONARR_KEY=$(get_api_key "sonarr")
   SONARR_ANIME_KEY=$(get_api_key "sonarr-anime")
@@ -195,17 +197,16 @@ if [ "$MODE" = "test" ]; then
   [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ] && SABNZBD_KEY=$(sed -n 's/^api_key = *//p' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null || echo "")
   JELLYSEERR_KEY=""
   [ -f "$CONFIG_DIR/jellyseerr/settings.json" ] && JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
-  ORGANIZR_API_KEY=""
-  for p in "$CONFIG_DIR/organizr/www/organizr/data/config/config.php"; do
-    [ -f "$p" ] && ORGANIZR_API_KEY=$(sed -n "s/.*'organizrAPI' => '\([^']*\)'.*/\1/p" "$p" 2>/dev/null || echo "")
-  done
-
   LIDARR_URL="http://localhost:8686"
   READARR_URL="http://localhost:8787"
   NAVIDROME_URL="http://localhost:4533"
   KAVITA_URL="http://localhost:5000"
   IMMICH_URL="http://localhost:2283"
   SCRUTINY_URL="http://localhost:9091"
+  GITEA_URL="http://localhost:3000"
+  UPTIME_KUMA_URL="http://localhost:3001"
+  HOMEPAGE_URL="http://localhost:3002"
+
 fi
 
 if [ "$MODE" = "setup" ]; then
@@ -307,7 +308,7 @@ mkdir -p "$MEDIA_DIR"/{movies,tv,anime,music,books,photos}
 mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
-mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,organizr,lidarr,readarr,navidrome,kavita,unpackerr,immich-ml,immich-postgres,scrutiny}/logs
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,readarr,navidrome,kavita,unpackerr,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
@@ -335,10 +336,19 @@ fi
 info "Generating .env for Docker Compose..."
 
 TZ_VALUE=$(cfg '.timezone // "America/New_York"')
+
+# Generate a stable Immich DB password (reuse existing if present)
+if [ -f "$SCRIPT_DIR/.env" ] && grep -q "^IMMICH_DB_PASSWORD=" "$SCRIPT_DIR/.env" 2>/dev/null; then
+  IMMICH_DB_PASS=$(sed -n 's/^IMMICH_DB_PASSWORD=//p' "$SCRIPT_DIR/.env")
+else
+  IMMICH_DB_PASS=$(openssl rand -hex 16)
+fi
+
 cat > "$SCRIPT_DIR/.env" << EOF
 PUID=$(id -u)
 PGID=$(id -g)
 TZ=$TZ_VALUE
+IMMICH_DB_PASSWORD=$IMMICH_DB_PASS
 EOF
 ok ".env (PUID=$(id -u), PGID=$(id -g), TZ=$TZ_VALUE)"
 
@@ -353,7 +363,7 @@ ok "All containers started"
 # ═══════════════════════════════════════════════════════════════════
 info "Checking /etc/hosts..."
 
-DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local organizr.media.local lidarr.media.local readarr.media.local navidrome.media.local kavita.media.local immich.media.local scrutiny.media.local"
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local readarr.media.local navidrome.media.local kavita.media.local immich.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
 
 if grep -q "media.local" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
@@ -388,10 +398,6 @@ SONARR_PROFILE=$(cfg '.quality.sonarr_profile')
 SONARR_ANIME_PROFILE=$(cfg '.quality.sonarr_anime_profile')
 RADARR_PROFILE=$(cfg '.quality.radarr_profile')
 
-ORGANIZR_USER=$(cfg '.organizr.username')
-ORGANIZR_PASS=$(cfg '.organizr.password')
-ORGANIZR_EMAIL=$(cfg '.organizr.email')
-
 QBIT_URL="http://localhost:8081"
 JELLYFIN_URL="http://localhost:8096"
 SONARR_URL="http://localhost:8989"
@@ -401,7 +407,6 @@ PROWLARR_URL="http://localhost:9696"
 BAZARR_URL="http://localhost:6767"
 SABNZBD_URL="http://localhost:8080"
 JELLYSEERR_URL="http://localhost:5055"
-ORGANIZR_URL="http://localhost:9090"
 
 LIDARR_URL="http://localhost:8686"
 READARR_URL="http://localhost:8787"
@@ -409,6 +414,9 @@ NAVIDROME_URL="http://localhost:4533"
 KAVITA_URL="http://localhost:5000"
 IMMICH_URL="http://localhost:2283"
 SCRUTINY_URL="http://localhost:9091"
+GITEA_URL="http://localhost:3000"
+UPTIME_KUMA_URL="http://localhost:3001"
+HOMEPAGE_URL="http://localhost:3002"
 
 SONARR_INTERNAL="http://sonarr:8989"
 SONARR_ANIME_INTERNAL="http://sonarr-anime:8989"
@@ -430,12 +438,14 @@ wait_for "Bazarr"       "$BAZARR_URL"
 wait_for "SABnzbd"      "$SABNZBD_URL"
 wait_for "qBittorrent"  "$QBIT_URL"
 wait_for "Jellyseerr"   "$JELLYSEERR_URL"
-wait_for "Organizr"     "$ORGANIZR_URL"
 wait_for "Lidarr"       "$LIDARR_URL/ping"
 wait_for "Readarr"      "$READARR_URL/ping"
 wait_for "Navidrome"    "$NAVIDROME_URL/ping"
 wait_for "Kavita"       "$KAVITA_URL"
 wait_for "Immich"       "$IMMICH_URL/api/server/ping"
+wait_for "Gitea"        "$GITEA_URL/api/v1/version"
+wait_for "Uptime Kuma"  "$UPTIME_KUMA_URL"
+wait_for "Homepage"     "$HOMEPAGE_URL"
 
 # ═══════════════════════════════════════════════════════════════════
 # 7. API KEYS
@@ -506,12 +516,11 @@ if [ -n "$QBIT_COOKIE" ]; then
       \"max_ratio\": $SEED_RATIO,
       \"max_seeding_time\": $SEED_TIME,
       \"up_limit\": 102400,
-      \"web_ui_csrf_protection_enabled\": false,
-      \"bypass_auth_subnet_whitelist_enabled\": true,
-      \"bypass_auth_subnet_whitelist\": \"$(docker network inspect media-server_default -f '{{(index .IPAM.Config 0).Subnet}}' 2>/dev/null || echo '192.168.0.0/16')\"
+      \"web_ui_csrf_protection_enabled\": true,
+      \"bypass_auth_subnet_whitelist_enabled\": false
     }" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"
 
-  for cat in sonarr sonarr-anime radarr; do
+  for cat in sonarr sonarr-anime radarr lidarr readarr; do
     curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/createCategory" \
       -b "SID=$QBIT_COOKIE" \
       -d "category=$cat&savePath=$DL_COMPLETE/$cat" 2>/dev/null && ok "Category: $cat" || \
@@ -623,7 +632,7 @@ if [ -n "$SABNZBD_KEY" ]; then
 
   # Create categories
   EXISTING_CATS=$(curl -sf "$SABNZBD_URL/api?mode=get_cats&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.categories[]' 2>/dev/null || echo "")
-  for cat in sonarr sonarr-anime radarr; do
+  for cat in sonarr sonarr-anime radarr lidarr readarr; do
     if ! echo "$EXISTING_CATS" | grep -q "^${cat}$"; then
       curl -sf "$SABNZBD_URL/api?mode=set_config&section=categories&keyword=$cat&apikey=$SABNZBD_KEY&dir=$cat&output=json" >/dev/null 2>&1 && \
         ok "Category: $cat" || warn "Could not create category: $cat"
@@ -737,11 +746,13 @@ if [ -n "$PROWLARR_KEY" ]; then
   EXISTING_APPS=$(api GET "$PROWLARR_URL/api/v1/applications" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
 
   add_prowlarr_app() {
-    local name="$1" impl="$2" url="$3" key="$4" cats="$5"
+    local name="$1" impl="$2" url="$3" key="$4" cats="$5" tags="${6:-}"
     if ! echo "$EXISTING_APPS" | grep -q "^${name}$"; then
+      local tags_json="[]"
+      [ -n "$tags" ] && tags_json="[$tags]"
       api POST "$PROWLARR_URL/api/v1/applications" -H "$PH" -d '{
         "name":"'"$name"'","implementation":"'"$impl"'","configContract":"'"$impl"'Settings",
-        "syncLevel":"fullSync",
+        "syncLevel":"fullSync","tags":'"$tags_json"',
         "fields":[{"name":"prowlarrUrl","value":"'"$PROWLARR_INTERNAL"'"},
           {"name":"baseUrl","value":"'"$url"'"},{"name":"apiKey","value":"'"$key"'"},
           {"name":"syncCategories","value":['"$cats"']}]
@@ -749,11 +760,19 @@ if [ -n "$PROWLARR_KEY" ]; then
     else ok "$name connected"; fi
   }
 
+  # Create anime tag for routing anime indexers to Sonarr Anime only
+  ANIME_TAG_ID=$(api GET "$PROWLARR_URL/api/v1/tag" -H "$PH" | jq -r '.[] | select(.label == "anime") | .id' 2>/dev/null || echo "")
+  if [ -z "$ANIME_TAG_ID" ]; then
+    ANIME_TAG_ID=$(api POST "$PROWLARR_URL/api/v1/tag" -H "$PH" -d '{"label":"anime"}' | jq -r '.id' 2>/dev/null || echo "")
+    [ -n "$ANIME_TAG_ID" ] && ok "Created anime tag (id: $ANIME_TAG_ID)"
+  fi
+
   SONARR_CATS="5000,5010,5020,5030,5040,5045,5050,5090"
   RADARR_CATS="2000,2010,2020,2030,2040,2045,2050,2060,2070,2080,2090"
 
+  # Sonarr Anime gets the anime tag — only anime-tagged indexers sync to it
   [ -n "$SONARR_KEY" ]       && add_prowlarr_app "Sonarr"       "Sonarr" "$SONARR_INTERNAL"       "$SONARR_KEY"       "$SONARR_CATS"
-  [ -n "$SONARR_ANIME_KEY" ] && add_prowlarr_app "Sonarr Anime" "Sonarr" "$SONARR_ANIME_INTERNAL" "$SONARR_ANIME_KEY" "$SONARR_CATS"
+  [ -n "$SONARR_ANIME_KEY" ] && add_prowlarr_app "Sonarr Anime" "Sonarr" "$SONARR_ANIME_INTERNAL" "$SONARR_ANIME_KEY" "$SONARR_CATS" "$ANIME_TAG_ID"
   [ -n "$RADARR_KEY" ]       && add_prowlarr_app "Radarr"       "Radarr" "$RADARR_INTERNAL"       "$RADARR_KEY"       "$RADARR_CATS"
 
   # FlareSolverr
@@ -811,6 +830,7 @@ if [ -n "$PROWLARR_KEY" ]; then
       IDX_NAME=$(cfg ".indexers[$i].name")
       IDX_DEF=$(cfg ".indexers[$i].definitionName")
       IDX_FLARE=$(cfg ".indexers[$i].flaresolverr // false")
+      IDX_ANIME=$(cfg ".indexers[$i].anime // false")
 
       if echo "$EXISTING_INDEXERS" | grep -q "^${IDX_NAME}$"; then
         ok "$IDX_NAME already added"
@@ -838,21 +858,19 @@ if [ -n "$PROWLARR_KEY" ]; then
         ' 2>/dev/null)
       fi
 
-      # Set name, enable, app profile, and optionally FlareSolverr tag
-      if [ "$IDX_FLARE" = "true" ] && [ -n "$FLARESOLVERR_TAG_ID" ]; then
-        SCHEMA=$(echo "$SCHEMA" | jq -c --arg name "$IDX_NAME" --argjson tid "$FLARESOLVERR_TAG_ID" \
-          '.name = $name | .enable = true | del(.id) | .appProfileId = 1 | .tags = [$tid]' 2>/dev/null)
-      else
-        SCHEMA=$(echo "$SCHEMA" | jq -c --arg name "$IDX_NAME" \
-          '.name = $name | .enable = true | del(.id) | .appProfileId = 1' 2>/dev/null)
-      fi
+      # Set name, enable, app profile, and tags (flaresolverr + anime)
+      IDX_TAGS="[]"
+      [ "$IDX_FLARE" = "true" ] && [ -n "$FLARESOLVERR_TAG_ID" ] && IDX_TAGS=$(echo "$IDX_TAGS" | jq -c ". + [$FLARESOLVERR_TAG_ID]")
+      [ "$IDX_ANIME" = "true" ] && [ -n "$ANIME_TAG_ID" ] && IDX_TAGS=$(echo "$IDX_TAGS" | jq -c ". + [$ANIME_TAG_ID]")
+      SCHEMA=$(echo "$SCHEMA" | jq -c --arg name "$IDX_NAME" --argjson tags "$IDX_TAGS" \
+        '.name = $name | .enable = true | del(.id) | .appProfileId = 1 | .tags = $tags' 2>/dev/null)
 
       # Write to temp file to avoid shell argument length limits
-      echo "$SCHEMA" > /tmp/prowlarr_indexer.json
-      api POST "$PROWLARR_URL/api/v1/indexer" -H "$PH" -d @/tmp/prowlarr_indexer.json >/dev/null 2>&1 && \
+      echo "$SCHEMA" > $TMPDIR_SETUP/prowlarr_indexer.json
+      api POST "$PROWLARR_URL/api/v1/indexer" -H "$PH" -d @$TMPDIR_SETUP/prowlarr_indexer.json >/dev/null 2>&1 && \
         ok "$IDX_NAME added" || warn "Could not add $IDX_NAME"
     done
-    rm -f /tmp/prowlarr_indexer.json
+    rm -f $TMPDIR_SETUP/prowlarr_indexer.json
   fi
 
   # Configure web UI authentication
@@ -1151,7 +1169,7 @@ if [ "$JS_INITIALIZED" != "true" ]; then
     ' "$JS_SETTINGS" 2>/dev/null)
 
     if [ -n "$UPDATED" ]; then
-      echo "$UPDATED" > /tmp/js_settings_tmp.json && mv /tmp/js_settings_tmp.json "$JS_SETTINGS"
+      echo "$UPDATED" > $TMPDIR_SETUP/js_settings_tmp.json && mv $TMPDIR_SETUP/js_settings_tmp.json "$JS_SETTINGS"
       docker restart jellyseerr >/dev/null 2>&1
       ok "Jellyfin server pre-configured"
       sleep 8
@@ -1384,120 +1402,223 @@ if [ -n "$PROWLARR_KEY" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 17. ORGANIZR — dashboard with tabs for all services
+# 17. HOMEPAGE — dashboard with service widgets
 # ═══════════════════════════════════════════════════════════════════
-info "Configuring Organizr..."
+info "Configuring Homepage dashboard..."
 
-ORGANIZR_API_KEY=""
+HP_DIR="$CONFIG_DIR/homepage"
+mkdir -p "$HP_DIR"
 
-# Find existing config to check if wizard was already run
-ORG_CONFIG_PHP=""
-for p in \
-  "$CONFIG_DIR/organizr/www/organizr/data/config/config.php"; do
-  [ -f "$p" ] && ORG_CONFIG_PHP="$p" && break
-done
+# settings.yaml
+cat > "$HP_DIR/settings.yaml" <<'HPEOF'
+title: Media Server
+theme: dark
+color: slate
+headerStyle: clean
+layout:
+  Media:
+    style: row
+    columns: 4
+  Library Management:
+    style: row
+    columns: 4
+  Downloads:
+    style: row
+    columns: 2
+  Tools:
+    style: row
+    columns: 4
+HPEOF
+ok "settings.yaml"
 
-if [ -z "$ORG_CONFIG_PHP" ]; then
-  # Run the initial setup wizard
-  ORGANIZR_HASH=$(openssl rand -hex 16)
-  ORGANIZR_API_KEY=$(openssl rand -hex 10)
-  ORGANIZR_REG_PASS=$(openssl rand -hex 8)
+# docker.yaml — let Homepage talk to Docker socket
+cat > "$HP_DIR/docker.yaml" <<'HPEOF'
+local:
+  socket: /var/run/docker.sock
+HPEOF
+ok "docker.yaml"
 
-  WIZARD_RESP=$(curl -sf -X POST "$ORGANIZR_URL/api/v2/wizard" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"license\": \"personal\",
-      \"hashKey\": \"$ORGANIZR_HASH\",
-      \"api\": \"$ORGANIZR_API_KEY\",
-      \"registrationPassword\": \"$ORGANIZR_REG_PASS\",
-      \"username\": \"$ORGANIZR_USER\",
-      \"password\": \"$ORGANIZR_PASS\",
-      \"email\": \"$ORGANIZR_EMAIL\",
-      \"driver\": \"sqlite3\",
-      \"dbName\": \"organizr\",
-      \"dbPath\": \"/config/www/organizr/api/config/\"
-    }" 2>/dev/null || echo "")
+# bookmarks.yaml (empty)
+cat > "$HP_DIR/bookmarks.yaml" <<'HPEOF'
+[]
+HPEOF
 
-  WIZARD_RESULT=$(echo "$WIZARD_RESP" | jq -r '.response.result // empty' 2>/dev/null)
-  if [ "$WIZARD_RESULT" = "success" ]; then
-    ok "Wizard completed"
-    # Locate the config file created by the wizard
-    sleep 2
-    for p in \
-      "$CONFIG_DIR/organizr/www/organizr/data/config/config.php" \
-      "$CONFIG_DIR/organizr/www/Dashboard/api/config/config.php" \
-      "$CONFIG_DIR/organizr/api/config/config.php"; do
-      [ -f "$p" ] && ORG_CONFIG_PHP="$p" && break
-    done
-  else
-    WIZARD_MSG=$(echo "$WIZARD_RESP" | jq -r '.response.message // "unknown error"' 2>/dev/null)
-    warn "Wizard: $WIZARD_MSG"
-  fi
-else
-  ok "Already configured"
-fi
+# widgets.yaml — system info
+cat > "$HP_DIR/widgets.yaml" <<'HPEOF'
+- resources:
+    cpu: true
+    memory: true
+    disk: /
+- datetime:
+    text_size: xl
+    format:
+      dateStyle: long
+      timeStyle: short
+HPEOF
+ok "widgets.yaml"
 
-# Read API key from config file if not set from wizard
-if [ -z "$ORGANIZR_API_KEY" ] && [ -n "$ORG_CONFIG_PHP" ]; then
-  ORGANIZR_API_KEY=$(sed -n "s/.*'organizrAPI' => '\([^']*\)'.*/\1/p" "$ORG_CONFIG_PHP" 2>/dev/null || echo "")
-fi
-
-# Create service tabs
-if [ -n "$ORGANIZR_API_KEY" ]; then
-  ok "API key: ${ORGANIZR_API_KEY:0:8}..."
-
-  EXISTING_TABS=$(curl -sf "$ORGANIZR_URL/api/v2/tabs" -H "Token: $ORGANIZR_API_KEY" 2>/dev/null || echo "")
-  EXISTING_TAB_NAMES=$(echo "$EXISTING_TABS" | jq -r '.response.data.tabs[].name' 2>/dev/null || echo "")
-
-  add_organizr_tab() {
-    local name="$1" url="$2" image="$3" order="$4"
-    if echo "$EXISTING_TAB_NAMES" | grep -q "^${name}$"; then
-      ok "Tab: $name"
-      return 0
-    fi
-    local resp
-    resp=$(curl -sf -X POST "$ORGANIZR_URL/api/v2/tabs" \
-      -H "Content-Type: application/json" \
-      -H "Token: $ORGANIZR_API_KEY" \
-      -d "{
-        \"name\": \"$name\",
-        \"url\": \"$url\",
-        \"image\": \"$image\",
-        \"type\": 1,
-        \"enabled\": 1,
-        \"group_id\": 0,
-        \"order\": $order
-      }" 2>/dev/null || echo "")
-    local result
-    result=$(echo "$resp" | jq -r '.response.result // empty' 2>/dev/null)
-    if [ "$result" = "success" ]; then
-      ok "Tab: $name"
-    else
-      warn "Tab $name: $(echo "$resp" | jq -r '.response.message // "failed"' 2>/dev/null)"
-    fi
-  }
-
-  add_organizr_tab "Jellyseerr"    "http://localhost:5055"  "plugins/images/tabs/overseerr.png"    1
-  add_organizr_tab "Jellyfin"      "http://localhost:8096"  "plugins/images/tabs/jellyfin.png"     2
-  add_organizr_tab "Sonarr"        "http://localhost:8989"  "plugins/images/tabs/sonarr.png"       3
-  add_organizr_tab "Sonarr Anime"  "http://localhost:8990"  "plugins/images/tabs/sonarr.png"       4
-  add_organizr_tab "Radarr"        "http://localhost:7878"  "plugins/images/tabs/radarr.png"       5
-  add_organizr_tab "Prowlarr"      "http://localhost:9696"  "plugins/images/tabs/prowlarr.png"     6
-  add_organizr_tab "Bazarr"        "http://localhost:6767"  "plugins/images/tabs/bazarr.png"       7
-  add_organizr_tab "qBittorrent"   "http://localhost:8081"  "plugins/images/tabs/qbittorrent.png"  8
-  add_organizr_tab "SABnzbd"       "http://localhost:8080"  "plugins/images/tabs/sabnzbd.png"      9
-  add_organizr_tab "Lidarr"        "http://localhost:8686"  "plugins/images/tabs/lidarr.png"       10
-  add_organizr_tab "Navidrome"     "http://localhost:4533"  "plugins/images/tabs/navidrome.png"    11
-  add_organizr_tab "Readarr"       "http://localhost:8787"  "plugins/images/tabs/readarr.png"      12
-  add_organizr_tab "Kavita"        "http://localhost:5000"  "plugins/images/tabs/kavita.png"       13
-  add_organizr_tab "Immich"        "http://localhost:2283"  "plugins/images/tabs/immich.png"       14
-  add_organizr_tab "Scrutiny"      "http://localhost:9091"  "plugins/images/tabs/scrutiny.png"     15
-else
-  warn "No API key — complete Organizr setup manually at $ORGANIZR_URL"
-fi
+# services.yaml — all services with API key integration
+cat > "$HP_DIR/services.yaml" <<HPEOF
+- Media:
+    - Jellyfin:
+        icon: jellyfin.svg
+        href: http://jellyfin.media.local
+        description: Stream your library
+        server: local
+        container: jellyfin
+        widget:
+          type: jellyfin
+          url: http://jellyfin:8096
+          key: ${JELLYFIN_TOKEN:-}
+    - Jellyseerr:
+        icon: jellyseerr.svg
+        href: http://jellyseerr.media.local
+        description: Request movies & TV
+        server: local
+        container: jellyseerr
+        widget:
+          type: jellyseerr
+          url: http://jellyseerr:5055
+          key: ${JELLYSEERR_KEY:-}
+    - Navidrome:
+        icon: navidrome.svg
+        href: http://navidrome.media.local
+        description: Stream your music
+        server: local
+        container: navidrome
+    - Kavita:
+        icon: kavita.svg
+        href: http://kavita.media.local
+        description: Read books & comics
+        server: local
+        container: kavita
+- Library Management:
+    - Sonarr:
+        icon: sonarr.svg
+        href: http://sonarr.media.local
+        description: TV show automation
+        server: local
+        container: sonarr
+        widget:
+          type: sonarr
+          url: http://sonarr:8989
+          key: ${SONARR_KEY:-}
+    - Sonarr Anime:
+        icon: sonarr.svg
+        href: http://sonarr-anime.media.local
+        description: Anime series
+        server: local
+        container: sonarr-anime
+        widget:
+          type: sonarr
+          url: http://sonarr-anime:8989
+          key: ${SONARR_ANIME_KEY:-}
+    - Radarr:
+        icon: radarr.svg
+        href: http://radarr.media.local
+        description: Movie automation
+        server: local
+        container: radarr
+        widget:
+          type: radarr
+          url: http://radarr:7878
+          key: ${RADARR_KEY:-}
+    - Lidarr:
+        icon: lidarr.svg
+        href: http://lidarr.media.local
+        description: Music automation
+        server: local
+        container: lidarr
+        widget:
+          type: lidarr
+          url: http://lidarr:8686
+          key: ${LIDARR_KEY:-}
+    - Readarr:
+        icon: readarr.svg
+        href: http://readarr.media.local
+        description: Book automation
+        server: local
+        container: readarr
+        widget:
+          type: readarr
+          url: http://readarr:8787
+          key: ${READARR_KEY:-}
+    - Prowlarr:
+        icon: prowlarr.svg
+        href: http://prowlarr.media.local
+        description: Indexer management
+        server: local
+        container: prowlarr
+        widget:
+          type: prowlarr
+          url: http://prowlarr:9696
+          key: ${PROWLARR_KEY:-}
+    - Bazarr:
+        icon: bazarr.svg
+        href: http://bazarr.media.local
+        description: Subtitle downloads
+        server: local
+        container: bazarr
+        widget:
+          type: bazarr
+          url: http://bazarr:6767
+          key: $([ -f "$CONFIG_DIR/bazarr/config/config/config.yaml" ] && sed -n 's/^apikey: *//p' "$CONFIG_DIR/bazarr/config/config/config.yaml" 2>/dev/null || echo "")
+- Downloads:
+    - qBittorrent:
+        icon: qbittorrent.svg
+        href: http://qbittorrent.media.local
+        description: Torrent client
+        server: local
+        container: qbittorrent
+        widget:
+          type: qbittorrent
+          url: http://qbittorrent:8081
+          username: ${QBIT_USER:-admin}
+          password: ${QBIT_PASS:-changeme}
+    - SABnzbd:
+        icon: sabnzbd.svg
+        href: http://sabnzbd.media.local
+        description: Usenet client
+        server: local
+        container: sabnzbd
+        widget:
+          type: sabnzbd
+          url: http://sabnzbd:8080
+          key: ${SABNZBD_KEY:-}
+- Tools:
+    - Immich:
+        icon: immich.svg
+        href: http://immich.media.local
+        description: Photo management
+        server: local
+        container: immich
+    - Gitea:
+        icon: gitea.svg
+        href: http://gitea.media.local
+        description: Git mirror & hosting
+        server: local
+        container: gitea
+    - Uptime Kuma:
+        icon: uptime-kuma.svg
+        href: http://uptime-kuma.media.local
+        description: Service uptime monitoring
+        server: local
+        container: uptime-kuma
+        widget:
+          type: uptimekuma
+          url: http://uptime-kuma:3001
+          slug: default
+    - Scrutiny:
+        icon: scrutiny.svg
+        href: http://scrutiny.media.local
+        description: Disk health monitoring
+        server: local
+        container: scrutiny
+HPEOF
+ok "services.yaml"
 
 # ═══════════════════════════════════════════════════════════════════
-# 17.5 API PROXY CONFIG (landing page widgets)
+# 18. API PROXY CONFIG (landing page widgets)
 # ═══════════════════════════════════════════════════════════════════
 info "Generating API proxy config for landing page..."
 
@@ -1509,9 +1630,11 @@ API_PROXY="$CONFIG_DIR/nginx/api-proxy.conf"
 cat > "$API_PROXY" << PROXYEOF
 # Auto-generated by setup.sh — API proxy endpoints for landing page widgets
 # Keys are injected here so they never reach the browser.
+# Rate-limited to prevent abuse.
 
 # qBittorrent
 location /api/qbt/ {
+    limit_req zone=api burst=50 nodelay;
     proxy_pass http://qbittorrent:8081/api/v2/;
     proxy_set_header Host qbittorrent;
     proxy_set_header Referer http://qbittorrent:8081;
@@ -1520,36 +1643,42 @@ location /api/qbt/ {
 
 # Sonarr
 location /api/sonarr/ {
+    limit_req zone=api burst=50 nodelay;
     proxy_pass http://sonarr:8989/api/v3/;
     proxy_set_header X-Api-Key $SONARR_KEY;
 }
 
 # Sonarr Anime
 location /api/sonarr-anime/ {
+    limit_req zone=api burst=50 nodelay;
     proxy_pass http://sonarr-anime:8989/api/v3/;
     proxy_set_header X-Api-Key $SONARR_ANIME_KEY;
 }
 
 # Radarr
 location /api/radarr/ {
+    limit_req zone=api burst=50 nodelay;
     proxy_pass http://radarr:7878/api/v3/;
     proxy_set_header X-Api-Key $RADARR_KEY;
 }
 
 # Jellyfin
 location /api/jellyfin/ {
+    limit_req zone=api burst=50 nodelay;
     proxy_pass http://jellyfin:8096/;
     proxy_set_header X-Emby-Token $JELLYFIN_API_KEY;
 }
 
 # Jellyseerr
 location /api/jellyseerr/ {
+    limit_req zone=api burst=50 nodelay;
     proxy_pass http://jellyseerr:5055/api/v1/;
     proxy_set_header X-Api-Key $JELLYSEERR_KEY;
 }
 
 # SABnzbd (key in query param)
 location /api/sabnzbd/ {
+    limit_req zone=api burst=50 nodelay;
     proxy_pass http://sabnzbd:8080/api?apikey=${SABNZBD_KEY}&\$args;
 }
 PROXYEOF
@@ -1597,13 +1726,16 @@ for svc_url in \
   "SABnzbd:$SABNZBD_URL" \
   "qBittorrent:$QBIT_URL" \
   "Jellyseerr:$JELLYSEERR_URL" \
-  "Organizr:$ORGANIZR_URL" \
   "Lidarr:$LIDARR_URL/ping" \
   "Readarr:$READARR_URL/ping" \
   "Navidrome:$NAVIDROME_URL/ping" \
   "Kavita:$KAVITA_URL" \
   "Immich:$IMMICH_URL/api/server/ping" \
-  "Scrutiny:$SCRUTINY_URL/api/health"; do
+  "Scrutiny:$SCRUTINY_URL/api/health" \
+  "Gitea:$GITEA_URL/api/v1/version" \
+  "Uptime Kuma:$UPTIME_KUMA_URL" \
+  "Homepage:$HOMEPAGE_URL" \
+  ; do
   name="${svc_url%%:*}"
   url="${svc_url#*:}"
   HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || echo "000")
@@ -1686,18 +1818,18 @@ JF_TOKEN_V=$(echo "$JF_AUTH_V" | jq -r '.AccessToken // empty' 2>/dev/null)
 check "Jellyfin → login" "$([ -n "$JF_TOKEN_V" ] && echo true || echo false)"
 
 if [ -n "$JF_TOKEN_V" ]; then
-  curl -sf "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JF_TOKEN_V" > /tmp/jf_verify.json 2>/dev/null
+  curl -sf "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JF_TOKEN_V" > $TMPDIR_SETUP/jf_verify.json 2>/dev/null
   for lp in "Movies:/media/movies" "TV Shows:/media/tv" "Anime:/media/anime"; do
     ln="${lp%%:*}"; lpath="${lp#*:}"
     HAS=$(jq --arg n "$ln" --arg p "$lpath" \
-      '[.[] | select(.Name == $n) | .Locations[] | select(. == $p)] | length > 0' /tmp/jf_verify.json 2>/dev/null)
+      '[.[] | select(.Name == $n) | .Locations[] | select(. == $p)] | length > 0' $TMPDIR_SETUP/jf_verify.json 2>/dev/null)
     check "Jellyfin → library: $ln" "$HAS"
   done
-  REALTIME=$(jq 'all(.[]; .LibraryOptions.EnableRealtimeMonitor == true)' /tmp/jf_verify.json 2>/dev/null)
+  REALTIME=$(jq 'all(.[]; .LibraryOptions.EnableRealtimeMonitor == true)' $TMPDIR_SETUP/jf_verify.json 2>/dev/null)
   check "Jellyfin → real-time monitoring" "$REALTIME"
-  DAILY_SCAN=$(jq 'all(.[]; .LibraryOptions.AutomaticRefreshIntervalDays == 1)' /tmp/jf_verify.json 2>/dev/null)
+  DAILY_SCAN=$(jq 'all(.[]; .LibraryOptions.AutomaticRefreshIntervalDays == 1)' $TMPDIR_SETUP/jf_verify.json 2>/dev/null)
   check "Jellyfin → daily scan" "$DAILY_SCAN"
-  rm -f /tmp/jf_verify.json
+  rm -f $TMPDIR_SETUP/jf_verify.json
 fi
 
 # --- 6. Jellyfin sync ---
@@ -1784,19 +1916,7 @@ if [ -n "$BAZARR_CONFIG_FILE" ]; then
   check "Bazarr → auth configured" "$([ -n "$BAZARR_AUTH_USER" ] && [ "$BAZARR_AUTH_USER" != "''" ] && echo true || echo false)"
 fi
 
-# --- 10. Organizr ---
-info "Organizr..."
-
-ORGANIZR_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "$ORGANIZR_URL" 2>/dev/null || echo "000")
-check "Organizr → responds ($ORGANIZR_CODE)" "$([ "$ORGANIZR_CODE" = "200" ] && echo true || echo false)"
-
-if [ -n "${ORGANIZR_API_KEY:-}" ]; then
-  ORG_TABS_V=$(curl -sf "$ORGANIZR_URL/api/v2/tabs" -H "Token: $ORGANIZR_API_KEY" 2>/dev/null || echo "")
-  ORG_TAB_COUNT=$(echo "$ORG_TABS_V" | jq '[.response.data.tabs[] | select(.type == 1)] | length' 2>/dev/null || echo "0")
-  check "Organizr → service tabs ($ORG_TAB_COUNT)" "$([ "$ORG_TAB_COUNT" -gt 0 ] && echo true || echo false)"
-fi
-
-# --- 11. Health checks ---
+# --- 10. Health checks ---
 info "Health checks..."
 
 [ -n "$SONARR_KEY" ] && {
@@ -1832,7 +1952,7 @@ check "Proxy → SABnzbd queue" "$(curl -sf 'http://localhost/api/sabnzbd/?mode=
 # --- 13. Docker containers ---
 info "Docker containers..."
 
-for container in jellyfin sonarr sonarr-anime radarr lidarr readarr prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr organizr media-nginx recyclarr unpackerr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny; do
+for container in jellyfin sonarr sonarr-anime radarr lidarr readarr prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
   STATUS=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "missing")
   check "Container: $container" "$([ "$STATUS" = "running" ] && echo true || echo false)"
 done

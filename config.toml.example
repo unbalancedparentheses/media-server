@@ -8,11 +8,6 @@ password = "changeme"
 username = "admin"
 password = "changeme"
 
-[organizr]
-username = "admin"
-password = "changeme"
-email = "admin@media.local"
-
 # ─── General ────────────────────────────────────────────────────
 
 timezone = "America/New_York"
@@ -86,21 +81,25 @@ enable = true
 name = "Nyaa.si"
 definitionName = "nyaasi"
 enable = true
+anime = true
 
 [[indexers]]
 name = "SubsPlease"
 definitionName = "SubsPlease"
 enable = true
+anime = true
 
 [[indexers]]
 name = "Mikan"
 definitionName = "mikan"
 enable = true
+anime = true
 
 [[indexers]]
 name = "Bangumi Moe"
 definitionName = "bangumi-moe"
 enable = true
+anime = true
 
 # Enable and add your API key if you have an NZBgeek account
 [[indexers]]
