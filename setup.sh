@@ -202,7 +202,7 @@ if [ "$MODE" = "test" ]; then
   LIDARR_URL="http://localhost:8686"
   LAZYLIBRARIAN_URL="http://localhost:5299"
   NAVIDROME_URL="http://localhost:4533"
-  KAVITA_URL="http://localhost:5000"
+  KAVITA_URL="http://localhost:5001"
   IMMICH_URL="http://localhost:2283"
   SCRUTINY_URL="http://localhost:9091"
   GITEA_URL="http://localhost:3000"
@@ -413,7 +413,7 @@ JELLYSEERR_URL="http://localhost:5055"
 LIDARR_URL="http://localhost:8686"
 LAZYLIBRARIAN_URL="http://localhost:5299"
 NAVIDROME_URL="http://localhost:4533"
-KAVITA_URL="http://localhost:5000"
+KAVITA_URL="http://localhost:5001"
 IMMICH_URL="http://localhost:2283"
 SCRUTINY_URL="http://localhost:9091"
 GITEA_URL="http://localhost:3000"
@@ -1389,6 +1389,65 @@ if [ -n "$PROWLARR_KEY" ]; then
   PH="X-Api-Key: $PROWLARR_KEY"
   MUSIC_CATS='[3000,3010,3020,3030,3040,3050,3060]'
   [ -n "$LIDARR_KEY" ]  && add_prowlarr_app "Lidarr"  "Lidarr"  "$LIDARR_INTERNAL"  "$LIDARR_KEY"  "$MUSIC_CATS"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 16.7 NAVIDROME — create admin user
+# ═══════════════════════════════════════════════════════════════════
+info "Configuring Navidrome..."
+
+ND_CHECK=$(curl -s -o /dev/null -w "%{http_code}" "$NAVIDROME_URL/auth/createAdmin" 2>/dev/null)
+if [ "$ND_CHECK" = "200" ]; then
+  ND_RESULT=$(curl -sf -X POST "$NAVIDROME_URL/auth/createAdmin" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"$JF_USER\",\"password\":\"$JF_PASS\"}" 2>/dev/null)
+  if echo "$ND_RESULT" | jq -e '.id' >/dev/null 2>&1; then
+    ok "Admin user created: $JF_USER"
+  else
+    warn "Could not create admin user"
+  fi
+else
+  ok "Already configured"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 16.8 KAVITA — create admin user and add book library
+# ═══════════════════════════════════════════════════════════════════
+info "Configuring Kavita..."
+
+KV_RESULT=$(curl -sf -X POST "$KAVITA_URL/api/Account/register" \
+  -H "Content-Type: application/json" \
+  -d "{\"username\":\"$JF_USER\",\"password\":\"${JF_PASS}\"}" 2>/dev/null)
+if echo "$KV_RESULT" | jq -e '.token' >/dev/null 2>&1; then
+  KV_TOKEN=$(echo "$KV_RESULT" | jq -r '.token')
+  ok "Admin user created: $JF_USER"
+  # Add book library
+  curl -sf -X POST "$KAVITA_URL/api/Library" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $KV_TOKEN" \
+    -d '{"name":"Books","type":2,"folders":["/media/books"],"manageCollections":true,"manageReadingLists":true,"includeInDashboard":true,"includeInRecommended":true,"includeInSearch":true}' >/dev/null 2>&1 && \
+    ok "Library 'Books' → /media/books" || warn "Could not add book library"
+else
+  ok "Already configured"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 16.9 IMMICH — create admin user
+# ═══════════════════════════════════════════════════════════════════
+info "Configuring Immich..."
+
+IM_CHECK=$(curl -sf "$IMMICH_URL/api/server/ping" 2>/dev/null)
+if [ -n "$IM_CHECK" ]; then
+  IM_RESULT=$(curl -sf -X POST "$IMMICH_URL/api/auth/admin-sign-up" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"admin@media.local\",\"password\":\"$JF_PASS\",\"name\":\"$JF_USER\"}" 2>/dev/null)
+  if echo "$IM_RESULT" | jq -e '.id' >/dev/null 2>&1; then
+    ok "Admin user created: $JF_USER (admin@media.local)"
+  else
+    ok "Already configured"
+  fi
+else
+  warn "Immich not responding"
 fi
 
 # ═══════════════════════════════════════════════════════════════════

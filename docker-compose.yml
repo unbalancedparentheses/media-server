@@ -338,7 +338,7 @@ services:
     image: jvmilazz0/kavita:latest
     container_name: kavita
     ports:
-      - "5000:5000"
+      - "5001:5000"
     volumes:
       - ~/media/config/kavita:/kavita/config
       - ~/media/books:/media/books:ro
