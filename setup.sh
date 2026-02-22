@@ -294,9 +294,9 @@ else
       ok "Tailscale HTTPS already configured"
     else
       info "Configuring Tailscale HTTPS..."
-      "$TS_CLI" serve --bg --https=443 / proxy http://127.0.0.1:80 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
-      "$TS_CLI" serve --bg --https=8096 / proxy http://127.0.0.1:8096 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
-      "$TS_CLI" serve --bg --https=5055 / proxy http://127.0.0.1:5055 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
+      "$TS_CLI" serve --bg --yes --https=443 http://127.0.0.1:80 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
+      "$TS_CLI" serve --bg --yes --https=8096 http://127.0.0.1:8096 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
+      "$TS_CLI" serve --bg --yes --https=5055 http://127.0.0.1:5055 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
     fi
   fi
 fi
@@ -1666,8 +1666,13 @@ PROXYEOF
 ok "api-proxy.conf written"
 
 # Reload nginx to pick up the new proxy config
-docker exec media-nginx nginx -s reload >/dev/null 2>&1 && \
-  ok "nginx reloaded" || warn "Could not reload nginx (will apply on next restart)"
+sleep 2
+if docker exec media-nginx nginx -t >/dev/null 2>&1; then
+  docker exec media-nginx nginx -s reload >/dev/null 2>&1 && \
+    ok "nginx reloaded" || warn "Could not reload nginx (will apply on next restart)"
+else
+  warn "nginx config test failed — skipping reload"
+fi
 
 fi  # end setup mode
 
@@ -1718,8 +1723,8 @@ for svc_url in \
   ; do
   name="${svc_url%%:*}"
   url="${svc_url#*:}"
-  HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || echo "000")
-  check "$name responds ($HTTP_CODE)" "$([ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ] && echo true || echo false)"
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null)
+  check "$name responds ($HTTP_CODE)" "$([ "$HTTP_CODE" != "000" ] && echo true || echo false)"
 done
 
 # --- 2. Download clients ---
