@@ -10,7 +10,7 @@ services:
     image: jellyfin/jellyfin:latest
     container_name: jellyfin
     ports:
-      - "127.0.0.1:8096:8096"
+      - "8096:8096"
     volumes:
       - ~/media/config/jellyfin:/config
       - ~/media/movies:/media/movies
@@ -34,7 +34,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "127.0.0.1:8989:8989"
+      - "8989:8989"
     volumes:
       - ~/media/config/sonarr:/config
       - ~/media/tv:/media/tv
@@ -63,7 +63,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "127.0.0.1:8990:8989"
+      - "8990:8989"
     volumes:
       - ~/media/config/sonarr-anime:/config
       - ~/media/anime:/media/anime
@@ -93,7 +93,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "127.0.0.1:7878:7878"
+      - "7878:7878"
     volumes:
       - ~/media/config/radarr:/config
       - ~/media/movies:/media/movies
@@ -123,7 +123,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "127.0.0.1:9696:9696"
+      - "9696:9696"
     volumes:
       - ~/media/config/prowlarr:/config
     logging: *logging
@@ -147,7 +147,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "127.0.0.1:6767:6767"
+      - "6767:6767"
     volumes:
       - ~/media/config/bazarr:/config
       - ~/media/movies:/media/movies
@@ -171,7 +171,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     volumes:
       - ~/media/config/sabnzbd:/config
       - ~/media/downloads:/downloads
@@ -193,7 +193,7 @@ services:
       - TZ=${TZ:-America/New_York}
       - WEBUI_PORT=8081
     ports:
-      - "127.0.0.1:8081:8081"
+      - "8081:8081"
       - "6881:6881"
       - "6881:6881/udp"
     volumes:
@@ -215,7 +215,7 @@ services:
     environment:
       - TZ=${TZ:-America/New_York}
     ports:
-      - "127.0.0.1:5055:5055"
+      - "5055:5055"
     volumes:
       - ~/media/config/jellyseerr:/app/config
     logging: *logging
@@ -264,7 +264,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "127.0.0.1:8686:8686"
+      - "8686:8686"
     volumes:
       - ~/media/config/lidarr:/config
       - ~/media/music:/media/music
@@ -293,7 +293,7 @@ services:
       - ND_LOGLEVEL=info
       - ND_MUSICFOLDER=/music
     ports:
-      - "127.0.0.1:4533:4533"
+      - "4533:4533"
     volumes:
       - ~/media/config/navidrome:/data
       - ~/media/music:/music:ro
@@ -315,7 +315,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "127.0.0.1:5299:5299"
+      - "5299:5299"
     volumes:
       - ~/media/config/lazylibrarian:/config
       - ~/media/books:/media/books
@@ -338,7 +338,7 @@ services:
     image: jvmilazz0/kavita:latest
     container_name: kavita
     ports:
-      - "127.0.0.1:5000:5000"
+      - "5000:5000"
     volumes:
       - ~/media/config/kavita:/kavita/config
       - ~/media/books:/media/books:ro
@@ -377,7 +377,7 @@ services:
     image: ghcr.io/immich-app/immich-server:release
     container_name: immich
     ports:
-      - "127.0.0.1:2283:2283"
+      - "2283:2283"
     environment:
       - TZ=${TZ:-America/New_York}
       - DB_HOSTNAME=immich-postgres
@@ -462,7 +462,7 @@ services:
       - GITEA__server__ROOT_URL=http://localhost:3000
       - GITEA__mirror__DEFAULT_INTERVAL=1h
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
     volumes:
       - ~/media/config/gitea:/data
     logging: *logging
@@ -479,7 +479,7 @@ services:
     image: louislam/uptime-kuma:latest
     container_name: uptime-kuma
     ports:
-      - "127.0.0.1:3001:3001"
+      - "3001:3001"
     volumes:
       - ~/media/config/uptime-kuma:/app/data
     logging: *logging
@@ -498,7 +498,7 @@ services:
     cap_add:
       - SYS_RAWIO
     ports:
-      - "127.0.0.1:9091:8080"
+      - "9091:8080"
     volumes:
       - ~/media/config/scrutiny:/opt/scrutiny/config
       - /run/udev:/run/udev:ro
@@ -539,7 +539,7 @@ services:
     image: ghcr.io/gethomepage/homepage:latest
     container_name: homepage
     ports:
-      - "127.0.0.1:3002:3000"
+      - "3002:3000"
     volumes:
       - ~/media/config/homepage:/app/config
       - /var/run/docker.sock:/var/run/docker.sock:ro
