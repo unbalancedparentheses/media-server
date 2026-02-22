@@ -226,8 +226,11 @@ services:
       - WEBUI_PORT=8081
     ports:
       - "8081:8081"
-      - "6881:6881"
-      - "6881:6881/udp"
+      # Port 6881 (peer connections) is on gluetun when VPN is enabled.
+      # Without VPN, incoming peer connections won't work but downloads still do.
+      # To enable incoming peers without VPN, uncomment these:
+      # - "6881:6881"
+      # - "6881:6881/udp"
     volumes:
       - ~/media/config/qbittorrent:/config
       - ~/media/downloads:/downloads
