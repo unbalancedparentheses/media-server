@@ -323,6 +323,9 @@ mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazar
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
 
+# Elasticsearch writes as uid 1000 — fix permissions on macOS (uid 501)
+chmod 777 "$CONFIG_DIR/archivist-es" 2>/dev/null || true
+
 ok "~/media/ directory tree ready"
 
 # Pre-seed SABnzbd config to skip the first-run wizard

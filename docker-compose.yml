@@ -361,6 +361,8 @@ services:
       retries: 3
       start_period: 60s
     depends_on:
+      prowlarr:
+        condition: service_started
       qbittorrent:
         condition: service_started
       sabnzbd:
@@ -430,6 +432,8 @@ services:
       radarr:
         condition: service_healthy
       lidarr:
+        condition: service_healthy
+      lazylibrarian:
         condition: service_healthy
 
   # --- YouTube Archiving ---
@@ -529,6 +533,7 @@ services:
       - ~/media/movies:/media/movies
       - ~/media/tv:/media/tv
       - ~/media/anime:/media/anime
+      - ~/media/music:/media/music
       - ~/media/transcode_cache:/temp
     logging: *logging
     restart: unless-stopped
