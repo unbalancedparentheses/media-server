@@ -10,7 +10,7 @@ services:
     image: jellyfin/jellyfin:latest
     container_name: jellyfin
     ports:
-      - "8096:8096"
+      - "127.0.0.1:8096:8096"
     volumes:
       - ~/media/config/jellyfin:/config
       - ~/media/movies:/media/movies
@@ -34,7 +34,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "8989:8989"
+      - "127.0.0.1:8989:8989"
     volumes:
       - ~/media/config/sonarr:/config
       - ~/media/tv:/media/tv
@@ -63,7 +63,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "8990:8989"
+      - "127.0.0.1:8990:8989"
     volumes:
       - ~/media/config/sonarr-anime:/config
       - ~/media/anime:/media/anime
@@ -93,7 +93,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "7878:7878"
+      - "127.0.0.1:7878:7878"
     volumes:
       - ~/media/config/radarr:/config
       - ~/media/movies:/media/movies
@@ -123,7 +123,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "9696:9696"
+      - "127.0.0.1:9696:9696"
     volumes:
       - ~/media/config/prowlarr:/config
     logging: *logging
@@ -147,7 +147,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "6767:6767"
+      - "127.0.0.1:6767:6767"
     volumes:
       - ~/media/config/bazarr:/config
       - ~/media/movies:/media/movies
@@ -171,7 +171,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ~/media/config/sabnzbd:/config
       - ~/media/downloads:/downloads
@@ -193,7 +193,7 @@ services:
       - TZ=${TZ:-America/New_York}
       - WEBUI_PORT=8081
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
       - "6881:6881"
       - "6881:6881/udp"
     volumes:
@@ -215,7 +215,7 @@ services:
     environment:
       - TZ=${TZ:-America/New_York}
     ports:
-      - "5055:5055"
+      - "127.0.0.1:5055:5055"
     volumes:
       - ~/media/config/jellyseerr:/app/config
     logging: *logging
@@ -260,7 +260,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "8686:8686"
+      - "127.0.0.1:8686:8686"
     volumes:
       - ~/media/config/lidarr:/config
       - ~/media/music:/media/music
@@ -289,7 +289,7 @@ services:
       - ND_LOGLEVEL=info
       - ND_MUSICFOLDER=/music
     ports:
-      - "4533:4533"
+      - "127.0.0.1:4533:4533"
     volumes:
       - ~/media/config/navidrome:/data
       - ~/media/music:/music:ro
@@ -311,7 +311,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"
     volumes:
       - ~/media/config/readarr:/config
       - ~/media/books:/media/books
@@ -336,7 +336,7 @@ services:
     image: jvmilazz0/kavita:latest
     container_name: kavita
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     volumes:
       - ~/media/config/kavita:/kavita/config
       - ~/media/books:/media/books:ro
@@ -377,12 +377,12 @@ services:
     image: ghcr.io/immich-app/immich-server:release
     container_name: immich
     ports:
-      - "2283:2283"
+      - "127.0.0.1:2283:2283"
     environment:
       - TZ=${TZ:-America/New_York}
       - DB_HOSTNAME=immich-postgres
       - DB_USERNAME=postgres
-      - DB_PASSWORD=postgres
+      - DB_PASSWORD=${IMMICH_DB_PASSWORD:-changeme}
       - DB_DATABASE_NAME=immich
       - REDIS_HOSTNAME=immich-redis
     volumes:
@@ -408,6 +408,16 @@ services:
       - ~/media/config/immich-ml:/cache
     logging: *logging
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3003/ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   immich-redis:
     image: redis:6.2-alpine
@@ -425,7 +435,7 @@ services:
     image: tensorchord/pgvecto-rs:pg14-v0.2.0
     container_name: immich-postgres
     environment:
-      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_PASSWORD=${IMMICH_DB_PASSWORD:-changeme}
       - POSTGRES_USER=postgres
       - POSTGRES_DB=immich
       - POSTGRES_INITDB_ARGS=--data-checksums
@@ -440,6 +450,46 @@ services:
       retries: 3
       start_period: 30s
 
+  # --- Git Mirror ---
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    environment:
+      - USER_UID=${PUID:-501}
+      - USER_GID=${PGID:-20}
+      - GITEA__database__DB_TYPE=sqlite3
+      - GITEA__server__ROOT_URL=http://localhost:3000
+      - GITEA__mirror__DEFAULT_INTERVAL=1h
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ~/media/config/gitea:/data
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # --- Monitoring ---
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    container_name: uptime-kuma
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - ~/media/config/uptime-kuma:/app/data
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/entry-page', (r) => { process.exit(r.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # --- Disk Health ---
   scrutiny:
     image: ghcr.io/analogj/scrutiny:master-omnibus
@@ -447,7 +497,7 @@ services:
     cap_add:
       - SYS_RAWIO
     ports:
-      - "9091:8080"
+      - "127.0.0.1:9091:8080"
     volumes:
       - ~/media/config/scrutiny:/opt/scrutiny/config
       - /run/udev:/run/udev:ro
@@ -483,26 +533,26 @@ services:
       radarr:
         condition: service_healthy
 
-  # --- Dashboard ---
-  organizr:
-    image: organizr/organizr:latest
-    container_name: organizr
+  # --- Dashboard (Homepage) ---
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    ports:
+      - "127.0.0.1:3002:3000"
+    volumes:
+      - ~/media/config/homepage:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
-      - TZ=${TZ:-America/New_York}
-    ports:
-      - "9090:80"
-    volumes:
-      - ~/media/config/organizr:/config
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 15s
 
   # --- Reverse Proxy + Landing Page ---
   nginx:
@@ -532,8 +582,6 @@ services:
       qbittorrent:
         condition: service_healthy
       jellyseerr:
-        condition: service_healthy
-      organizr:
         condition: service_healthy
       lidarr:
         condition: service_healthy
