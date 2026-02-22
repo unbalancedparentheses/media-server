@@ -723,6 +723,147 @@ services:
       retries: 3
       start_period: 15s
 
+  # --- Media Cleanup (rule-based auto-deletion) ---
+  janitorr:
+    image: ghcr.io/schaka/janitorr:jvm-stable
+    container_name: janitorr
+    user: "${PUID:-501}:${PGID:-20}"
+    volumes:
+      - ~/media/config/janitorr/application.yml:/config/application.yml:ro
+      - ~/media/config/janitorr/logs:/logs
+      - ~/media/movies:/media/movies
+      - ~/media/tv:/media/tv
+      - ~/media/anime:/media/anime
+    logging: *logging
+    restart: unless-stopped
+    mem_limit: 256m
+    depends_on:
+      sonarr:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+      jellyfin:
+        condition: service_healthy
+
+  # --- Local LLMs ---
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    volumes:
+      - ~/media/config/ollama:/root/.ollama
+    logging: *logging
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "127.0.0.1:3100:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    volumes:
+      - ~/media/config/open-webui:/app/backend/data
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080 || curl -fsS http://localhost:8080 >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      ollama:
+        condition: service_started
+
+  # --- Container Management ---
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: watchtower
+    environment:
+      - TZ=${TZ:-America/New_York}
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *
+      - WATCHTOWER_ROLLING_RESTART=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    logging: *logging
+    restart: unless-stopped
+
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: dozzle
+    ports:
+      - "127.0.0.1:9999:8080"
+    environment:
+      - DOZZLE_ENABLE_ACTIONS=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/dozzle", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # --- Security ---
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: crowdsec
+    ports:
+      - "127.0.0.1:8180:8080"
+    environment:
+      - TZ=${TZ:-America/New_York}
+      - COLLECTIONS=crowdsecurity/nginx crowdsecurity/linux crowdsecurity/http-cve
+    volumes:
+      - ~/media/config/crowdsec/config:/etc/crowdsec
+      - ~/media/config/crowdsec/data:/var/lib/crowdsec/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "cscli", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # --- System Monitoring ---
+  beszel:
+    image: henrygd/beszel:latest
+    container_name: beszel
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ~/media/config/beszel:/beszel_data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8090/api/health || curl -fsS http://localhost:8090/api/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  beszel-agent:
+    image: henrygd/beszel-agent:latest
+    container_name: beszel-agent
+    network_mode: host
+    environment:
+      - PORT=45876
+      - KEY=${BESZEL_AGENT_KEY:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    logging: *logging
+    restart: unless-stopped
+
   # --- Reverse Proxy + Landing Page ---
   nginx:
     image: nginx:alpine

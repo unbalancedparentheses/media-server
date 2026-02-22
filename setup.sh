@@ -207,6 +207,10 @@ if [ "$MODE" = "test" ]; then
   TUBEARCHIVIST_URL="http://localhost:8000"
   TDARR_URL="http://localhost:8265"
   AUTOBRR_URL="http://localhost:7474"
+  OPEN_WEBUI_URL="http://localhost:3100"
+  DOZZLE_URL="http://localhost:9999"
+  BESZEL_URL="http://localhost:8090"
+  CROWDSEC_URL="http://localhost:8180"
   SCRUTINY_URL="http://localhost:9091"
   GITEA_URL="http://localhost:3000"
   UPTIME_KUMA_URL="http://localhost:3001"
@@ -314,7 +318,7 @@ mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
 mkdir -p "$MEDIA_DIR"/{youtube,transcode_cache}
-mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,autobrr,gluetun,tubearchivist/cache,archivist-es,archivist-redis,tdarr/server,tdarr/configs,tdarr/logs,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,autobrr,gluetun,tubearchivist/cache,archivist-es,archivist-redis,tdarr/server,tdarr/configs,tdarr/logs,janitorr,ollama,open-webui,crowdsec/config,crowdsec/data,beszel,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
@@ -396,7 +400,7 @@ ok "All containers started"
 # ═══════════════════════════════════════════════════════════════════
 info "Checking /etc/hosts..."
 
-DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local tubearchivist.media.local tdarr.media.local autobrr.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local tubearchivist.media.local tdarr.media.local autobrr.media.local open-webui.media.local dozzle.media.local beszel.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
 
 if grep -q "media.local" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
@@ -449,6 +453,10 @@ IMMICH_URL="http://localhost:2283"
 TUBEARCHIVIST_URL="http://localhost:8000"
 TDARR_URL="http://localhost:8265"
 AUTOBRR_URL="http://localhost:7474"
+OPEN_WEBUI_URL="http://localhost:3100"
+DOZZLE_URL="http://localhost:9999"
+BESZEL_URL="http://localhost:8090"
+CROWDSEC_URL="http://localhost:8180"
 SCRUTINY_URL="http://localhost:9091"
 GITEA_URL="http://localhost:3000"
 UPTIME_KUMA_URL="http://localhost:3001"
@@ -483,6 +491,9 @@ wait_for "Tdarr"        "$TDARR_URL"
 wait_for "Immich"       "$IMMICH_URL/api/server/ping"
 wait_for "Gitea"        "$GITEA_URL/api/v1/version"
 wait_for "Uptime Kuma"  "$UPTIME_KUMA_URL"
+wait_for "Open WebUI"   "$OPEN_WEBUI_URL"
+wait_for "Dozzle"       "$DOZZLE_URL"
+wait_for "Beszel"       "$BESZEL_URL/api/health"
 wait_for "Homepage"     "$HOMEPAGE_URL"
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1819,6 +1830,10 @@ for svc_url in \
   "Scrutiny:$SCRUTINY_URL/api/health" \
   "Gitea:$GITEA_URL/api/v1/version" \
   "Uptime Kuma:$UPTIME_KUMA_URL" \
+  "Open WebUI:$OPEN_WEBUI_URL" \
+  "Dozzle:$DOZZLE_URL" \
+  "Beszel:$BESZEL_URL/api/health" \
+  "CrowdSec:$CROWDSEC_URL/health" \
   "Homepage:$HOMEPAGE_URL" \
   ; do
   name="${svc_url%%:*}"
@@ -2037,7 +2052,7 @@ check "Proxy → SABnzbd queue" "$(curl -sf 'http://localhost/api/sabnzbd/?mode=
 # --- 13. Docker containers ---
 info "Docker containers..."
 
-for container in jellyfin sonarr sonarr-anime radarr lidarr lazylibrarian prowlarr bazarr sabnzbd gluetun qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr autobrr tubearchivist archivist-es archivist-redis tdarr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
+for container in jellyfin sonarr sonarr-anime radarr lidarr lazylibrarian prowlarr bazarr sabnzbd gluetun qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr autobrr tubearchivist archivist-es archivist-redis tdarr janitorr ollama open-webui watchtower dozzle crowdsec beszel navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
   STATUS=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "missing")
   check "Container: $container" "$([ "$STATUS" = "running" ] && echo true || echo false)"
 done
