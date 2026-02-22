@@ -19,7 +19,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8096/health"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8096/health || curl -fsS http://localhost:8096/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -42,7 +42,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8989/ping"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8989/ping || curl -fsS http://localhost:8989/ping >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -71,7 +71,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8989/ping"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8989/ping || curl -fsS http://localhost:8989/ping >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -101,7 +101,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7878/ping"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7878/ping || curl -fsS http://localhost:7878/ping >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -129,7 +129,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9696/ping"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9696/ping || curl -fsS http://localhost:9696/ping >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -156,7 +156,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6767"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:6767 || curl -fsS http://localhost:6767 >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -178,7 +178,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080 || curl -fsS http://localhost:8080 >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -202,7 +202,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081 || curl -fsS http://localhost:8081 >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -221,7 +221,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:5055/api/v1/status || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5055/api/v1/status || curl -fsS http://localhost:5055/api/v1/status >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -244,12 +244,9 @@ services:
       - TZ=${TZ:-America/New_York}
     logging: *logging
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 2G
+    mem_limit: 2g
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8191/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8191/health || curl -fsS http://localhost:8191/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -272,7 +269,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8686/ping"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8686/ping || curl -fsS http://localhost:8686/ping >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -300,7 +297,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4533/ping"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:4533/ping || curl -fsS http://localhost:4533/ping >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -308,7 +305,7 @@ services:
 
   # --- Books ---
   readarr:
-    image: lscr.io/linuxserver/readarr:develop
+    image: lscr.io/linuxserver/readarr:latest
     container_name: readarr
     environment:
       - PUID=${PUID:-501}
@@ -323,7 +320,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8787/ping"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8787/ping || curl -fsS http://localhost:8787/ping >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -347,7 +344,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5000 || curl -fsS http://localhost:5000 >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -394,7 +391,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2283/api/server/ping"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:2283/api/server/ping || curl -fsS http://localhost:2283/api/server/ping >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -412,12 +409,9 @@ services:
       - ~/media/config/immich-ml:/cache
     logging: *logging
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 4G
+    mem_limit: 4g
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3003/ping')"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3003/ping')\" >/dev/null 2>&1 || wget -q --spider http://localhost:3003/ping || curl -fsS http://localhost:3003/ping >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -472,7 +466,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/version"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/v1/version || curl -fsS http://localhost:3000/api/v1/version >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -513,7 +507,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/api/health || curl -fsS http://localhost:8080/api/health >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -553,7 +547,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000 || curl -fsS http://localhost:3000 >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -572,7 +566,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/ || curl -fsS http://127.0.0.1:80/ >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -25,6 +25,16 @@ info()  { printf "\n\033[1;34m=> %s\033[0m\n" "$*"; }
 ok()    { printf "\033[1;32m   ✓ %s\033[0m\n" "$*"; }
 warn()  { printf "\033[1;33m   ! %s\033[0m\n" "$*"; }
 err()   { printf "\033[1;31m   ✗ %s\033[0m\n" "$*"; exit 1; }
+mask_secret() {
+  local value="$1"
+  local keep="${2:-4}"
+  [ -z "$value" ] && { printf "<empty>"; return; }
+  if [ "${#value}" -le "$keep" ]; then
+    printf "****"
+  else
+    printf "%s..." "${value:0:$keep}"
+  fi
+}
 
 api() {
   local method="$1" url="$2"; shift 2
@@ -368,10 +378,22 @@ DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.lo
 if grep -q "media.local" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
 else
+  append_hosts_entries() {
+    sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"
+  }
+
   echo ""
   echo "  Adding .media.local domains to /etc/hosts (requires sudo)..."
   echo ""
-  if sudo -n true 2>/dev/null || sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"; then
+
+  if sudo -n true 2>/dev/null; then
+    if append_hosts_entries; then
+      ok "Hosts entries added"
+    else
+      warn "Could not update /etc/hosts (sudo command failed). Run manually:"
+      echo "    echo '127.0.0.1 $DOMAINS' | sudo tee -a /etc/hosts"
+    fi
+  elif append_hosts_entries; then
     ok "Hosts entries added"
   else
     warn "Could not update /etc/hosts (no sudo). Run manually:"
@@ -477,15 +499,15 @@ QBIT_PASS="$QBIT_CONFIGURED_PASS"
 JELLYSEERR_KEY=""
 [ -f "$CONFIG_DIR/jellyseerr/settings.json" ] && JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
 
-[ -n "$SONARR_KEY" ]       && ok "Sonarr:       $SONARR_KEY"       || err "Sonarr key not found"
-[ -n "$SONARR_ANIME_KEY" ] && ok "Sonarr Anime: $SONARR_ANIME_KEY" || err "Sonarr Anime key not found"
-[ -n "$RADARR_KEY" ]       && ok "Radarr:       $RADARR_KEY"       || err "Radarr key not found"
-[ -n "$LIDARR_KEY" ]       && ok "Lidarr:       $LIDARR_KEY"       || err "Lidarr key not found"
-[ -n "$READARR_KEY" ]      && ok "Readarr:      $READARR_KEY"      || err "Readarr key not found"
-[ -n "$PROWLARR_KEY" ]     && ok "Prowlarr:     $PROWLARR_KEY"     || err "Prowlarr key not found"
-[ -n "$SABNZBD_KEY" ]      && ok "SABnzbd:      $SABNZBD_KEY"      || warn "SABnzbd key not found"
-[ -n "$JELLYSEERR_KEY" ]   && ok "Jellyseerr:   ${JELLYSEERR_KEY:0:8}..."  || warn "Jellyseerr key not found (will read after setup)"
-ok "qBittorrent:  admin / $QBIT_PASS"
+[ -n "$SONARR_KEY" ]       && ok "Sonarr:       $(mask_secret "$SONARR_KEY")"       || err "Sonarr key not found"
+[ -n "$SONARR_ANIME_KEY" ] && ok "Sonarr Anime: $(mask_secret "$SONARR_ANIME_KEY")" || err "Sonarr Anime key not found"
+[ -n "$RADARR_KEY" ]       && ok "Radarr:       $(mask_secret "$RADARR_KEY")"       || err "Radarr key not found"
+[ -n "$LIDARR_KEY" ]       && ok "Lidarr:       $(mask_secret "$LIDARR_KEY")"       || err "Lidarr key not found"
+[ -n "$READARR_KEY" ]      && ok "Readarr:      $(mask_secret "$READARR_KEY")"      || err "Readarr key not found"
+[ -n "$PROWLARR_KEY" ]     && ok "Prowlarr:     $(mask_secret "$PROWLARR_KEY")"     || err "Prowlarr key not found"
+[ -n "$SABNZBD_KEY" ]      && ok "SABnzbd:      $(mask_secret "$SABNZBD_KEY")"      || warn "SABnzbd key not found"
+[ -n "$JELLYSEERR_KEY" ]   && ok "Jellyseerr:   $(mask_secret "$JELLYSEERR_KEY")"  || warn "Jellyseerr key not found (will read after setup)"
+ok "qBittorrent:  $QBIT_USER / $(mask_secret "$QBIT_PASS")"
 
 # ═══════════════════════════════════════════════════════════════════
 # 8. QBITTORRENT
@@ -589,7 +611,7 @@ if [ -n "$JELLYFIN_TOKEN" ]; then
   [ "$EXISTING_KEYS" = "0" ] || [ -z "$EXISTING_KEYS" ] && \
     api POST "$JELLYFIN_URL/Auth/Keys?app=MediaServer" -H "X-Emby-Token: $JELLYFIN_TOKEN" >/dev/null 2>&1 || true
   JELLYFIN_API_KEY=$(api GET "$JELLYFIN_URL/Auth/Keys" -H "X-Emby-Token: $JELLYFIN_TOKEN" 2>/dev/null | jq -r '.Items[-1].AccessToken // empty' 2>/dev/null || echo "")
-  [ -n "$JELLYFIN_API_KEY" ] && ok "API key: $JELLYFIN_API_KEY"
+  [ -n "$JELLYFIN_API_KEY" ] && ok "API key: $(mask_secret "$JELLYFIN_API_KEY")"
 
   # Enable real-time monitoring and daily scans on all libraries
   LIBS_JSON=$(api GET "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JELLYFIN_TOKEN" 2>/dev/null || echo "[]")
@@ -755,7 +777,7 @@ if [ -n "$PROWLARR_KEY" ]; then
         "syncLevel":"fullSync","tags":'"$tags_json"',
         "fields":[{"name":"prowlarrUrl","value":"'"$PROWLARR_INTERNAL"'"},
           {"name":"baseUrl","value":"'"$url"'"},{"name":"apiKey","value":"'"$key"'"},
-          {"name":"syncCategories","value":['"$cats"']}]
+          {"name":"syncCategories","value":'"$cats"'}]
       }' >/dev/null 2>&1 && ok "$name connected" || warn "Could not connect $name"
     else ok "$name connected"; fi
   }
@@ -767,8 +789,8 @@ if [ -n "$PROWLARR_KEY" ]; then
     [ -n "$ANIME_TAG_ID" ] && ok "Created anime tag (id: $ANIME_TAG_ID)"
   fi
 
-  SONARR_CATS="5000,5010,5020,5030,5040,5045,5050,5090"
-  RADARR_CATS="2000,2010,2020,2030,2040,2045,2050,2060,2070,2080,2090"
+  SONARR_CATS='[5000,5010,5020,5030,5040,5045,5050,5090]'
+  RADARR_CATS='[2000,2010,2020,2030,2040,2045,2050,2060,2070,2080,2090]'
 
   # Sonarr Anime gets the anime tag — only anime-tagged indexers sync to it
   [ -n "$SONARR_KEY" ]       && add_prowlarr_app "Sonarr"       "Sonarr" "$SONARR_INTERNAL"       "$SONARR_KEY"       "$SONARR_CATS"

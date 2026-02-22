@@ -1,6 +1,6 @@
 # media-server
 
-One-command setup for a self-hosted media server on macOS. Automates 13 Docker containers, wires them together, and verifies everything works.
+One-command setup for a self-hosted media server on macOS. Automates a full Docker media stack, wires services together, and verifies everything works.
 
 ```
 bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)
@@ -21,7 +21,6 @@ A fully automated media pipeline — request a movie or TV show, and it gets dow
 - **SABnzbd** — usenet download client. If you have a usenet provider (Newshosting, Eweka, etc.), Sonarr/Radarr will use this for NZB downloads. Faster and more private than torrents, but requires a paid provider subscription
 - **Recyclarr** — syncs quality profiles from TRaSH Guides (community-maintained best practices for Sonarr/Radarr). Runs weekly to keep your quality preferences, custom formats, and release scoring up to date
 - **FlareSolverr** — a headless browser that solves Cloudflare challenges. Some torrent indexers (like 1337x) use Cloudflare protection — FlareSolverr lets Prowlarr access them without manual intervention
-- **Organizr** — unified dashboard with tabs for all services. One URL to access everything with a single login
 - **Nginx** — reverse proxy that maps `.media.local` domains to each service (e.g., `jellyfin.media.local`). Also serves a landing page with links and live API widgets showing system status
 
 ## Quick start
@@ -54,9 +53,9 @@ The script is fully idempotent — safe to re-run at any time. Each step checks 
 2. **Checks Tailscale** — verifies you're signed in for remote access. If not, it warns you and continues (local access still works)
 3. **Creates the `~/media/` directory structure** — library folders for movies/tv/anime, download staging areas for torrents and usenet, config directories for each service, and a backups folder
 4. **Pre-seeds SABnzbd config** — generates an API key and skips the first-run wizard so SABnzbd starts ready to use
-5. **Starts all 13 containers** with Docker Compose — generates a `.env` file with your user/group IDs and timezone, then brings up the full stack
+5. **Starts all containers** with Docker Compose — generates a `.env` file with your user/group IDs and timezone, then brings up the full stack
 6. **Adds `.media.local` domains to `/etc/hosts`** — maps `media.local`, `jellyfin.media.local`, `sonarr.media.local`, etc. to `127.0.0.1` so you can use friendly URLs instead of `localhost:port`. Requires sudo
-7. **Configures every service** — sets up Jellyfin (user account, libraries, metadata), qBittorrent (credentials, download paths, seeding rules), SABnzbd (usenet providers), Sonarr/Radarr (root folders, download clients, quality profiles), Prowlarr (indexers, app sync), Bazarr (subtitle languages, providers), Jellyseerr (Jellyfin integration, Sonarr/Radarr connections), Organizr (tabs, auth), and Nginx (reverse proxy, landing page)
+7. **Configures every service** — sets up Jellyfin (user account, libraries, metadata), qBittorrent (credentials, download paths, seeding rules), SABnzbd (usenet providers), Sonarr/Radarr (root folders, download clients, quality profiles), Prowlarr (indexers, app sync), Bazarr (subtitle languages, providers), Jellyseerr (Jellyfin integration, Sonarr/Radarr connections), and Nginx (reverse proxy, landing page)
 8. **Runs ~77 verification checks** — tests every service is healthy, every API connection works, every integration is wired correctly, and every container is running
 
 ## Configuration
@@ -73,11 +72,6 @@ password = "changeme"
 [qbittorrent]
 username = "admin"
 password = "changeme"
-
-[organizr]
-username = "admin"
-password = "changeme"
-email = "admin@media.local"
 ```
 
 These set the login credentials for each service. Change them from the defaults before running setup.
@@ -201,7 +195,7 @@ All services are accessible on localhost and via `.media.local` domains (added t
 | Bazarr | 6767 | http://bazarr.media.local |
 | qBittorrent | 8081 | http://qbittorrent.media.local |
 | SABnzbd | 8080 | http://sabnzbd.media.local |
-| Organizr | 9090 | http://organizr.media.local |
+| Homepage | 3002 | http://homepage.media.local |
 
 ## Directory structure
 
