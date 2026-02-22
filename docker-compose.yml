@@ -307,6 +307,33 @@ services:
       start_period: 30s
 
   # --- Books ---
+  lazylibrarian:
+    image: lscr.io/linuxserver/lazylibrarian:latest
+    container_name: lazylibrarian
+    environment:
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
+    ports:
+      - "127.0.0.1:5299:5299"
+    volumes:
+      - ~/media/config/lazylibrarian:/config
+      - ~/media/books:/media/books
+      - ~/media/downloads:/downloads
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5299"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      qbittorrent:
+        condition: service_started
+      sabnzbd:
+        condition: service_started
+
   kavita:
     image: jvmilazz0/kavita:latest
     container_name: kavita

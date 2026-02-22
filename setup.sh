@@ -34,7 +34,10 @@ api() {
 wait_for() {
   local name="$1" url="$2" max=90 i=0
   printf "   Waiting for %-15s" "$name..."
-  while ! curl -sf -o /dev/null --connect-timeout 2 "$url" 2>/dev/null; do
+  while true; do
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 "$url" 2>/dev/null || echo "000")
+    [ "$code" != "000" ] && break
     i=$((i + 1))
     [ "$i" -ge "$max" ] && echo " timeout!" && return 1
     sleep 1
@@ -197,6 +200,7 @@ if [ "$MODE" = "test" ]; then
   JELLYSEERR_KEY=""
   [ -f "$CONFIG_DIR/jellyseerr/settings.json" ] && JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
   LIDARR_URL="http://localhost:8686"
+  LAZYLIBRARIAN_URL="http://localhost:5299"
   NAVIDROME_URL="http://localhost:4533"
   KAVITA_URL="http://localhost:5000"
   IMMICH_URL="http://localhost:2283"
@@ -306,7 +310,7 @@ mkdir -p "$MEDIA_DIR"/{movies,tv,anime,music,books,photos}
 mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
-mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,navidrome,kavita,unpackerr,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
@@ -361,7 +365,7 @@ ok "All containers started"
 # ═══════════════════════════════════════════════════════════════════
 info "Checking /etc/hosts..."
 
-DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local navidrome.media.local kavita.media.local immich.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
 
 if grep -q "media.local" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
@@ -407,6 +411,7 @@ SABNZBD_URL="http://localhost:8080"
 JELLYSEERR_URL="http://localhost:5055"
 
 LIDARR_URL="http://localhost:8686"
+LAZYLIBRARIAN_URL="http://localhost:5299"
 NAVIDROME_URL="http://localhost:4533"
 KAVITA_URL="http://localhost:5000"
 IMMICH_URL="http://localhost:2283"
@@ -435,6 +440,7 @@ wait_for "SABnzbd"      "$SABNZBD_URL"
 wait_for "qBittorrent"  "$QBIT_URL"
 wait_for "Jellyseerr"   "$JELLYSEERR_URL"
 wait_for "Lidarr"       "$LIDARR_URL/ping"
+wait_for "LazyLibrarian" "$LAZYLIBRARIAN_URL"
 wait_for "Navidrome"    "$NAVIDROME_URL/ping"
 wait_for "Kavita"       "$KAVITA_URL"
 wait_for "Immich"       "$IMMICH_URL/api/server/ping"
@@ -1701,6 +1707,7 @@ for svc_url in \
   "qBittorrent:$QBIT_URL" \
   "Jellyseerr:$JELLYSEERR_URL" \
   "Lidarr:$LIDARR_URL/ping" \
+  "LazyLibrarian:$LAZYLIBRARIAN_URL" \
   "Navidrome:$NAVIDROME_URL/ping" \
   "Kavita:$KAVITA_URL" \
   "Immich:$IMMICH_URL/api/server/ping" \
@@ -1925,7 +1932,7 @@ check "Proxy → SABnzbd queue" "$(curl -sf 'http://localhost/api/sabnzbd/?mode=
 # --- 13. Docker containers ---
 info "Docker containers..."
 
-for container in jellyfin sonarr sonarr-anime radarr lidarr prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
+for container in jellyfin sonarr sonarr-anime radarr lidarr lazylibrarian prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
   STATUS=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "missing")
   check "Container: $container" "$([ "$STATUS" = "running" ] && echo true || echo false)"
 done
