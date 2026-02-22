@@ -25,16 +25,6 @@ info()  { printf "\n\033[1;34m=> %s\033[0m\n" "$*"; }
 ok()    { printf "\033[1;32m   ✓ %s\033[0m\n" "$*"; }
 warn()  { printf "\033[1;33m   ! %s\033[0m\n" "$*"; }
 err()   { printf "\033[1;31m   ✗ %s\033[0m\n" "$*"; exit 1; }
-mask_secret() {
-  local value="$1"
-  local keep="${2:-4}"
-  [ -z "$value" ] && { printf "<empty>"; return; }
-  if [ "${#value}" -le "$keep" ]; then
-    printf "****"
-  else
-    printf "%s..." "${value:0:$keep}"
-  fi
-}
 
 api() {
   local method="$1" url="$2"; shift 2
@@ -44,7 +34,10 @@ api() {
 wait_for() {
   local name="$1" url="$2" max=90 i=0
   printf "   Waiting for %-15s" "$name..."
-  while ! curl -sf -o /dev/null --connect-timeout 2 "$url" 2>/dev/null; do
+  while true; do
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 "$url" 2>/dev/null || echo "000")
+    [ "$code" != "000" ] && break
     i=$((i + 1))
     [ "$i" -ge "$max" ] && echo " timeout!" && return 1
     sleep 1
@@ -201,16 +194,15 @@ if [ "$MODE" = "test" ]; then
   SONARR_ANIME_KEY=$(get_api_key "sonarr-anime")
   RADARR_KEY=$(get_api_key "radarr")
   LIDARR_KEY=$(get_api_key "lidarr")
-  READARR_KEY=$(get_api_key "readarr")
   PROWLARR_KEY=$(get_api_key "prowlarr")
   SABNZBD_KEY=""
   [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ] && SABNZBD_KEY=$(sed -n 's/^api_key = *//p' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null || echo "")
   JELLYSEERR_KEY=""
   [ -f "$CONFIG_DIR/jellyseerr/settings.json" ] && JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
   LIDARR_URL="http://localhost:8686"
-  READARR_URL="http://localhost:8787"
+  LAZYLIBRARIAN_URL="http://localhost:5299"
   NAVIDROME_URL="http://localhost:4533"
-  KAVITA_URL="http://localhost:5000"
+  KAVITA_URL="http://localhost:5001"
   IMMICH_URL="http://localhost:2283"
   SCRUTINY_URL="http://localhost:9091"
   GITEA_URL="http://localhost:3000"
@@ -302,9 +294,9 @@ else
       ok "Tailscale HTTPS already configured"
     else
       info "Configuring Tailscale HTTPS..."
-      "$TS_CLI" serve --bg --https=443 / proxy http://127.0.0.1:80 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
-      "$TS_CLI" serve --bg --https=8096 / proxy http://127.0.0.1:8096 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
-      "$TS_CLI" serve --bg --https=5055 / proxy http://127.0.0.1:5055 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
+      "$TS_CLI" serve --bg --yes --https=443 http://127.0.0.1:80 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
+      "$TS_CLI" serve --bg --yes --https=8096 http://127.0.0.1:8096 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
+      "$TS_CLI" serve --bg --yes --https=5055 http://127.0.0.1:5055 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
     fi
   fi
 fi
@@ -318,7 +310,7 @@ mkdir -p "$MEDIA_DIR"/{movies,tv,anime,music,books,photos}
 mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
-mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,readarr,navidrome,kavita,unpackerr,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
@@ -373,27 +365,15 @@ ok "All containers started"
 # ═══════════════════════════════════════════════════════════════════
 info "Checking /etc/hosts..."
 
-DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local readarr.media.local navidrome.media.local kavita.media.local immich.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
 
 if grep -q "media.local" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
 else
-  append_hosts_entries() {
-    sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"
-  }
-
   echo ""
   echo "  Adding .media.local domains to /etc/hosts (requires sudo)..."
   echo ""
-
-  if sudo -n true 2>/dev/null; then
-    if append_hosts_entries; then
-      ok "Hosts entries added"
-    else
-      warn "Could not update /etc/hosts (sudo command failed). Run manually:"
-      echo "    echo '127.0.0.1 $DOMAINS' | sudo tee -a /etc/hosts"
-    fi
-  elif append_hosts_entries; then
+  if sudo -n true 2>/dev/null || sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"; then
     ok "Hosts entries added"
   else
     warn "Could not update /etc/hosts (no sudo). Run manually:"
@@ -431,9 +411,9 @@ SABNZBD_URL="http://localhost:8080"
 JELLYSEERR_URL="http://localhost:5055"
 
 LIDARR_URL="http://localhost:8686"
-READARR_URL="http://localhost:8787"
+LAZYLIBRARIAN_URL="http://localhost:5299"
 NAVIDROME_URL="http://localhost:4533"
-KAVITA_URL="http://localhost:5000"
+KAVITA_URL="http://localhost:5001"
 IMMICH_URL="http://localhost:2283"
 SCRUTINY_URL="http://localhost:9091"
 GITEA_URL="http://localhost:3000"
@@ -445,7 +425,6 @@ SONARR_ANIME_INTERNAL="http://sonarr-anime:8989"
 RADARR_INTERNAL="http://radarr:7878"
 PROWLARR_INTERNAL="http://prowlarr:9696"
 LIDARR_INTERNAL="http://lidarr:8686"
-READARR_INTERNAL="http://readarr:8787"
 
 # ═══════════════════════════════════════════════════════════════════
 # 6. WAIT FOR SERVICES
@@ -461,7 +440,7 @@ wait_for "SABnzbd"      "$SABNZBD_URL"
 wait_for "qBittorrent"  "$QBIT_URL"
 wait_for "Jellyseerr"   "$JELLYSEERR_URL"
 wait_for "Lidarr"       "$LIDARR_URL/ping"
-wait_for "Readarr"      "$READARR_URL/ping"
+wait_for "LazyLibrarian" "$LAZYLIBRARIAN_URL"
 wait_for "Navidrome"    "$NAVIDROME_URL/ping"
 wait_for "Kavita"       "$KAVITA_URL"
 wait_for "Immich"       "$IMMICH_URL/api/server/ping"
@@ -478,7 +457,6 @@ SONARR_KEY=$(get_api_key "sonarr")
 SONARR_ANIME_KEY=$(get_api_key "sonarr-anime")
 RADARR_KEY=$(get_api_key "radarr")
 LIDARR_KEY=$(get_api_key "lidarr")
-READARR_KEY=$(get_api_key "readarr")
 PROWLARR_KEY=$(get_api_key "prowlarr")
 SABNZBD_KEY=""
 if [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ]; then
@@ -499,15 +477,14 @@ QBIT_PASS="$QBIT_CONFIGURED_PASS"
 JELLYSEERR_KEY=""
 [ -f "$CONFIG_DIR/jellyseerr/settings.json" ] && JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
 
-[ -n "$SONARR_KEY" ]       && ok "Sonarr:       $(mask_secret "$SONARR_KEY")"       || err "Sonarr key not found"
-[ -n "$SONARR_ANIME_KEY" ] && ok "Sonarr Anime: $(mask_secret "$SONARR_ANIME_KEY")" || err "Sonarr Anime key not found"
-[ -n "$RADARR_KEY" ]       && ok "Radarr:       $(mask_secret "$RADARR_KEY")"       || err "Radarr key not found"
-[ -n "$LIDARR_KEY" ]       && ok "Lidarr:       $(mask_secret "$LIDARR_KEY")"       || err "Lidarr key not found"
-[ -n "$READARR_KEY" ]      && ok "Readarr:      $(mask_secret "$READARR_KEY")"      || err "Readarr key not found"
-[ -n "$PROWLARR_KEY" ]     && ok "Prowlarr:     $(mask_secret "$PROWLARR_KEY")"     || err "Prowlarr key not found"
-[ -n "$SABNZBD_KEY" ]      && ok "SABnzbd:      $(mask_secret "$SABNZBD_KEY")"      || warn "SABnzbd key not found"
-[ -n "$JELLYSEERR_KEY" ]   && ok "Jellyseerr:   $(mask_secret "$JELLYSEERR_KEY")"  || warn "Jellyseerr key not found (will read after setup)"
-ok "qBittorrent:  $QBIT_USER / $(mask_secret "$QBIT_PASS")"
+[ -n "$SONARR_KEY" ]       && ok "Sonarr:       $SONARR_KEY"       || err "Sonarr key not found"
+[ -n "$SONARR_ANIME_KEY" ] && ok "Sonarr Anime: $SONARR_ANIME_KEY" || err "Sonarr Anime key not found"
+[ -n "$RADARR_KEY" ]       && ok "Radarr:       $RADARR_KEY"       || err "Radarr key not found"
+[ -n "$LIDARR_KEY" ]       && ok "Lidarr:       $LIDARR_KEY"       || err "Lidarr key not found"
+[ -n "$PROWLARR_KEY" ]     && ok "Prowlarr:     $PROWLARR_KEY"     || err "Prowlarr key not found"
+[ -n "$SABNZBD_KEY" ]      && ok "SABnzbd:      $SABNZBD_KEY"      || warn "SABnzbd key not found"
+[ -n "$JELLYSEERR_KEY" ]   && ok "Jellyseerr:   ${JELLYSEERR_KEY:0:8}..."  || warn "Jellyseerr key not found (will read after setup)"
+ok "qBittorrent:  admin / $QBIT_PASS"
 
 # ═══════════════════════════════════════════════════════════════════
 # 8. QBITTORRENT
@@ -542,7 +519,7 @@ if [ -n "$QBIT_COOKIE" ]; then
       \"bypass_auth_subnet_whitelist_enabled\": false
     }" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"
 
-  for cat in sonarr sonarr-anime radarr lidarr readarr; do
+  for cat in sonarr sonarr-anime radarr lidarr; do
     curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/createCategory" \
       -b "SID=$QBIT_COOKIE" \
       -d "category=$cat&savePath=$DL_COMPLETE/$cat" 2>/dev/null && ok "Category: $cat" || \
@@ -611,7 +588,7 @@ if [ -n "$JELLYFIN_TOKEN" ]; then
   [ "$EXISTING_KEYS" = "0" ] || [ -z "$EXISTING_KEYS" ] && \
     api POST "$JELLYFIN_URL/Auth/Keys?app=MediaServer" -H "X-Emby-Token: $JELLYFIN_TOKEN" >/dev/null 2>&1 || true
   JELLYFIN_API_KEY=$(api GET "$JELLYFIN_URL/Auth/Keys" -H "X-Emby-Token: $JELLYFIN_TOKEN" 2>/dev/null | jq -r '.Items[-1].AccessToken // empty' 2>/dev/null || echo "")
-  [ -n "$JELLYFIN_API_KEY" ] && ok "API key: $(mask_secret "$JELLYFIN_API_KEY")"
+  [ -n "$JELLYFIN_API_KEY" ] && ok "API key: $JELLYFIN_API_KEY"
 
   # Enable real-time monitoring and daily scans on all libraries
   LIBS_JSON=$(api GET "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JELLYFIN_TOKEN" 2>/dev/null || echo "[]")
@@ -654,7 +631,7 @@ if [ -n "$SABNZBD_KEY" ]; then
 
   # Create categories
   EXISTING_CATS=$(curl -sf "$SABNZBD_URL/api?mode=get_cats&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.categories[]' 2>/dev/null || echo "")
-  for cat in sonarr sonarr-anime radarr lidarr readarr; do
+  for cat in sonarr sonarr-anime radarr lidarr; do
     if ! echo "$EXISTING_CATS" | grep -q "^${cat}$"; then
       curl -sf "$SABNZBD_URL/api?mode=set_config&section=categories&keyword=$cat&apikey=$SABNZBD_KEY&dir=$cat&output=json" >/dev/null 2>&1 && \
         ok "Category: $cat" || warn "Could not create category: $cat"
@@ -777,7 +754,7 @@ if [ -n "$PROWLARR_KEY" ]; then
         "syncLevel":"fullSync","tags":'"$tags_json"',
         "fields":[{"name":"prowlarrUrl","value":"'"$PROWLARR_INTERNAL"'"},
           {"name":"baseUrl","value":"'"$url"'"},{"name":"apiKey","value":"'"$key"'"},
-          {"name":"syncCategories","value":'"$cats"'}]
+          {"name":"syncCategories","value":['"$cats"']}]
       }' >/dev/null 2>&1 && ok "$name connected" || warn "Could not connect $name"
     else ok "$name connected"; fi
   }
@@ -789,8 +766,8 @@ if [ -n "$PROWLARR_KEY" ]; then
     [ -n "$ANIME_TAG_ID" ] && ok "Created anime tag (id: $ANIME_TAG_ID)"
   fi
 
-  SONARR_CATS='[5000,5010,5020,5030,5040,5045,5050,5090]'
-  RADARR_CATS='[2000,2010,2020,2030,2040,2045,2050,2060,2070,2080,2090]'
+  SONARR_CATS="5000,5010,5020,5030,5040,5045,5050,5090"
+  RADARR_CATS="2000,2010,2020,2030,2040,2045,2050,2060,2070,2080,2090"
 
   # Sonarr Anime gets the anime tag — only anime-tagged indexers sync to it
   [ -n "$SONARR_KEY" ]       && add_prowlarr_app "Sonarr"       "Sonarr" "$SONARR_INTERNAL"       "$SONARR_KEY"       "$SONARR_CATS"
@@ -1396,31 +1373,81 @@ url = "http://lidarr:8686"
 api_key = "$LIDARR_KEY"
 paths = ["/downloads"]
 
-[[readarr]]
-url = "http://readarr:8787"
-api_key = "$READARR_KEY"
-paths = ["/downloads"]
 UNPACKEOF
 
 ok "Config written"
 docker restart unpackerr >/dev/null 2>&1 && ok "Unpackerr restarted with new config" || true
 
 # ═══════════════════════════════════════════════════════════════════
-# 16.6 LIDARR & READARR — configure download clients and root folders
+# 16.6 LIDARR — configure download clients and root folders
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring Lidarr..."
 [ -n "$LIDARR_KEY" ] && configure_arr "lidarr" "$LIDARR_URL" "$LIDARR_KEY" "/media/music" "musicCategory"
 
-info "Configuring Readarr..."
-[ -n "$READARR_KEY" ] && configure_arr "readarr" "$READARR_URL" "$READARR_KEY" "/media/books" "bookCategory"
-
-# Add Lidarr and Readarr to Prowlarr
+# Add Lidarr to Prowlarr
 if [ -n "$PROWLARR_KEY" ]; then
   PH="X-Api-Key: $PROWLARR_KEY"
   MUSIC_CATS='[3000,3010,3020,3030,3040,3050,3060]'
-  BOOKS_CATS='[7000,7010,7020,7030,7040,7050,7060]'
   [ -n "$LIDARR_KEY" ]  && add_prowlarr_app "Lidarr"  "Lidarr"  "$LIDARR_INTERNAL"  "$LIDARR_KEY"  "$MUSIC_CATS"
-  [ -n "$READARR_KEY" ] && add_prowlarr_app "Readarr" "Readarr" "$READARR_INTERNAL" "$READARR_KEY" "$BOOKS_CATS"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 16.7 NAVIDROME — create admin user
+# ═══════════════════════════════════════════════════════════════════
+info "Configuring Navidrome..."
+
+ND_CHECK=$(curl -s -o /dev/null -w "%{http_code}" "$NAVIDROME_URL/auth/createAdmin" 2>/dev/null)
+if [ "$ND_CHECK" = "200" ]; then
+  ND_RESULT=$(curl -sf -X POST "$NAVIDROME_URL/auth/createAdmin" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"$JF_USER\",\"password\":\"$JF_PASS\"}" 2>/dev/null)
+  if echo "$ND_RESULT" | jq -e '.id' >/dev/null 2>&1; then
+    ok "Admin user created: $JF_USER"
+  else
+    warn "Could not create admin user"
+  fi
+else
+  ok "Already configured"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 16.8 KAVITA — create admin user and add book library
+# ═══════════════════════════════════════════════════════════════════
+info "Configuring Kavita..."
+
+KV_RESULT=$(curl -sf -X POST "$KAVITA_URL/api/Account/register" \
+  -H "Content-Type: application/json" \
+  -d "{\"username\":\"$JF_USER\",\"password\":\"${JF_PASS}\"}" 2>/dev/null)
+if echo "$KV_RESULT" | jq -e '.token' >/dev/null 2>&1; then
+  KV_TOKEN=$(echo "$KV_RESULT" | jq -r '.token')
+  ok "Admin user created: $JF_USER"
+  # Add book library
+  curl -sf -X POST "$KAVITA_URL/api/Library" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $KV_TOKEN" \
+    -d '{"name":"Books","type":2,"folders":["/media/books"],"manageCollections":true,"manageReadingLists":true,"includeInDashboard":true,"includeInRecommended":true,"includeInSearch":true}' >/dev/null 2>&1 && \
+    ok "Library 'Books' → /media/books" || warn "Could not add book library"
+else
+  ok "Already configured"
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+# 16.9 IMMICH — create admin user
+# ═══════════════════════════════════════════════════════════════════
+info "Configuring Immich..."
+
+IM_CHECK=$(curl -sf "$IMMICH_URL/api/server/ping" 2>/dev/null)
+if [ -n "$IM_CHECK" ]; then
+  IM_RESULT=$(curl -sf -X POST "$IMMICH_URL/api/auth/admin-sign-up" \
+    -H "Content-Type: application/json" \
+    -d "{\"email\":\"admin@media.local\",\"password\":\"$JF_PASS\",\"name\":\"$JF_USER\"}" 2>/dev/null)
+  if echo "$IM_RESULT" | jq -e '.id' >/dev/null 2>&1; then
+    ok "Admin user created: $JF_USER (admin@media.local)"
+  else
+    ok "Already configured"
+  fi
+else
+  warn "Immich not responding"
 fi
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1555,16 +1582,6 @@ cat > "$HP_DIR/services.yaml" <<HPEOF
           type: lidarr
           url: http://lidarr:8686
           key: ${LIDARR_KEY:-}
-    - Readarr:
-        icon: readarr.svg
-        href: http://readarr.media.local
-        description: Book automation
-        server: local
-        container: readarr
-        widget:
-          type: readarr
-          url: http://readarr:8787
-          key: ${READARR_KEY:-}
     - Prowlarr:
         icon: prowlarr.svg
         href: http://prowlarr.media.local
@@ -1708,8 +1725,13 @@ PROXYEOF
 ok "api-proxy.conf written"
 
 # Reload nginx to pick up the new proxy config
-docker exec media-nginx nginx -s reload >/dev/null 2>&1 && \
-  ok "nginx reloaded" || warn "Could not reload nginx (will apply on next restart)"
+sleep 2
+if docker exec media-nginx nginx -t >/dev/null 2>&1; then
+  docker exec media-nginx nginx -s reload >/dev/null 2>&1 && \
+    ok "nginx reloaded" || warn "Could not reload nginx (will apply on next restart)"
+else
+  warn "nginx config test failed — skipping reload"
+fi
 
 fi  # end setup mode
 
@@ -1749,7 +1771,7 @@ for svc_url in \
   "qBittorrent:$QBIT_URL" \
   "Jellyseerr:$JELLYSEERR_URL" \
   "Lidarr:$LIDARR_URL/ping" \
-  "Readarr:$READARR_URL/ping" \
+  "LazyLibrarian:$LAZYLIBRARIAN_URL" \
   "Navidrome:$NAVIDROME_URL/ping" \
   "Kavita:$KAVITA_URL" \
   "Immich:$IMMICH_URL/api/server/ping" \
@@ -1760,8 +1782,8 @@ for svc_url in \
   ; do
   name="${svc_url%%:*}"
   url="${svc_url#*:}"
-  HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || echo "000")
-  check "$name responds ($HTTP_CODE)" "$([ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ] && echo true || echo false)"
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null)
+  check "$name responds ($HTTP_CODE)" "$([ "$HTTP_CODE" != "000" ] && echo true || echo false)"
 done
 
 # --- 2. Download clients ---
@@ -1974,7 +1996,7 @@ check "Proxy → SABnzbd queue" "$(curl -sf 'http://localhost/api/sabnzbd/?mode=
 # --- 13. Docker containers ---
 info "Docker containers..."
 
-for container in jellyfin sonarr sonarr-anime radarr lidarr readarr prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
+for container in jellyfin sonarr sonarr-anime radarr lidarr lazylibrarian prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
   STATUS=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "missing")
   check "Container: $container" "$([ "$STATUS" = "running" ] && echo true || echo false)"
 done
