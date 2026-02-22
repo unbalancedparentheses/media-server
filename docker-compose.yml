@@ -307,35 +307,6 @@ services:
       start_period: 30s
 
   # --- Books ---
-  readarr:
-    image: lscr.io/linuxserver/readarr:develop
-    container_name: readarr
-    environment:
-      - PUID=${PUID:-501}
-      - PGID=${PGID:-20}
-      - TZ=${TZ:-America/New_York}
-    ports:
-      - "127.0.0.1:8787:8787"
-    volumes:
-      - ~/media/config/readarr:/config
-      - ~/media/books:/media/books
-      - ~/media/downloads:/downloads
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8787/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    depends_on:
-      prowlarr:
-        condition: service_started
-      qbittorrent:
-        condition: service_started
-      sabnzbd:
-        condition: service_started
-
   kavita:
     image: jvmilazz0/kavita:latest
     container_name: kavita
@@ -372,8 +343,6 @@ services:
       radarr:
         condition: service_healthy
       lidarr:
-        condition: service_healthy
-      readarr:
         condition: service_healthy
 
   # --- Photos ---
