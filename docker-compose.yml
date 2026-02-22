@@ -741,6 +741,7 @@ services:
       - ~/media/movies:/media/movies
       - ~/media/tv:/media/tv
       - ~/media/anime:/media/anime
+      - ~/media/leaving-soon:/media/leaving-soon
     logging: *logging
     restart: unless-stopped
     mem_limit: 256m
