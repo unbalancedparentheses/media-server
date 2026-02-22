@@ -317,7 +317,7 @@ mkdir -p "$MEDIA_DIR"/{movies,tv,anime,music,books,photos}
 mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
-mkdir -p "$MEDIA_DIR"/{youtube,transcode_cache}
+mkdir -p "$MEDIA_DIR"/{youtube,transcode_cache,leaving-soon}
 mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,autobrr,gluetun,tubearchivist/cache,archivist-es,archivist-redis,tdarr/server,tdarr/configs,tdarr/logs,janitorr,ollama,open-webui,crowdsec/config,crowdsec/data,beszel,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
@@ -447,37 +447,8 @@ labels:
 CSEOF
 ok "acquis.yaml (reads nginx container logs)"
 
-# Generate default Janitorr application.yml if missing
-if [ ! -f "$CONFIG_DIR/janitorr/application.yml" ]; then
-  info "Generating default Janitorr application.yml..."
-  mkdir -p "$CONFIG_DIR/janitorr"
-  cat > "$CONFIG_DIR/janitorr/application.yml" << 'JANEOF'
-# Janitorr — auto-generated defaults by setup.sh
-# See https://github.com/Schaka/janitorr for full options
-server:
-  port: 8978
-
-clients:
-  sonarr:
-    enabled: true
-    url: "http://sonarr:8989"
-    api-key: "CHANGE_ME"
-  radarr:
-    enabled: true
-    url: "http://radarr:7878"
-    api-key: "CHANGE_ME"
-  jellyfin:
-    enabled: true
-    url: "http://jellyfin:8096"
-    api-key: "CHANGE_ME"
-
-application:
-  dry-run: true
-  leaving-soon-expiration: "14d"
-  leaving-soon-tag: "janitorr_leaving_soon"
-JANEOF
-  ok "Default application.yml created (dry-run mode, edit API keys)"
-fi
+# Janitorr application.yml is generated later in section 16.10
+# after API keys are available from Sonarr/Radarr/Jellyfin
 
 info "Starting containers..."
 
