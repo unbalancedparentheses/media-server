@@ -163,9 +163,12 @@ services:
       start_period: 60s
 
   # --- VPN (routes torrent traffic through VPN tunnel) ---
+  # Enable with: docker compose --profile vpn up -d
+  # Requires WIREGUARD_PRIVATE_KEY and WIREGUARD_ADDRESSES in .env
   gluetun:
     image: qmcgaw/gluetun:latest
     container_name: gluetun
+    profiles: ["vpn"]
     cap_add:
       - NET_ADMIN
     devices:
@@ -174,13 +177,10 @@ services:
       - TZ=${TZ:-America/New_York}
       - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER:-mullvad}
       - VPN_TYPE=${VPN_TYPE:-wireguard}
-      # Provider-specific credentials — set in .env or config.toml
       - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
       - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
       - SERVER_COUNTRIES=${VPN_SERVER_COUNTRIES:-}
     ports:
-      # qBittorrent ports (routed through VPN)
-      - "127.0.0.1:8081:8081"
       - "6881:6881"
       - "6881:6881/udp"
     volumes:
@@ -188,7 +188,7 @@ services:
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8081 2>/dev/null || curl -fsS http://localhost:8081 >/dev/null 2>&1 || wget -q --spider https://1.1.1.1 2>/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider https://1.1.1.1 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -219,13 +219,15 @@ services:
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
-    network_mode: "service:gluetun"
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
       - WEBUI_PORT=8081
-    # Ports are exposed via gluetun container (VPN tunnel)
+    ports:
+      - "8081:8081"
+      - "6881:6881"
+      - "6881:6881/udp"
     volumes:
       - ~/media/config/qbittorrent:/config
       - ~/media/downloads:/downloads
@@ -237,9 +239,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    depends_on:
-      gluetun:
-        condition: service_healthy
 
   # --- Request Management ---
   jellyseerr:
@@ -393,7 +392,7 @@ services:
       - TZ=${TZ:-America/New_York}
       - AUTOBRR__HOST=0.0.0.0
     ports:
-      - "127.0.0.1:7474:7474"
+      - "7474:7474"
     volumes:
       - ~/media/config/autobrr:/config
     logging: *logging
@@ -438,7 +437,7 @@ services:
     image: bbilly1/tubearchivist:latest
     container_name: tubearchivist
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8000:8000"
     environment:
       - TZ=${TZ:-America/New_York}
       - ES_URL=http://archivist-es:9200
@@ -521,8 +520,8 @@ services:
       - ffmpegVersion=7
       - nodeName=InternalNode
     ports:
-      - "127.0.0.1:8265:8265"
-      - "127.0.0.1:8266:8266"
+      - "8265:8265"
+      - "8266:8266"
     volumes:
       - ~/media/config/tdarr/server:/app/server
       - ~/media/config/tdarr/configs:/app/configs
