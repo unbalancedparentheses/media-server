@@ -376,6 +376,9 @@ else
   TA_ES_PASS=$(openssl rand -hex 16)
 fi
 
+COMPOSE_PROFILES_VALUE=""
+[ "$VPN_ENABLE" = "true" ] && COMPOSE_PROFILES_VALUE="vpn"
+
 cat > "$SCRIPT_DIR/.env" << EOF
 PUID=$(id -u)
 PGID=$(id -g)
@@ -390,8 +393,78 @@ TA_USERNAME=$TA_USER
 TA_PASSWORD=$TA_PASS
 TA_ELASTIC_PASSWORD=$TA_ES_PASS
 BESZEL_AGENT_KEY=$(cfg '.beszel.agent_key // ""')
+COMPOSE_PROFILES=$COMPOSE_PROFILES_VALUE
 EOF
 ok ".env (PUID=$(id -u), PGID=$(id -g), TZ=$TZ_VALUE)"
+
+# Generate docker-compose.override.yml for qBittorrent VPN routing
+info "Generating docker-compose.override.yml..."
+if [ "$VPN_ENABLE" = "true" ]; then
+  cat > "$SCRIPT_DIR/docker-compose.override.yml" << 'OVEOF'
+services:
+  gluetun:
+    ports:
+      - "8081:8081"
+  qbittorrent:
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+OVEOF
+  ok "VPN enabled: qBittorrent routed through gluetun"
+else
+  cat > "$SCRIPT_DIR/docker-compose.override.yml" << 'OVEOF'
+services:
+  qbittorrent:
+    ports:
+      - "8081:8081"
+OVEOF
+  ok "VPN disabled: qBittorrent ports exposed directly"
+fi
+
+# Generate CrowdSec acquisition config for nginx logs
+info "Generating CrowdSec acquisition config..."
+mkdir -p "$CONFIG_DIR/crowdsec/config"
+cat > "$CONFIG_DIR/crowdsec/config/acquis.yaml" << 'CSEOF'
+source: docker
+container_name:
+  - media-nginx
+labels:
+  type: nginx
+CSEOF
+ok "acquis.yaml (reads nginx container logs)"
+
+# Generate default Janitorr application.yml if missing
+if [ ! -f "$CONFIG_DIR/janitorr/application.yml" ]; then
+  info "Generating default Janitorr application.yml..."
+  mkdir -p "$CONFIG_DIR/janitorr"
+  cat > "$CONFIG_DIR/janitorr/application.yml" << 'JANEOF'
+# Janitorr — auto-generated defaults by setup.sh
+# See https://github.com/Schaka/janitorr for full options
+server:
+  port: 8978
+
+clients:
+  sonarr:
+    enabled: true
+    url: "http://sonarr:8989"
+    api-key: "CHANGE_ME"
+  radarr:
+    enabled: true
+    url: "http://radarr:7878"
+    api-key: "CHANGE_ME"
+  jellyfin:
+    enabled: true
+    url: "http://jellyfin:8096"
+    api-key: "CHANGE_ME"
+
+application:
+  dry-run: true
+  leaving-soon-expiration: "14d"
+  leaving-soon-tag: "janitorr_leaving_soon"
+JANEOF
+  ok "Default application.yml created (dry-run mode, edit API keys)"
+fi
 
 info "Starting containers..."
 
