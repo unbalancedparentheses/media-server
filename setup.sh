@@ -985,11 +985,11 @@ if [ -n "$PROWLARR_KEY" ]; then
         '.name = $name | .enable = true | del(.id) | .appProfileId = 1 | .tags = $tags' 2>/dev/null)
 
       # Write to temp file to avoid shell argument length limits
-      echo "$SCHEMA" > $TMPDIR_SETUP/prowlarr_indexer.json
-      api POST "$PROWLARR_URL/api/v1/indexer" -H "$PH" -d @$TMPDIR_SETUP/prowlarr_indexer.json >/dev/null 2>&1 && \
+      echo "$SCHEMA" > "$TMPDIR_SETUP/prowlarr_indexer.json"
+      api POST "$PROWLARR_URL/api/v1/indexer" -H "$PH" -d @"$TMPDIR_SETUP/prowlarr_indexer.json" >/dev/null 2>&1 && \
         ok "$IDX_NAME added" || warn "Could not add $IDX_NAME"
     done
-    rm -f $TMPDIR_SETUP/prowlarr_indexer.json
+    rm -f "$TMPDIR_SETUP/prowlarr_indexer.json"
   fi
 
   # Configure web UI authentication
@@ -1290,7 +1290,7 @@ if [ "$JS_INITIALIZED" != "true" ]; then
     ' "$JS_SETTINGS" 2>/dev/null)
 
     if [ -n "$UPDATED" ]; then
-      echo "$UPDATED" > $TMPDIR_SETUP/js_settings_tmp.json && mv $TMPDIR_SETUP/js_settings_tmp.json "$JS_SETTINGS"
+      echo "$UPDATED" > "$TMPDIR_SETUP/js_settings_tmp.json" && mv "$TMPDIR_SETUP/js_settings_tmp.json" "$JS_SETTINGS"
       docker restart jellyseerr >/dev/null 2>&1
       ok "Jellyfin server pre-configured"
       sleep 8
@@ -1522,9 +1522,9 @@ ND_CHECK=$(curl -s -o /dev/null -w "%{http_code}" "$NAVIDROME_URL/auth/createAdm
 if [ "$ND_CHECK" = "200" ]; then
   ND_RESULT=$(curl -s -X POST "$NAVIDROME_URL/auth/createAdmin" \
     -H "Content-Type: application/json" \
-    -d "{\"username\":\"$JF_USER\",\"password\":\"$JF_PASS\"}" 2>/dev/null || true)
+    -d "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\"}" 2>/dev/null || true)
   if echo "$ND_RESULT" | jq -e '.id' >/dev/null 2>&1; then
-    ok "Admin user created: $JF_USER"
+    ok "Admin user created: $JELLYFIN_USER"
   else
     warn "Could not create admin user"
   fi
@@ -1539,10 +1539,10 @@ info "Configuring Kavita..."
 
 KV_RESULT=$(curl -s -X POST "$KAVITA_URL/api/Account/register" \
   -H "Content-Type: application/json" \
-  -d "{\"username\":\"$JF_USER\",\"password\":\"${JF_PASS}\"}" 2>/dev/null || true)
+  -d "{\"username\":\"$JELLYFIN_USER\",\"password\":\"${JELLYFIN_PASS}\"}" 2>/dev/null || true)
 if echo "$KV_RESULT" | jq -e '.token' >/dev/null 2>&1; then
   KV_TOKEN=$(echo "$KV_RESULT" | jq -r '.token')
-  ok "Admin user created: $JF_USER"
+  ok "Admin user created: $JELLYFIN_USER"
   # Add book library
   curl -sf -X POST "$KAVITA_URL/api/Library" \
     -H "Content-Type: application/json" \
@@ -1562,9 +1562,9 @@ IM_CHECK=$(curl -s "$IMMICH_URL/api/server/ping" 2>/dev/null || true)
 if [ -n "$IM_CHECK" ]; then
   IM_RESULT=$(curl -s -X POST "$IMMICH_URL/api/auth/admin-sign-up" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"admin@media.local\",\"password\":\"$JF_PASS\",\"name\":\"$JF_USER\"}" 2>/dev/null || true)
+    -d "{\"email\":\"admin@media.local\",\"password\":\"$JELLYFIN_PASS\",\"name\":\"$JELLYFIN_USER\"}" 2>/dev/null || true)
   if echo "$IM_RESULT" | jq -e '.id' >/dev/null 2>&1; then
-    ok "Admin user created: $JF_USER (admin@media.local)"
+    ok "Admin user created: $JELLYFIN_USER (admin@media.local)"
   else
     ok "Already configured"
   fi
@@ -2131,18 +2131,18 @@ JF_TOKEN_V=$(echo "$JF_AUTH_V" | jq -r '.AccessToken // empty' 2>/dev/null)
 check "Jellyfin → login" "$([ -n "$JF_TOKEN_V" ] && echo true || echo false)"
 
 if [ -n "$JF_TOKEN_V" ]; then
-  curl -sf "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JF_TOKEN_V" > $TMPDIR_SETUP/jf_verify.json 2>/dev/null
+  curl -sf "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JF_TOKEN_V" > "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null
   for lp in "Movies:/media/movies" "TV Shows:/media/tv" "Anime:/media/anime"; do
     ln="${lp%%:*}"; lpath="${lp#*:}"
     HAS=$(jq --arg n "$ln" --arg p "$lpath" \
-      '[.[] | select(.Name == $n) | .Locations[] | select(. == $p)] | length > 0' $TMPDIR_SETUP/jf_verify.json 2>/dev/null)
+      '[.[] | select(.Name == $n) | .Locations[] | select(. == $p)] | length > 0' "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null)
     check "Jellyfin → library: $ln" "$HAS"
   done
-  REALTIME=$(jq 'all(.[]; .LibraryOptions.EnableRealtimeMonitor == true)' $TMPDIR_SETUP/jf_verify.json 2>/dev/null)
+  REALTIME=$(jq 'all(.[]; .LibraryOptions.EnableRealtimeMonitor == true)' "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null)
   check "Jellyfin → real-time monitoring" "$REALTIME"
-  DAILY_SCAN=$(jq 'all(.[]; .LibraryOptions.AutomaticRefreshIntervalDays == 1)' $TMPDIR_SETUP/jf_verify.json 2>/dev/null)
+  DAILY_SCAN=$(jq 'all(.[]; .LibraryOptions.AutomaticRefreshIntervalDays == 1)' "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null)
   check "Jellyfin → daily scan" "$DAILY_SCAN"
-  rm -f $TMPDIR_SETUP/jf_verify.json
+  rm -f "$TMPDIR_SETUP/jf_verify.json"
 fi
 
 # --- 6. Jellyfin sync ---
