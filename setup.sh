@@ -771,10 +771,10 @@ configure_arr() {
 
   # Remove stale root folders (e.g. /downloads) and ensure only the correct one exists
   EXISTING_ROOTS=$(api GET "$url/api/v3/rootfolder" -H "$H" 2>/dev/null || echo "[]")
-  echo "$EXISTING_ROOTS" | jq -r '.[] | select(.path != "'"$root_folder"'") | .id' 2>/dev/null | while read -r stale_id; do
+  while read -r stale_id; do
     [ -n "$stale_id" ] && api DELETE "$url/api/v3/rootfolder/$stale_id" -H "$H" >/dev/null 2>&1 && \
       ok "Removed stale root folder (id: $stale_id)"
-  done
+  done < <(echo "$EXISTING_ROOTS" | jq -r '.[] | select(.path != "'"$root_folder"'") | .id' 2>/dev/null)
 
   if echo "$EXISTING_ROOTS" | jq -r '.[].path' 2>/dev/null | grep -q "^${root_folder}$"; then
     ok "Root folder: $root_folder"
@@ -1291,6 +1291,7 @@ if [ "$JS_INITIALIZED" != "true" ]; then
 
     if [ -n "$UPDATED" ]; then
       echo "$UPDATED" > "$TMPDIR_SETUP/js_settings_tmp.json" && mv "$TMPDIR_SETUP/js_settings_tmp.json" "$JS_SETTINGS"
+      sync
       docker restart jellyseerr >/dev/null 2>&1
       ok "Jellyfin server pre-configured"
       sleep 8
@@ -1322,8 +1323,10 @@ if [ -n "$JS_COOKIE" ]; then
   LIBRARIES=$(api GET "$JELLYSEERR_URL/api/v1/settings/jellyfin/library?sync=true" "${JA[@]}" 2>/dev/null || echo "[]")
   if echo "$LIBRARIES" | jq -e '.[0]' >/dev/null 2>&1; then
     LIB_IDS=$(echo "$LIBRARIES" | jq -r '.[].id' | paste -sd ',' -)
-    api GET "$JELLYSEERR_URL/api/v1/settings/jellyfin/library?enable=$LIB_IDS" "${JA[@]}" >/dev/null 2>&1 && \
-      ok "Libraries synced" || true
+    if [ -n "$LIB_IDS" ]; then
+      api GET "$JELLYSEERR_URL/api/v1/settings/jellyfin/library?enable=$LIB_IDS" "${JA[@]}" >/dev/null 2>&1 && \
+        ok "Libraries synced" || true
+    fi
   fi
 
   # Add Sonarr
@@ -1354,7 +1357,7 @@ if [ -n "$JS_COOKIE" ]; then
     }
   else
     # Ensure enableSearch is set on existing connections
-    api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null | while IFS= read -r JS_SONARR; do
+    while IFS= read -r JS_SONARR; do
       JS_SID=$(echo "$JS_SONARR" | jq -r '.id')
       JS_SEARCH=$(echo "$JS_SONARR" | jq -r '.enableSearch // false')
       if [ "$JS_SEARCH" != "true" ]; then
@@ -1362,7 +1365,7 @@ if [ -n "$JS_COOKIE" ]; then
         api PUT "$JELLYSEERR_URL/api/v1/settings/sonarr/$JS_SID" "${JA[@]}" -d "$UPDATED_JS" >/dev/null 2>&1 && \
           ok "Sonarr $JS_SID: enableSearch set" || true
       fi
-    done
+    done < <(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null)
     ok "Sonarr already connected"
   fi
 
@@ -1382,7 +1385,7 @@ if [ -n "$JS_COOKIE" ]; then
     }
   else
     # Ensure enableSearch is set on existing connections
-    api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null | while IFS= read -r JS_RADARR; do
+    while IFS= read -r JS_RADARR; do
       JS_RID=$(echo "$JS_RADARR" | jq -r '.id')
       JS_RSEARCH=$(echo "$JS_RADARR" | jq -r '.enableSearch // false')
       if [ "$JS_RSEARCH" != "true" ]; then
@@ -1390,7 +1393,7 @@ if [ -n "$JS_COOKIE" ]; then
         api PUT "$JELLYSEERR_URL/api/v1/settings/radarr/$JS_RID" "${JA[@]}" -d "$UPDATED_JR" >/dev/null 2>&1 && \
           ok "Radarr $JS_RID: enableSearch set" || true
       fi
-    done
+    done < <(api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null)
     ok "Radarr already connected"
   fi
 
@@ -1522,7 +1525,7 @@ ND_CHECK=$(curl -s -o /dev/null -w "%{http_code}" "$NAVIDROME_URL/auth/createAdm
 if [ "$ND_CHECK" = "200" ]; then
   ND_RESULT=$(curl -s -X POST "$NAVIDROME_URL/auth/createAdmin" \
     -H "Content-Type: application/json" \
-    -d "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\"}" 2>/dev/null || true)
+    -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{username:$u,password:$p}')" 2>/dev/null || true)
   if echo "$ND_RESULT" | jq -e '.id' >/dev/null 2>&1; then
     ok "Admin user created: $JELLYFIN_USER"
   else
@@ -1539,7 +1542,7 @@ info "Configuring Kavita..."
 
 KV_RESULT=$(curl -s -X POST "$KAVITA_URL/api/Account/register" \
   -H "Content-Type: application/json" \
-  -d "{\"username\":\"$JELLYFIN_USER\",\"password\":\"${JELLYFIN_PASS}\"}" 2>/dev/null || true)
+  -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{username:$u,password:$p}')" 2>/dev/null || true)
 if echo "$KV_RESULT" | jq -e '.token' >/dev/null 2>&1; then
   KV_TOKEN=$(echo "$KV_RESULT" | jq -r '.token')
   ok "Admin user created: $JELLYFIN_USER"
@@ -1562,7 +1565,7 @@ IM_CHECK=$(curl -s "$IMMICH_URL/api/server/ping" 2>/dev/null || true)
 if [ -n "$IM_CHECK" ]; then
   IM_RESULT=$(curl -s -X POST "$IMMICH_URL/api/auth/admin-sign-up" \
     -H "Content-Type: application/json" \
-    -d "{\"email\":\"admin@media.local\",\"password\":\"$JELLYFIN_PASS\",\"name\":\"$JELLYFIN_USER\"}" 2>/dev/null || true)
+    -d "$(jq -nc --arg p "$JELLYFIN_PASS" --arg n "$JELLYFIN_USER" '{email:"admin@media.local",password:$p,name:$n}')" 2>/dev/null || true)
   if echo "$IM_RESULT" | jq -e '.id' >/dev/null 2>&1; then
     ok "Admin user created: $JELLYFIN_USER (admin@media.local)"
   else
