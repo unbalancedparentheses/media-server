@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -eo pipefail
+set -Eeo pipefail
+IFS=$'\n\t'
 
 # ═══════════════════════════════════════════════════════════════════
 # Media Server — One-command setup (fresh install or re-run)
@@ -25,6 +26,53 @@ info()  { printf "\n\033[1;34m=> %s\033[0m\n" "$*"; }
 ok()    { printf "\033[1;32m   ✓ %s\033[0m\n" "$*"; }
 warn()  { printf "\033[1;33m   ! %s\033[0m\n" "$*"; }
 err()   { printf "\033[1;31m   ✗ %s\033[0m\n" "$*"; exit 1; }
+on_error() {
+  local line="$1" cmd="$2" code="$3"
+  printf "\033[1;31m   ✗ Command failed (exit %s) at line %s: %s\033[0m\n" "$code" "$line" "$cmd" >&2
+  exit "$code"
+}
+trap 'on_error "$LINENO" "$BASH_COMMAND" "$?"' ERR
+
+has_cmd() { command -v "$1" >/dev/null 2>&1; }
+require_cmd() { has_cmd "$1" || err "$1 is required"; }
+require_docker_running() {
+  require_cmd docker
+  docker info >/dev/null 2>&1 || err "Docker is not running"
+}
+
+detect_timeout_cmd() {
+  if has_cmd timeout; then
+    echo "timeout"
+  elif has_cmd gtimeout; then
+    echo "gtimeout"
+  else
+    echo ""
+  fi
+}
+TIMEOUT_CMD="$(detect_timeout_cmd)"
+run_timeout() {
+  local seconds="$1"
+  shift
+  if [ -n "$TIMEOUT_CMD" ]; then
+    "$TIMEOUT_CMD" "$seconds" "$@"
+  else
+    "$@"
+  fi
+}
+
+extract_cookie() {
+  local cookie_name="$1"
+  awk -v name="$cookie_name" 'BEGIN{FS="\t"} $0 !~ /^#/ && $6 == name { print $7 }'
+}
+
+sed_inplace() {
+  local expr="$1" file="$2"
+  if sed --version >/dev/null 2>&1; then
+    sed -i -e "$expr" "$file"
+  else
+    sed -i '' -e "$expr" "$file"
+  fi
+}
 
 api() {
   local method="$1" url="$2"; shift 2
@@ -46,6 +94,22 @@ wait_for() {
 }
 
 cfg() { echo "$CONFIG_JSON" | jq -r "$1"; }
+cfg_required_string() {
+  local jq_path="$1" label="$2" val
+  val=$(cfg "$jq_path // empty")
+  [ -n "$val" ] && [ "$val" != "null" ] || err "Missing required config: $label"
+}
+validate_required_config() {
+  cfg_required_string '.jellyfin.username' 'jellyfin.username'
+  cfg_required_string '.jellyfin.password' 'jellyfin.password'
+  cfg_required_string '.qbittorrent.username' 'qbittorrent.username'
+  cfg_required_string '.qbittorrent.password' 'qbittorrent.password'
+  cfg_required_string '.downloads.complete' 'downloads.complete'
+  cfg_required_string '.downloads.incomplete' 'downloads.incomplete'
+  cfg_required_string '.quality.sonarr_profile' 'quality.sonarr_profile'
+  cfg_required_string '.quality.sonarr_anime_profile' 'quality.sonarr_anime_profile'
+  cfg_required_string '.quality.radarr_profile' 'quality.radarr_profile'
+}
 
 get_api_key() {
   local f="$CONFIG_DIR/$1/config.xml"
@@ -102,10 +166,16 @@ do_backup() {
   backup_size=$(du -sh "$backup_file" | cut -f1)
   ok "Created: $backup_file ($backup_size)"
 
-  backup_count=$(ls -1 "$BACKUP_DIR"/media-server_*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
+  shopt -s nullglob
+  local backup_files=("$BACKUP_DIR"/media-server_*.tar.gz)
+  shopt -u nullglob
+  backup_count="${#backup_files[@]}"
   if [ "$backup_count" -gt "$MAX_BACKUPS" ]; then
-    remove_count=$((backup_count - MAX_BACKUPS))
-    ls -1t "$BACKUP_DIR"/media-server_*.tar.gz | tail -n "$remove_count" | while read -r old; do
+    local sorted_backups old_ifs
+    old_ifs="$IFS"
+    IFS=$'\n' sorted_backups=($(ls -1t "${backup_files[@]}"))
+    IFS="$old_ifs"
+    for old in "${sorted_backups[@]:$MAX_BACKUPS}"; do
       rm -f "$old"
       ok "Pruned: $(basename "$old")"
     done
@@ -180,10 +250,13 @@ if [ "$MODE" = "restore" ]; then do_restore; exit 0; fi
 if [ "$MODE" = "update" ];  then do_update; exit 0; fi
 
 if [ "$MODE" = "test" ]; then
-  command -v jq  >/dev/null 2>&1 || { echo "jq is required"; exit 1; }
-  command -v yq  >/dev/null 2>&1 || { echo "yq is required"; exit 1; }
-  [ -f "$CONFIG_FILE" ] || { echo "config.toml not found"; exit 1; }
+  require_cmd jq
+  require_cmd yq
+  require_cmd python3
+  require_docker_running
+  [ -f "$CONFIG_FILE" ] || err "config.toml not found"
   CONFIG_JSON=$(yq -p toml -o json '.' "$CONFIG_FILE")
+  validate_required_config
 
   JELLYFIN_USER=$(cfg '.jellyfin.username')
   JELLYFIN_PASS=$(cfg '.jellyfin.password')
@@ -257,6 +330,13 @@ elif ! docker info &>/dev/null; then
 fi
 ok "Docker"
 
+# python3
+if ! has_cmd python3; then
+  err "python3 is required. Install Xcode Command Line Tools or Homebrew Python."
+else
+  ok "python3"
+fi
+
 # jq
 if ! command -v jq &>/dev/null; then
   brew install jq
@@ -287,6 +367,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
   err "Missing config.toml — copy config.toml.example and fill in your values"
 fi
 CONFIG_JSON=$(yq -p toml -o json '.' "$CONFIG_FILE")
+validate_required_config
 
 # Check Tailscale connection
 TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
@@ -310,9 +391,9 @@ else
       ok "Tailscale HTTPS already configured"
     else
       info "Configuring Tailscale HTTPS..."
-      timeout 10 "$TS_CLI" serve --bg --yes --https=443 http://127.0.0.1:80 </dev/null 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
-      timeout 10 "$TS_CLI" serve --bg --yes --https=8096 http://127.0.0.1:8096 </dev/null 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
-      timeout 10 "$TS_CLI" serve --bg --yes --https=5055 http://127.0.0.1:5055 </dev/null 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
+      run_timeout 10 "$TS_CLI" serve --bg --yes --https=443 http://127.0.0.1:80 </dev/null 2>/dev/null && ok "HTTPS :443 → Nginx" || warn "Failed to configure HTTPS :443"
+      run_timeout 10 "$TS_CLI" serve --bg --yes --https=8096 http://127.0.0.1:8096 </dev/null 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
+      run_timeout 10 "$TS_CLI" serve --bg --yes --https=5055 http://127.0.0.1:5055 </dev/null 2>/dev/null && ok "HTTPS :5055 → Jellyseerr" || warn "Failed to configure HTTPS :5055"
     fi
   fi
 fi
@@ -473,7 +554,7 @@ info "Checking /etc/hosts..."
 
 DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local tubearchivist.media.local tdarr.media.local autobrr.media.local open-webui.media.local dozzle.media.local beszel.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
 
-if grep -q "media.local" /etc/hosts 2>/dev/null; then
+if grep -qE "^[[:space:]]*127\.0\.0\.1[[:space:]].*\bmedia\.local\b" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
 else
   echo ""
@@ -582,7 +663,7 @@ if [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ]; then
   SABNZBD_KEY=$(sed -n 's/^api_key = *//p' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null || echo "")
   # Ensure Docker hostname is in the whitelist (prevents 403 from Sonarr/Radarr)
   if ! grep -q "^host_whitelist.*sabnzbd" "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null; then
-    sed -i '' 's/^host_whitelist = .*/& sabnzbd/' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null
+    sed_inplace 's/^host_whitelist = .*/& sabnzbd/' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null
     docker restart sabnzbd >/dev/null 2>&1 && ok "SABnzbd: added Docker hostname to whitelist" || true
     sleep 3
   fi
@@ -614,7 +695,7 @@ info "Configuring qBittorrent..."
 QBIT_COOKIE=""
 for try_pass in "$QBIT_PASS" "$QBIT_TEMP_PASS"; do
   QBIT_COOKIE=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
-    -d "username=$QBIT_USER&password=$try_pass" 2>/dev/null | sed -n 's/.*SID[[:space:]]*//p' || echo "")
+    -d "username=$QBIT_USER&password=$try_pass" 2>/dev/null | extract_cookie SID || echo "")
   [ -n "$QBIT_COOKIE" ] && break
 done
 
@@ -1308,8 +1389,8 @@ for AUTH_BODY in \
   JS_AUTH_RESP=$(curl -s -c - -X POST "$JELLYSEERR_URL/api/v1/auth/jellyfin" \
     -H "Content-Type: application/json" \
     -d "$AUTH_BODY" 2>/dev/null || echo "")
-  if echo "$JS_AUTH_RESP" | grep -q "connect.sid"; then
-    JS_COOKIE=$(echo "$JS_AUTH_RESP" | sed -n 's/.*connect.sid[[:space:]]*//p')
+  JS_COOKIE=$(echo "$JS_AUTH_RESP" | extract_cookie connect.sid || echo "")
+  if [ -n "$JS_COOKIE" ]; then
     ok "Authenticated"
     break
   fi
@@ -2061,7 +2142,7 @@ done
 # --- 2. Download clients ---
 info "Download clients..."
 
-QBIT_COOKIE_V=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" -d "username=$QBIT_USER&password=$QBIT_PASS" 2>/dev/null | sed -n 's/.*SID[[:space:]]*//p')
+QBIT_COOKIE_V=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" -d "username=$QBIT_USER&password=$QBIT_PASS" 2>/dev/null | extract_cookie SID)
 check "qBittorrent login" "$([ -n "$QBIT_COOKIE_V" ] && echo true || echo false)"
 
 if [ -n "$QBIT_COOKIE_V" ]; then

@@ -216,6 +216,7 @@ timezone = "America/New_York"
 ## Usage
 
 ```bash
+./scripts/preflight.sh          # Fast local prerequisite + config checks
 ./setup.sh                      # Full setup (idempotent)
 ./setup.sh --test               # Verification checks only
 ./setup.sh --update             # Backup + pull latest images + restart
