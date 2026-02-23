@@ -5,6 +5,7 @@ IFS=$'\n\t'
 # ═══════════════════════════════════════════════════════════════════
 # Media Server — One-command setup (fresh install or re-run)
 # Usage: ./setup.sh                      Full setup + verification
+#        ./setup.sh --preflight          Fast local prerequisite + config checks
 #        ./setup.sh --test               Run verification only
 #        ./setup.sh --update             Backup + pull latest images + restart
 #        ./setup.sh --backup             Backup service configs
@@ -118,12 +119,13 @@ get_api_key() {
 
 # ─── Mode selection ──────────────────────────────────────────────
 case "${1:-}" in
+  --preflight) MODE=preflight ;;
   --test)    MODE=test ;;
   --update)  MODE=update ;;
   --backup)  MODE=backup ;;
   --restore) MODE=restore; RESTORE_FILE="${2:-}" ;;
   "")        MODE=setup ;;
-  *)         echo "Usage: ./setup.sh [--test|--update|--backup|--restore <file>]"; exit 1 ;;
+  *)         echo "Usage: ./setup.sh [--preflight|--test|--update|--backup|--restore <file>]"; exit 1 ;;
 esac
 
 BACKUP_DIR="$MEDIA_DIR/backups"
@@ -244,7 +246,111 @@ do_update() {
   echo ""
 }
 
+do_preflight() {
+  local failed=0
+  local config_json=""
+  local value=""
+
+  pf_ok() { printf "\033[1;32m[OK]\033[0m %s\n" "$*"; }
+  pf_fail() { printf "\033[1;31m[FAIL]\033[0m %s\n" "$*"; failed=1; }
+  pf_warn() { printf "\033[1;33m[WARN]\033[0m %s\n" "$*"; }
+
+  preflight_check_cmd() {
+    local name="$1"
+    if has_cmd "$name"; then
+      pf_ok "$name installed"
+    else
+      pf_fail "$name is missing"
+    fi
+  }
+
+  echo "Preflight checks for media-server"
+  echo ""
+
+  preflight_check_cmd bash
+  preflight_check_cmd curl
+  preflight_check_cmd jq
+  preflight_check_cmd yq
+  preflight_check_cmd python3
+
+  if has_cmd docker; then
+    pf_ok "docker installed"
+    if docker info >/dev/null 2>&1; then
+      pf_ok "docker daemon is running"
+    else
+      pf_fail "docker is installed but daemon is not running"
+    fi
+  else
+    pf_fail "docker is missing"
+  fi
+
+  if [ -f "$CONFIG_FILE" ]; then
+    pf_ok "config.toml exists"
+    if has_cmd yq && has_cmd jq; then
+      if config_json=$(yq -p toml -o json '.' "$CONFIG_FILE" 2>/dev/null); then
+        pf_ok "config.toml parses as valid TOML"
+        for path in \
+          ".jellyfin.username" \
+          ".jellyfin.password" \
+          ".qbittorrent.username" \
+          ".qbittorrent.password" \
+          ".downloads.complete" \
+          ".downloads.incomplete" \
+          ".quality.sonarr_profile" \
+          ".quality.sonarr_anime_profile" \
+          ".quality.radarr_profile"; do
+          value=$(echo "$config_json" | jq -r "$path // empty")
+          if [ -n "$value" ] && [ "$value" != "null" ]; then
+            pf_ok "required config present: $path"
+          else
+            pf_fail "required config missing: $path"
+          fi
+        done
+      else
+        pf_fail "config.toml is invalid TOML"
+      fi
+    else
+      pf_warn "skipping config content validation (jq/yq unavailable)"
+    fi
+  else
+    pf_warn "config.toml is missing (copy config.toml.example first)"
+    failed=1
+  fi
+
+  if [ -f "$COMPOSE_FILE" ]; then
+    pf_ok "docker-compose.yml exists"
+    if has_cmd docker && docker info >/dev/null 2>&1; then
+      if [ -f "$OVERRIDE_FILE" ]; then
+        docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE_FILE" config -q >/dev/null 2>&1 && \
+          pf_ok "docker compose config is valid (base + override)" || pf_fail "docker compose config is invalid"
+      else
+        docker compose -f "$COMPOSE_FILE" config -q >/dev/null 2>&1 && \
+          pf_ok "docker compose config is valid" || pf_fail "docker compose config is invalid"
+      fi
+    else
+      pf_warn "skipping docker compose validation (docker unavailable)"
+    fi
+  else
+    pf_fail "docker-compose.yml is missing"
+  fi
+
+  echo ""
+  if [ "$failed" -eq 0 ]; then
+    pf_ok "preflight passed"
+  else
+    pf_fail "preflight failed"
+  fi
+  return "$failed"
+}
+
 # ─── Mode dispatch ──────────────────────────────────────────────
+if [ "$MODE" = "preflight" ]; then
+  if do_preflight; then
+    exit 0
+  else
+    exit 1
+  fi
+fi
 if [ "$MODE" = "backup" ];  then do_backup; exit 0; fi
 if [ "$MODE" = "restore" ]; then do_restore; exit 0; fi
 if [ "$MODE" = "update" ];  then do_update; exit 0; fi
