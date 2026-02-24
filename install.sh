@@ -26,16 +26,9 @@ cd "$DEST"
 if [ ! -f config.toml ]; then
   cp config.toml.example config.toml
   ok "Created config.toml from example"
-  echo ""
-  echo "  Edit ~/media-server/config.toml with your credentials, then run:"
-  echo ""
-  echo "    cd ~/media-server && ./setup.sh"
-  echo ""
 else
   ok "config.toml already exists"
-  echo ""
-  echo "  Ready to run:"
-  echo ""
-  echo "    cd ~/media-server && ./setup.sh"
-  echo ""
 fi
+
+info "Running setup in non-interactive mode..."
+./setup.sh --yes

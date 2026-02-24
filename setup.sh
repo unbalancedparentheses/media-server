@@ -51,6 +51,10 @@ require_docker_running() {
   require_cmd docker
   docker info >/dev/null 2>&1 || err "Docker is not running"
 }
+has_docker_compose() { docker compose version >/dev/null 2>&1; }
+require_docker_compose() {
+  has_docker_compose || err "Docker Compose v2 plugin is required (docker compose)"
+}
 install_package() {
   local pkg="$1"
   if has_cmd brew; then
@@ -66,6 +70,7 @@ install_package() {
     return 1
   fi
 }
+generate_secret() { openssl rand -base64 24 | tr -d '/+=' | cut -c1-24; }
 detect_tailscale_cli() {
   if has_cmd tailscale; then
     command -v tailscale
@@ -151,6 +156,48 @@ load_config_json() {
   local out=""
   out="$(try_load_config_json "$path")" || err "Unable to parse config.toml (need Python 3.11+ or python3-tomli, or yq)"
   echo "$out"
+}
+write_secure_defaults_to_config() {
+  local path="$1"
+  local jellyfin_pass qbittorrent_pass tubearchivist_pass
+  jellyfin_pass="$(generate_secret)"
+  qbittorrent_pass="$(generate_secret)"
+  tubearchivist_pass="$(generate_secret)"
+
+  python3 - "$path" "$jellyfin_pass" "$qbittorrent_pass" "$tubearchivist_pass" << 'PY'
+import re
+import sys
+
+path, jf, qb, ta = sys.argv[1:]
+with open(path, "r", encoding="utf-8") as f:
+    lines = f.readlines()
+
+section = None
+for i, line in enumerate(lines):
+    m = re.match(r'^\s*\[([^\]]+)\]\s*$', line)
+    if m:
+        section = m.group(1).strip()
+        continue
+    if re.match(r'^\s*password\s*=', line):
+        if section == "jellyfin":
+            lines[i] = 'password = "{}"\n'.format(jf)
+        elif section == "qbittorrent":
+            lines[i] = 'password = "{}"\n'.format(qb)
+        elif section == "tubearchivist":
+            lines[i] = 'password = "{}"\n'.format(ta)
+
+with open(path, "w", encoding="utf-8") as f:
+    f.writelines(lines)
+PY
+
+  ok "Generated secure default passwords in config.toml"
+  echo "  Jellyfin password: $jellyfin_pass"
+  echo "  qBittorrent password: $qbittorrent_pass"
+  echo "  TubeArchivist password: $tubearchivist_pass"
+}
+ensure_compose_ready() {
+  require_docker_running
+  require_docker_compose
 }
 
 api() {
@@ -308,6 +355,7 @@ do_backup() {
 do_restore() {
   [ -z "$RESTORE_FILE" ] && err "Usage: ./setup.sh --restore <backup-file>"
   [ ! -f "$RESTORE_FILE" ] && err "Backup file not found: $RESTORE_FILE"
+  ensure_compose_ready
 
   info "Restoring from $RESTORE_FILE..."
   echo "  This will overwrite current configs in $CONFIG_DIR"
@@ -338,7 +386,7 @@ do_restore() {
 # ─── Update function ────────────────────────────────────────────
 do_update() {
   [ ! -f "$COMPOSE_FILE" ] && err "docker-compose.yml not found"
-  docker info &>/dev/null || err "Docker is not running"
+  ensure_compose_ready
 
   info "Creating pre-update backup..."
   do_backup
@@ -395,6 +443,11 @@ do_preflight() {
     pf_ok "docker installed"
     if docker info >/dev/null 2>&1; then
       pf_ok "docker daemon is running"
+      if has_docker_compose; then
+        pf_ok "docker compose plugin available"
+      else
+        pf_fail "docker compose plugin is missing"
+      fi
     else
       pf_fail "docker is installed but daemon is not running"
     fi
@@ -448,7 +501,7 @@ do_preflight() {
 
   if [ -f "$COMPOSE_FILE" ]; then
     pf_ok "docker-compose.yml exists"
-    if has_cmd docker && docker info >/dev/null 2>&1; then
+    if has_cmd docker && docker info >/dev/null 2>&1 && has_docker_compose; then
       if [ -f "$OVERRIDE_FILE" ]; then
         docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE_FILE" config -q >/dev/null 2>&1 && \
           pf_ok "docker compose config is valid (base + override)" || pf_fail "docker compose config is invalid"
@@ -457,7 +510,7 @@ do_preflight() {
           pf_ok "docker compose config is valid" || pf_fail "docker compose config is invalid"
       fi
     else
-      pf_warn "skipping docker compose validation (docker unavailable)"
+      pf_warn "skipping docker compose validation (docker/compose unavailable)"
     fi
   else
     pf_fail "docker-compose.yml is missing"
@@ -483,6 +536,27 @@ do_check_config() {
   ok "Download paths and numeric values are valid"
   ok "Timezone is set"
 }
+smoke_check_generated_files() {
+  local missing=0
+  local f
+
+  info "Running generated-file smoke checks..."
+  for f in "$SCRIPT_DIR/.env" "$SCRIPT_DIR/docker-compose.override.yml" "$CONFIG_DIR/crowdsec/config/acquis.yaml"; do
+    if [ -s "$f" ]; then
+      ok "Present: $f"
+    else
+      warn "Missing/empty: $f"
+      missing=1
+    fi
+  done
+
+  if [ "$missing" -ne 0 ]; then
+    err "Generated-file smoke checks failed"
+  fi
+
+  dc config -q >/dev/null 2>&1 || err "Docker Compose config validation failed"
+  ok "Docker Compose config validates"
+}
 
 # ─── Mode dispatch ──────────────────────────────────────────────
 if [ "$MODE" = "check_config" ]; then do_check_config; exit 0; fi
@@ -500,7 +574,7 @@ if [ "$MODE" = "update" ];  then do_update; exit 0; fi
 if [ "$MODE" = "test" ]; then
   require_cmd jq
   require_cmd python3
-  require_docker_running
+  ensure_compose_ready
   [ -f "$CONFIG_FILE" ] || err "config.toml not found"
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
   validate_required_config
@@ -589,10 +663,24 @@ if ! has_cmd docker; then
     err "Unsupported OS for automatic Docker install: $OS_NAME"
   fi
 fi
-if ! docker info &>/dev/null; then
-  err "Docker is installed but not running. Start Docker Desktop and re-run this script."
+if ! docker info >/dev/null 2>&1; then
+  if [ "$OS_NAME" = "Linux" ] && docker info 2>&1 | grep -qi "permission denied"; then
+    warn "Docker permission denied for user '$USER'."
+    warn "Run: sudo usermod -aG docker $USER"
+    warn "Then log out/in and re-run setup."
+  fi
+  err "Docker is installed but not usable. Start Docker (or fix permissions) and re-run this script."
 fi
 ok "Docker"
+require_docker_compose
+ok "Docker Compose"
+
+if [ "$OS_NAME" = "Linux" ] && has_cmd getent && getent group docker >/dev/null 2>&1; then
+  if ! id -nG "$USER" | tr ' ' '\n' | grep -qx docker; then
+    as_root usermod -aG docker "$USER" >/dev/null 2>&1 || true
+    warn "Added $USER to docker group (or attempted to). You may need to log out/in."
+  fi
+fi
 
 # python3
 if ! has_cmd python3; then
@@ -633,7 +721,12 @@ fi
 # config.toml
 if [ ! -f "$CONFIG_FILE" ]; then
   cp "$SCRIPT_DIR/config.toml.example" "$CONFIG_FILE"
-  warn "config.toml not found — created from config.toml.example with defaults"
+  if [ "$NON_INTERACTIVE" = "true" ]; then
+    write_secure_defaults_to_config "$CONFIG_FILE"
+    warn "config.toml not found — created with secure generated defaults"
+  else
+    warn "config.toml not found — created from config.toml.example with defaults"
+  fi
 fi
 CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
 validate_required_config
@@ -815,6 +908,7 @@ ok "acquis.yaml (reads nginx container logs)"
 # after API keys are available from Sonarr/Radarr/Jellyfin
 
 info "Starting containers..."
+smoke_check_generated_files
 
 dc up -d
 

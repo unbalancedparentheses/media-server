@@ -89,7 +89,7 @@ The official Readarr Docker image (`lscr.io/linuxserver/readarr:develop`) histor
 bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)
 ```
 
-Clones the repo to `~/media-server`, copies the example config, and tells you to edit it. If `~/media-server` already exists, it runs `git pull` to update.
+Clones or updates `~/media-server` and runs `./setup.sh --yes` for full non-interactive setup.
 
 ### Manual
 
@@ -115,7 +115,8 @@ Fully idempotent — safe to re-run at any time.
 
 ## Configuration
 
-Copy `config.toml.example` to `config.toml` and edit it.
+Optional for first run: `setup.sh --yes` will auto-create `config.toml` with secure generated defaults.
+You can still copy/edit `config.toml.example` manually for full control.
 
 ### Credentials
 
