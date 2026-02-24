@@ -218,6 +218,7 @@ timezone = "America/New_York"
 ```bash
 ./setup.sh --preflight          # Fast local prerequisite + config checks
 ./setup.sh --check-config       # Validate config.toml only
+./setup.sh --dry-run            # Preview setup actions without changing state
 ./setup.sh --yes                # Full setup, non-interactive
 ./setup.sh                      # Full setup (idempotent, interactive)
 ./setup.sh --test               # Verification checks only

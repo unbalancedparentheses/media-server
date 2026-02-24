@@ -8,6 +8,7 @@ IFS=$'\n\t'
 #        ./setup.sh --preflight          Fast local prerequisite + config checks
 #        ./setup.sh --check-config       Validate config.toml only
 #        ./setup.sh --yes                Non-interactive mode (skip prompts)
+#        ./setup.sh --dry-run            Print actions without mutating state
 #        ./setup.sh --test               Run verification only
 #        ./setup.sh --update             Backup + pull latest images + restart
 #        ./setup.sh --backup             Backup service configs
@@ -18,6 +19,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="$SCRIPT_DIR/config.toml"
 MEDIA_DIR="$HOME/media"
 CONFIG_DIR="$MEDIA_DIR/config"
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/scripts/service_registry.sh"
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/scripts/setup-services.sh"
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/scripts/verify.sh"
 
 # Clean up temp files on exit
 TMPDIR_SETUP=$(mktemp -d)
@@ -38,6 +45,14 @@ trap 'on_error "$LINENO" "$BASH_COMMAND" "$?"' ERR
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 require_cmd() { has_cmd "$1" || err "$1 is required"; }
+log_dry_run() { printf "\033[1;33m   [DRY-RUN]\033[0m %s\n" "$*"; }
+run_cmd() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log_dry_run "$*"
+    return 0
+  fi
+  "$@"
+}
 as_root() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
@@ -263,10 +278,15 @@ get_api_key() {
 MODE=""
 RESTORE_FILE=""
 NON_INTERACTIVE=false
+DRY_RUN=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --yes|-y)
       NON_INTERACTIVE=true
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
       shift
       ;;
     --preflight|--check-config|--test|--update|--backup)
@@ -284,7 +304,7 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     *)
-      err "Usage: ./setup.sh [--yes] [--preflight|--check-config|--test|--update|--backup|--restore <file>]"
+      err "Usage: ./setup.sh [--yes] [--dry-run] [--preflight|--check-config|--test|--update|--backup|--restore <file>]"
       ;;
   esac
 done
@@ -296,6 +316,14 @@ COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 OVERRIDE_FILE="$SCRIPT_DIR/docker-compose.override.yml"
 # Helper: docker compose with both base and override files
 dc() {
+  if [ "$DRY_RUN" = "true" ]; then
+    if [ -f "$OVERRIDE_FILE" ]; then
+      log_dry_run "docker compose -f $COMPOSE_FILE -f $OVERRIDE_FILE $*"
+    else
+      log_dry_run "docker compose -f $COMPOSE_FILE $*"
+    fi
+    return 0
+  fi
   if [ -f "$OVERRIDE_FILE" ]; then
     docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE_FILE" "$@"
   else
@@ -559,6 +587,29 @@ smoke_check_generated_files() {
 }
 
 # ─── Mode dispatch ──────────────────────────────────────────────
+if [ "$DRY_RUN" = "true" ] && [ "$MODE" = "setup" ]; then
+  info "Dry-run mode: validating prerequisites and config only (no writes, no container changes)"
+  do_preflight || true
+  if [ -f "$CONFIG_FILE" ]; then
+    do_check_config
+  else
+    warn "config.toml not found; skipping --check-config in dry-run"
+  fi
+  info "Dry-run complete"
+  exit 0
+fi
+if [ "$DRY_RUN" = "true" ] && [ "$MODE" = "update" ]; then
+  info "Dry-run mode: would run backup, pull images, and restart containers"
+  exit 0
+fi
+if [ "$DRY_RUN" = "true" ] && [ "$MODE" = "restore" ]; then
+  info "Dry-run mode: would stop containers, extract backup, and restart"
+  exit 0
+fi
+if [ "$DRY_RUN" = "true" ] && [ "$MODE" = "backup" ]; then
+  info "Dry-run mode: would create backup archive from $CONFIG_DIR"
+  exit 0
+fi
 if [ "$MODE" = "check_config" ]; then do_check_config; exit 0; fi
 if [ "$MODE" = "preflight" ]; then
   if do_preflight; then
@@ -579,20 +630,12 @@ if [ "$MODE" = "test" ]; then
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
   validate_required_config
   validate_config_semantics
+  init_service_registry
 
   JELLYFIN_USER=$(cfg '.jellyfin.username')
   JELLYFIN_PASS=$(cfg '.jellyfin.password')
   QBIT_USER=$(cfg '.qbittorrent.username')
   QBIT_PASS=$(cfg '.qbittorrent.password')
-  QBIT_URL="http://localhost:8081"
-  JELLYFIN_URL="http://localhost:8096"
-  SONARR_URL="http://localhost:8989"
-  SONARR_ANIME_URL="http://localhost:8990"
-  RADARR_URL="http://localhost:7878"
-  PROWLARR_URL="http://localhost:9696"
-  BAZARR_URL="http://localhost:6767"
-  SABNZBD_URL="http://localhost:8080"
-  JELLYSEERR_URL="http://localhost:5055"
 
   SONARR_KEY=$(get_api_key "sonarr")
   SONARR_ANIME_KEY=$(get_api_key "sonarr-anime")
@@ -603,23 +646,6 @@ if [ "$MODE" = "test" ]; then
   [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ] && SABNZBD_KEY=$(sed -n 's/^api_key = *//p' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null || echo "")
   JELLYSEERR_KEY=""
   [ -f "$CONFIG_DIR/jellyseerr/settings.json" ] && JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
-  LIDARR_URL="http://localhost:8686"
-  LAZYLIBRARIAN_URL="http://localhost:5299"
-  NAVIDROME_URL="http://localhost:4533"
-  KAVITA_URL="http://localhost:5001"
-  IMMICH_URL="http://localhost:2283"
-  TUBEARCHIVIST_URL="http://localhost:8000"
-  TDARR_URL="http://localhost:8265"
-  AUTOBRR_URL="http://localhost:7474"
-  OPEN_WEBUI_URL="http://localhost:3100"
-  DOZZLE_URL="http://localhost:9999"
-  BESZEL_URL="http://localhost:8090"
-  CROWDSEC_URL="http://localhost:8180"
-  SCRUTINY_URL="http://localhost:9091"
-  GITEA_URL="http://localhost:3000"
-  UPTIME_KUMA_URL="http://localhost:3001"
-  HOMEPAGE_URL="http://localhost:3002"
-
 fi
 
 if [ "$MODE" = "setup" ]; then
@@ -945,6 +971,7 @@ fi
 # 5. READ CONFIG
 # ═══════════════════════════════════════════════════════════════════
 info "Reading config..."
+init_service_registry
 
 JELLYFIN_USER=$(cfg '.jellyfin.username')
 JELLYFIN_PASS=$(cfg '.jellyfin.password')
@@ -960,66 +987,14 @@ SONARR_PROFILE=$(cfg '.quality.sonarr_profile')
 SONARR_ANIME_PROFILE=$(cfg '.quality.sonarr_anime_profile')
 RADARR_PROFILE=$(cfg '.quality.radarr_profile')
 
-QBIT_URL="http://localhost:8081"
-JELLYFIN_URL="http://localhost:8096"
-SONARR_URL="http://localhost:8989"
-SONARR_ANIME_URL="http://localhost:8990"
-RADARR_URL="http://localhost:7878"
-PROWLARR_URL="http://localhost:9696"
-BAZARR_URL="http://localhost:6767"
-SABNZBD_URL="http://localhost:8080"
-JELLYSEERR_URL="http://localhost:5055"
-
-LIDARR_URL="http://localhost:8686"
-LAZYLIBRARIAN_URL="http://localhost:5299"
-NAVIDROME_URL="http://localhost:4533"
-KAVITA_URL="http://localhost:5001"
-IMMICH_URL="http://localhost:2283"
-TUBEARCHIVIST_URL="http://localhost:8000"
-TDARR_URL="http://localhost:8265"
-AUTOBRR_URL="http://localhost:7474"
-OPEN_WEBUI_URL="http://localhost:3100"
-DOZZLE_URL="http://localhost:9999"
-BESZEL_URL="http://localhost:8090"
-CROWDSEC_URL="http://localhost:8180"
-SCRUTINY_URL="http://localhost:9091"
-GITEA_URL="http://localhost:3000"
-UPTIME_KUMA_URL="http://localhost:3001"
-HOMEPAGE_URL="http://localhost:3002"
-
-SONARR_INTERNAL="http://sonarr:8989"
-SONARR_ANIME_INTERNAL="http://sonarr-anime:8989"
-RADARR_INTERNAL="http://radarr:7878"
-PROWLARR_INTERNAL="http://prowlarr:9696"
-LIDARR_INTERNAL="http://lidarr:8686"
-
 # ═══════════════════════════════════════════════════════════════════
 # 6. WAIT FOR SERVICES
 # ═══════════════════════════════════════════════════════════════════
 info "Waiting for all services..."
-wait_for "Jellyfin"     "$JELLYFIN_URL/health"
-wait_for "Sonarr"       "$SONARR_URL/ping"
-wait_for "Sonarr Anime" "$SONARR_ANIME_URL/ping"
-wait_for "Radarr"       "$RADARR_URL/ping"
-wait_for "Prowlarr"     "$PROWLARR_URL/ping"
-wait_for "Bazarr"       "$BAZARR_URL"
-wait_for "SABnzbd"      "$SABNZBD_URL"
-wait_for "qBittorrent"  "$QBIT_URL"
-wait_for "Jellyseerr"   "$JELLYSEERR_URL"
-wait_for "Lidarr"       "$LIDARR_URL/ping"
-wait_for "LazyLibrarian" "$LAZYLIBRARIAN_URL"
-wait_for "Navidrome"    "$NAVIDROME_URL/ping"
-wait_for "Kavita"       "$KAVITA_URL"
-wait_for "Autobrr"      "$AUTOBRR_URL/api/healthz/liveness"
-wait_for "TubeArchivist" "$TUBEARCHIVIST_URL/api/ping"
-wait_for "Tdarr"        "$TDARR_URL"
-wait_for "Immich"       "$IMMICH_URL/api/server/ping"
-wait_for "Gitea"        "$GITEA_URL/api/v1/version"
-wait_for "Uptime Kuma"  "$UPTIME_KUMA_URL"
-wait_for "Open WebUI"   "$OPEN_WEBUI_URL"
-wait_for "Dozzle"       "$DOZZLE_URL"
-wait_for "Beszel"       "$BESZEL_URL/api/health"
-wait_for "Homepage"     "$HOMEPAGE_URL"
+while IFS='|' read -r svc_name svc_url; do
+  [ -z "$svc_name" ] && continue
+  wait_for "$svc_name" "$svc_url"
+done <<< "$SERVICE_HEALTH_ENDPOINTS"
 
 # ═══════════════════════════════════════════════════════════════════
 # 7. API KEYS
@@ -1864,54 +1839,7 @@ info "Writing Recyclarr config..."
 RECYCLARR_CONFIG="$CONFIG_DIR/recyclarr/recyclarr.yml"
 if [ -n "$SONARR_KEY" ] && [ -n "$RADARR_KEY" ]; then
   ANIME_KEY="${SONARR_ANIME_KEY:-$SONARR_KEY}"
-  cat > "$RECYCLARR_CONFIG" << YAML
-sonarr:
-  main:
-    base_url: $SONARR_INTERNAL
-    api_key: $SONARR_KEY
-    replace_existing_custom_formats: true
-    quality_definition:
-      type: series
-    quality_profiles:
-      - name: $SONARR_PROFILE
-        reset_unmatched_scores:
-          enabled: true
-    custom_formats:
-      - trash_ids:
-          - 32b367365729d530ca1c124a0b180c64
-          - 82d40da2bc6923f41e14394075dd4b03
-          - e1a997ddb54e3ecbfe06341ad323c458
-          - 06d66ab109d4d2eddb2794d21526d140
-        assign_scores_to:
-          - name: $SONARR_PROFILE
-  anime:
-    base_url: $SONARR_ANIME_INTERNAL
-    api_key: $ANIME_KEY
-    quality_definition:
-      type: anime
-    quality_profiles:
-      - name: $SONARR_ANIME_PROFILE
-        reset_unmatched_scores:
-          enabled: true
-radarr:
-  main:
-    base_url: $RADARR_INTERNAL
-    api_key: $RADARR_KEY
-    replace_existing_custom_formats: true
-    quality_definition:
-      type: movie
-    quality_profiles:
-      - name: $RADARR_PROFILE
-        reset_unmatched_scores:
-          enabled: true
-    custom_formats:
-      - trash_ids:
-          - ed38b889b31be83fda192888e2286d83
-          - 90cedc1fea7ea5d11298bebd3d1d3223
-          - b8cd450cbfa689c0259a01d9e29ba3d6
-        assign_scores_to:
-          - name: $RADARR_PROFILE
-YAML
+  write_recyclarr_config_from_template
   ok "Config written"
 
   # Trigger initial sync
@@ -2038,111 +1966,7 @@ JANITORR_CONFIG="$CONFIG_DIR/janitorr/application.yml"
 if [ ! -f "$JANITORR_CONFIG" ]; then
   mkdir -p "$CONFIG_DIR/janitorr/logs"
   mkdir -p "$MEDIA_DIR/leaving-soon"
-  cat > "$JANITORR_CONFIG" << JANITORREOF
-logging:
-  level:
-    com.github.schaka: INFO
-  file:
-    name: "/logs/janitorr.log"
-
-file-system:
-  access: true
-  validate-seeding: true
-  leaving-soon-dir: "/media/leaving-soon"
-  media-server-leaving-soon-dir: "/media/leaving-soon"
-  from-scratch: true
-  free-space-check-dir: "/"
-
-application:
-  dry-run: true
-  run-once: false
-  whole-tv-show: false
-  whole-show-seeding-check: false
-  leaving-soon: 14d
-  leaving-soon-threshold-offset-percent: 5
-  exclusion-tags:
-    - "janitorr_keep"
-
-  media-deletion:
-    enabled: true
-    movie-expiration:
-      5: 15d
-      10: 30d
-      15: 60d
-      20: 90d
-    season-expiration:
-      5: 15d
-      10: 30d
-      15: 60d
-      20: 120d
-
-  tag-based-deletion:
-    enabled: false
-    minimum-free-disk-percent: 100
-    schedules: []
-
-  episode-deletion:
-    enabled: false
-    clean-older-seasons: false
-    tag: janitorr_daily
-    max-episodes: 10
-    max-age: 30d
-
-clients:
-  sonarr:
-    enabled: true
-    url: "http://sonarr:8989"
-    api-key: "$SONARR_KEY"
-    delete-empty-shows: true
-    import-exclusions: false
-  radarr:
-    enabled: true
-    url: "http://radarr:7878"
-    api-key: "$RADARR_KEY"
-    only-delete-files: false
-    import-exclusions: false
-  bazarr:
-    enabled: false
-    url: "http://bazarr:6767"
-    api-key: ""
-  jellyfin:
-    enabled: true
-    url: "http://jellyfin:8096"
-    api-key: "$JELLYFIN_API_KEY"
-    username: "$JELLYFIN_USER"
-    password: "$JELLYFIN_PASS"
-    delete: true
-    exclude-favorited: false
-    leaving-soon-tv: "Shows (Leaving Soon)"
-    leaving-soon-movies: "Movies (Leaving Soon)"
-    leaving-soon-type: MOVIES_AND_TV
-  emby:
-    enabled: false
-    url: ""
-    api-key: ""
-    username: ""
-    password: ""
-    delete: false
-    exclude-favorited: false
-    leaving-soon-tv: ""
-    leaving-soon-movies: ""
-    leaving-soon-type: NONE
-  jellyseerr:
-    enabled: true
-    url: "http://jellyseerr:5055"
-    api-key: "$JELLYSEERR_KEY"
-    match-server: false
-  jellystat:
-    enabled: false
-    whole-tv-show: false
-    url: ""
-    api-key: ""
-  streamystats:
-    enabled: false
-    whole-tv-show: false
-    url: ""
-    api-key: ""
-JANITORREOF
+  write_janitorr_config_from_template
   ok "Config written (dry-run mode)"
   docker restart janitorr >/dev/null 2>&1 || true
 else
@@ -2206,153 +2030,7 @@ HPEOF
 ok "widgets.yaml"
 
 # services.yaml — all services with API key integration
-cat > "$HP_DIR/services.yaml" <<HPEOF
-- Media:
-    - Jellyfin:
-        icon: jellyfin.svg
-        href: http://jellyfin.media.local
-        description: Stream your library
-        server: local
-        container: jellyfin
-        widget:
-          type: jellyfin
-          url: http://jellyfin:8096
-          key: ${JELLYFIN_TOKEN:-}
-    - Jellyseerr:
-        icon: jellyseerr.svg
-        href: http://jellyseerr.media.local
-        description: Request movies & TV
-        server: local
-        container: jellyseerr
-        widget:
-          type: jellyseerr
-          url: http://jellyseerr:5055
-          key: ${JELLYSEERR_KEY:-}
-    - Navidrome:
-        icon: navidrome.svg
-        href: http://navidrome.media.local
-        description: Stream your music
-        server: local
-        container: navidrome
-    - Kavita:
-        icon: kavita.svg
-        href: http://kavita.media.local
-        description: Read books & comics
-        server: local
-        container: kavita
-- Library Management:
-    - Sonarr:
-        icon: sonarr.svg
-        href: http://sonarr.media.local
-        description: TV show automation
-        server: local
-        container: sonarr
-        widget:
-          type: sonarr
-          url: http://sonarr:8989
-          key: ${SONARR_KEY:-}
-    - Sonarr Anime:
-        icon: sonarr.svg
-        href: http://sonarr-anime.media.local
-        description: Anime series
-        server: local
-        container: sonarr-anime
-        widget:
-          type: sonarr
-          url: http://sonarr-anime:8989
-          key: ${SONARR_ANIME_KEY:-}
-    - Radarr:
-        icon: radarr.svg
-        href: http://radarr.media.local
-        description: Movie automation
-        server: local
-        container: radarr
-        widget:
-          type: radarr
-          url: http://radarr:7878
-          key: ${RADARR_KEY:-}
-    - Lidarr:
-        icon: lidarr.svg
-        href: http://lidarr.media.local
-        description: Music automation
-        server: local
-        container: lidarr
-        widget:
-          type: lidarr
-          url: http://lidarr:8686
-          key: ${LIDARR_KEY:-}
-    - Prowlarr:
-        icon: prowlarr.svg
-        href: http://prowlarr.media.local
-        description: Indexer management
-        server: local
-        container: prowlarr
-        widget:
-          type: prowlarr
-          url: http://prowlarr:9696
-          key: ${PROWLARR_KEY:-}
-    - Bazarr:
-        icon: bazarr.svg
-        href: http://bazarr.media.local
-        description: Subtitle downloads
-        server: local
-        container: bazarr
-        widget:
-          type: bazarr
-          url: http://bazarr:6767
-          key: $([ -f "$CONFIG_DIR/bazarr/config/config/config.yaml" ] && sed -n 's/^apikey: *//p' "$CONFIG_DIR/bazarr/config/config/config.yaml" 2>/dev/null || echo "")
-- Downloads:
-    - qBittorrent:
-        icon: qbittorrent.svg
-        href: http://qbittorrent.media.local
-        description: Torrent client
-        server: local
-        container: qbittorrent
-        widget:
-          type: qbittorrent
-          url: http://qbittorrent:8081
-          username: ${QBIT_USER:-admin}
-          password: ${QBIT_PASS:-changeme}
-    - SABnzbd:
-        icon: sabnzbd.svg
-        href: http://sabnzbd.media.local
-        description: Usenet client
-        server: local
-        container: sabnzbd
-        widget:
-          type: sabnzbd
-          url: http://sabnzbd:8080
-          key: ${SABNZBD_KEY:-}
-- Tools:
-    - Immich:
-        icon: immich.svg
-        href: http://immich.media.local
-        description: Photo management
-        server: local
-        container: immich
-    - Gitea:
-        icon: gitea.svg
-        href: http://gitea.media.local
-        description: Git mirror & hosting
-        server: local
-        container: gitea
-    - Uptime Kuma:
-        icon: uptime-kuma.svg
-        href: http://uptime-kuma.media.local
-        description: Service uptime monitoring
-        server: local
-        container: uptime-kuma
-        widget:
-          type: uptimekuma
-          url: http://uptime-kuma:3001
-          slug: default
-    - Scrutiny:
-        icon: scrutiny.svg
-        href: http://scrutiny.media.local
-        description: Disk health monitoring
-        server: local
-        container: scrutiny
-HPEOF
+write_homepage_services_from_template
 ok "services.yaml"
 
 # ═══════════════════════════════════════════════════════════════════
@@ -2365,76 +2043,7 @@ info "Generating API proxy config for landing page..."
   JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
 
 API_PROXY="$CONFIG_DIR/nginx/api-proxy.conf"
-cat > "$API_PROXY" << PROXYEOF
-# Auto-generated by setup.sh — API proxy endpoints for landing page widgets
-# Keys are injected here so they never reach the browser.
-# Rate-limited to prevent abuse.
-# Uses nginx variables + rewrite for upstream resolution so nginx starts even if a service is down.
-# IMPORTANT: set must come BEFORE rewrite ... break; (both are rewrite-module directives)
-
-# qBittorrent
-location /api/qbt/ {
-    limit_req zone=api burst=50 nodelay;
-    set \$upstream_api_qbt http://qbittorrent:8081;
-    rewrite ^/api/qbt/(.*)\$ /api/v2/\$1 break;
-    proxy_pass \$upstream_api_qbt;
-    proxy_set_header Host qbittorrent;
-    proxy_set_header Referer http://qbittorrent:8081;
-    proxy_set_header Origin http://qbittorrent:8081;
-}
-
-# Sonarr
-location /api/sonarr/ {
-    limit_req zone=api burst=50 nodelay;
-    set \$upstream_api_sonarr http://sonarr:8989;
-    rewrite ^/api/sonarr/(.*)\$ /api/v3/\$1 break;
-    proxy_pass \$upstream_api_sonarr;
-    proxy_set_header X-Api-Key $SONARR_KEY;
-}
-
-# Sonarr Anime
-location /api/sonarr-anime/ {
-    limit_req zone=api burst=50 nodelay;
-    set \$upstream_api_sonarr_anime http://sonarr-anime:8989;
-    rewrite ^/api/sonarr-anime/(.*)\$ /api/v3/\$1 break;
-    proxy_pass \$upstream_api_sonarr_anime;
-    proxy_set_header X-Api-Key $SONARR_ANIME_KEY;
-}
-
-# Radarr
-location /api/radarr/ {
-    limit_req zone=api burst=50 nodelay;
-    set \$upstream_api_radarr http://radarr:7878;
-    rewrite ^/api/radarr/(.*)\$ /api/v3/\$1 break;
-    proxy_pass \$upstream_api_radarr;
-    proxy_set_header X-Api-Key $RADARR_KEY;
-}
-
-# Jellyfin
-location /api/jellyfin/ {
-    limit_req zone=api burst=50 nodelay;
-    set \$upstream_api_jellyfin http://jellyfin:8096;
-    rewrite ^/api/jellyfin/(.*)\$ /\$1 break;
-    proxy_pass \$upstream_api_jellyfin;
-    proxy_set_header X-Emby-Token $JELLYFIN_API_KEY;
-}
-
-# Jellyseerr
-location /api/jellyseerr/ {
-    limit_req zone=api burst=50 nodelay;
-    set \$upstream_api_jellyseerr http://jellyseerr:5055;
-    rewrite ^/api/jellyseerr/(.*)\$ /api/v1/\$1 break;
-    proxy_pass \$upstream_api_jellyseerr;
-    proxy_set_header X-Api-Key $JELLYSEERR_KEY;
-}
-
-# SABnzbd (key in query param)
-location /api/sabnzbd/ {
-    limit_req zone=api burst=50 nodelay;
-    set \$upstream_api_sabnzbd http://sabnzbd:8080;
-    proxy_pass \$upstream_api_sabnzbd/api?apikey=${SABNZBD_KEY}&\$args;
-}
-PROXYEOF
+write_api_proxy_from_template
 
 ok "api-proxy.conf written"
 
@@ -2450,326 +2059,12 @@ fi
 fi  # end setup mode
 
 # ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 18. END-TO-END VERIFICATION
 # ═══════════════════════════════════════════════════════════════════
-info "Running end-to-end verification..."
-
-TESTS_PASSED=0
-TESTS_FAILED=0
-TESTS_SKIPPED=0
-
-pass() { printf "\033[1;32m   ✓ %s\033[0m\n" "$*"; TESTS_PASSED=$((TESTS_PASSED + 1)); }
-fail() { printf "\033[1;31m   ✗ %s\033[0m\n" "$*"; TESTS_FAILED=$((TESTS_FAILED + 1)); }
-skip() { printf "\033[1;33m   - %s (skipped)\033[0m\n" "$*"; TESTS_SKIPPED=$((TESTS_SKIPPED + 1)); }
-
-check() {
-  local desc="$1" result="$2"
-  if [ "$result" = "true" ]; then pass "$desc"; else fail "$desc"; fi
-}
-
-# Re-read Jellyseerr key from disk (may have been created during setup)
-[ -z "${JELLYSEERR_KEY:-}" ] && [ -f "$CONFIG_DIR/jellyseerr/settings.json" ] && \
-  JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
-
-# --- 1. Service health ---
-info "Service health..."
-
-for svc_url in \
-  "Jellyfin:$JELLYFIN_URL/health" \
-  "Sonarr:$SONARR_URL/ping" \
-  "Sonarr Anime:$SONARR_ANIME_URL/ping" \
-  "Radarr:$RADARR_URL/ping" \
-  "Prowlarr:$PROWLARR_URL/ping" \
-  "Bazarr:$BAZARR_URL" \
-  "SABnzbd:$SABNZBD_URL" \
-  "qBittorrent:$QBIT_URL" \
-  "Jellyseerr:$JELLYSEERR_URL" \
-  "Lidarr:$LIDARR_URL/ping" \
-  "LazyLibrarian:$LAZYLIBRARIAN_URL" \
-  "Navidrome:$NAVIDROME_URL/ping" \
-  "Kavita:$KAVITA_URL" \
-  "Immich:$IMMICH_URL/api/server/ping" \
-  "TubeArchivist:$TUBEARCHIVIST_URL/api/ping" \
-  "Tdarr:$TDARR_URL" \
-  "Autobrr:$AUTOBRR_URL/api/healthz/liveness" \
-  "Scrutiny:$SCRUTINY_URL/api/health" \
-  "Gitea:$GITEA_URL/api/v1/version" \
-  "Uptime Kuma:$UPTIME_KUMA_URL" \
-  "Open WebUI:$OPEN_WEBUI_URL" \
-  "Dozzle:$DOZZLE_URL" \
-  "Beszel:$BESZEL_URL/api/health" \
-  "CrowdSec:$CROWDSEC_URL/health" \
-  "Homepage:$HOMEPAGE_URL" \
-  ; do
-  name="${svc_url%%:*}"
-  url="${svc_url#*:}"
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
-  # Retry once after 5s if service appears down (may still be restarting)
-  if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
-    sleep 5
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
-  fi
-  check "$name responds ($HTTP_CODE)" "$([ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ] && echo true || echo false)"
-done
-
-# --- 2. Download clients ---
-info "Download clients..."
-
-QBIT_COOKIE_V=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" -d "username=$QBIT_USER&password=$QBIT_PASS" 2>/dev/null | extract_cookie SID)
-check "qBittorrent login" "$([ -n "$QBIT_COOKIE_V" ] && echo true || echo false)"
-
-if [ -n "$QBIT_COOKIE_V" ]; then
-  QBIT_CATS=$(curl -sf "$QBIT_URL/api/v2/torrents/categories" -b "SID=$QBIT_COOKIE_V" 2>/dev/null || echo "{}")
-  check "qBittorrent category: sonarr" "$(echo "$QBIT_CATS" | jq 'has("sonarr")' 2>/dev/null)"
-  check "qBittorrent category: radarr" "$(echo "$QBIT_CATS" | jq 'has("radarr")' 2>/dev/null)"
-fi
-
-if [ -n "$SONARR_KEY" ]; then
-  SONARR_DL=$(api GET "$SONARR_URL/api/v3/downloadclient" -H "X-Api-Key: $SONARR_KEY" || echo "[]")
-  check "Sonarr → qBittorrent" "$(echo "$SONARR_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
-fi
-
-if [ -n "$SONARR_ANIME_KEY" ]; then
-  SONARR_ANIME_DL=$(api GET "$SONARR_ANIME_URL/api/v3/downloadclient" -H "X-Api-Key: $SONARR_ANIME_KEY" || echo "[]")
-  check "Sonarr Anime → qBittorrent" "$(echo "$SONARR_ANIME_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
-fi
-
-if [ -n "$RADARR_KEY" ]; then
-  RADARR_DL=$(api GET "$RADARR_URL/api/v3/downloadclient" -H "X-Api-Key: $RADARR_KEY" || echo "[]")
-  check "Radarr → qBittorrent" "$(echo "$RADARR_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
-fi
-
-# --- 3. Root folders ---
-info "Root folders..."
-
-[ -n "$SONARR_KEY" ] && check "Sonarr → /media/tv" \
-  "$(api GET "$SONARR_URL/api/v3/rootfolder" -H "X-Api-Key: $SONARR_KEY" | jq 'any(.[]; .path == "/media/tv")' 2>/dev/null)"
-
-[ -n "$SONARR_ANIME_KEY" ] && check "Sonarr Anime → /media/anime" \
-  "$(api GET "$SONARR_ANIME_URL/api/v3/rootfolder" -H "X-Api-Key: $SONARR_ANIME_KEY" | jq 'any(.[]; .path == "/media/anime")' 2>/dev/null)"
-
-[ -n "$RADARR_KEY" ] && check "Radarr → /media/movies" \
-  "$(api GET "$RADARR_URL/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" | jq 'any(.[]; .path == "/media/movies")' 2>/dev/null)"
-
-[ -n "$RADARR_KEY" ] && check "Radarr → no stale root folders" \
-  "$(api GET "$RADARR_URL/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" | jq '[.[] | .path] | all(. == "/media/movies")' 2>/dev/null)"
-
-# --- 4. Prowlarr ---
-info "Prowlarr..."
-
-if [ -n "$PROWLARR_KEY" ]; then
-  PH="X-Api-Key: $PROWLARR_KEY"
-  PROWLARR_APPS=$(api GET "$PROWLARR_URL/api/v1/applications" -H "$PH" || echo "[]")
-  check "Prowlarr → Sonarr connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Sonarr")' 2>/dev/null)"
-  check "Prowlarr → Sonarr Anime connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Sonarr Anime")' 2>/dev/null)"
-  check "Prowlarr → Radarr connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Radarr")' 2>/dev/null)"
-
-  INDEXER_COUNT=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" | jq '[.[] | select(.enable == true)] | length' 2>/dev/null || echo "0")
-  check "Prowlarr → indexers enabled ($INDEXER_COUNT)" "$([ "$INDEXER_COUNT" -gt 0 ] && echo true || echo false)"
-
-  SEARCH_RESULTS=$(curl -sf --max-time 30 "$PROWLARR_URL/api/v1/search?query=test&type=movie&limit=3" -H "$PH" 2>/dev/null || echo "[]")
-  SEARCH_COUNT=$(echo "$SEARCH_RESULTS" | jq 'length' 2>/dev/null || echo "0")
-  if [ "$SEARCH_COUNT" -gt 0 ] 2>/dev/null; then
-    pass "Prowlarr → search works ($SEARCH_COUNT results)"
-  elif [ "$INDEXER_COUNT" -gt 0 ] 2>/dev/null; then
-    skip "Prowlarr → search (indexers may be rate-limited)"
-  else
-    fail "Prowlarr → search works"
-  fi
-fi
-
-# --- 5. Jellyfin ---
-info "Jellyfin..."
-
-JF_HEADER_V='X-Emby-Authorization: MediaBrowser Client="verify", Device="script", DeviceId="verify", Version="1.0"'
-JF_AUTH_V=$(curl -sf -X POST "$JELLYFIN_URL/Users/AuthenticateByName" -H "$JF_HEADER_V" \
-  -H "Content-Type: application/json" -d "{\"Username\":\"$JELLYFIN_USER\",\"Pw\":\"$JELLYFIN_PASS\"}" 2>/dev/null)
-JF_TOKEN_V=$(echo "$JF_AUTH_V" | jq -r '.AccessToken // empty' 2>/dev/null)
-check "Jellyfin → login" "$([ -n "$JF_TOKEN_V" ] && echo true || echo false)"
-
-if [ -n "$JF_TOKEN_V" ]; then
-  curl -sf "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JF_TOKEN_V" > "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null
-  for lp in "Movies:/media/movies" "TV Shows:/media/tv" "Anime:/media/anime"; do
-    ln="${lp%%:*}"; lpath="${lp#*:}"
-    HAS=$(jq --arg n "$ln" --arg p "$lpath" \
-      '[.[] | select(.Name == $n) | .Locations[] | select(. == $p)] | length > 0' "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null)
-    check "Jellyfin → library: $ln" "$HAS"
-  done
-  REALTIME=$(jq 'all(.[]; .LibraryOptions.EnableRealtimeMonitor == true)' "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null)
-  check "Jellyfin → real-time monitoring" "$REALTIME"
-  DAILY_SCAN=$(jq 'all(.[]; .LibraryOptions.AutomaticRefreshIntervalDays == 1)' "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null)
-  check "Jellyfin → daily scan" "$DAILY_SCAN"
-  rm -f "$TMPDIR_SETUP/jf_verify.json"
-fi
-
-# --- 6. Jellyfin sync ---
-info "Jellyfin sync..."
-
-check_jellyfin_notification() {
-  local name="$1" url="$2" key="$3"
-  local NOTIF=$(api GET "$url/api/v3/notification" -H "X-Api-Key: $key" || echo "[]")
-  check "$name → Jellyfin notification" "$(echo "$NOTIF" | jq 'any(.[]; .name == "Jellyfin")' 2>/dev/null)"
-}
-
-[ -n "$SONARR_KEY" ] && check_jellyfin_notification "Sonarr" "$SONARR_URL" "$SONARR_KEY"
-[ -n "$SONARR_ANIME_KEY" ] && check_jellyfin_notification "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
-[ -n "$RADARR_KEY" ] && check_jellyfin_notification "Radarr" "$RADARR_URL" "$RADARR_KEY"
-
-# --- 7. Jellyseerr ---
-info "Jellyseerr..."
-
-JS_PUBLIC_V=$(api GET "$JELLYSEERR_URL/api/v1/settings/public" || echo "{}")
-check "Jellyseerr → initialized" "$(echo "$JS_PUBLIC_V" | jq '.initialized' 2>/dev/null)"
-
-if [ -n "${JELLYSEERR_KEY:-}" ]; then
-  JH="X-Api-Key: $JELLYSEERR_KEY"
-
-  JS_SONARR_V=$(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" -H "$JH" || echo "[]")
-  JS_SONARR_COUNT=$(echo "$JS_SONARR_V" | jq 'length' 2>/dev/null || echo "0")
-  check "Jellyseerr → Sonarr connections ($JS_SONARR_COUNT)" "$([ "$JS_SONARR_COUNT" -gt 0 ] && echo true || echo false)"
-  JS_SONARR_SEARCH=$(echo "$JS_SONARR_V" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)
-  check "Jellyseerr → Sonarr enableSearch" "$JS_SONARR_SEARCH"
-
-  JS_RADARR_V=$(api GET "$JELLYSEERR_URL/api/v1/settings/radarr" -H "$JH" || echo "[]")
-  JS_RADARR_COUNT=$(echo "$JS_RADARR_V" | jq 'length' 2>/dev/null || echo "0")
-  check "Jellyseerr → Radarr connections ($JS_RADARR_COUNT)" "$([ "$JS_RADARR_COUNT" -gt 0 ] && echo true || echo false)"
-  JS_RADARR_SEARCH=$(echo "$JS_RADARR_V" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)
-  check "Jellyseerr → Radarr enableSearch" "$JS_RADARR_SEARCH"
-
-  JS_JELLYFIN_V=$(api GET "$JELLYSEERR_URL/api/v1/settings/jellyfin" -H "$JH" || echo "{}")
-  JS_LIB_ENABLED=$(echo "$JS_JELLYFIN_V" | jq '[.libraries[] | select(.enabled == true)] | length' 2>/dev/null || echo "0")
-  JS_LIB_TOTAL=$(echo "$JS_JELLYFIN_V" | jq '.libraries | length' 2>/dev/null || echo "0")
-  check "Jellyseerr → libraries enabled ($JS_LIB_ENABLED/$JS_LIB_TOTAL)" "$([ "$JS_LIB_ENABLED" -gt 0 ] && echo true || echo false)"
-fi
-
-# --- 8. Quality profiles ---
-info "Quality profiles..."
-
-check_unknown_quality() {
-  local name="$1" url="$2" key="$3"
-  local PROFILE=$(api GET "$url/api/v3/qualityprofile/1" -H "X-Api-Key: $key" 2>/dev/null || echo "")
-  [ -z "$PROFILE" ] && { skip "$name → quality profile"; return; }
-  local UNKNOWN=$(echo "$PROFILE" | jq '[.items[] | select(.quality.id == 0) | .allowed][0]' 2>/dev/null)
-  check "$name → Unknown quality allowed" "$UNKNOWN"
-}
-
-[ -n "$SONARR_KEY" ] && check_unknown_quality "Sonarr" "$SONARR_URL" "$SONARR_KEY"
-[ -n "$SONARR_ANIME_KEY" ] && check_unknown_quality "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
-
-# --- 9. Authentication ---
-info "Authentication..."
-
-check_arr_auth() {
-  local name="$1" url="$2" key="$3" api_ver="${4:-v3}"
-  local HOST=$(api GET "$url/api/$api_ver/config/host" -H "X-Api-Key: $key" 2>/dev/null || echo "")
-  [ -z "$HOST" ] && { skip "$name → auth"; return; }
-  local AUTH_USER=$(echo "$HOST" | jq -r '.username // empty' 2>/dev/null)
-  check "$name → auth configured" "$([ -n "$AUTH_USER" ] && echo true || echo false)"
-}
-
-[ -n "$SONARR_KEY" ] && check_arr_auth "Sonarr" "$SONARR_URL" "$SONARR_KEY"
-[ -n "$SONARR_ANIME_KEY" ] && check_arr_auth "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
-[ -n "$RADARR_KEY" ] && check_arr_auth "Radarr" "$RADARR_URL" "$RADARR_KEY"
-[ -n "$PROWLARR_KEY" ] && check_arr_auth "Prowlarr" "$PROWLARR_URL" "$PROWLARR_KEY" "v1"
-
-if [ -n "${SABNZBD_KEY:-}" ]; then
-  SAB_AUTH_USER=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=misc&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.config.misc.username // empty' 2>/dev/null)
-  check "SABnzbd → auth configured" "$([ -n "$SAB_AUTH_USER" ] && echo true || echo false)"
-fi
-
-BAZARR_CONFIG_FILE=""
-for p in "$CONFIG_DIR/bazarr/config/config/config.yaml" "$CONFIG_DIR/bazarr/config/config.yaml"; do
-  [ -f "$p" ] && BAZARR_CONFIG_FILE="$p" && break
-done
-if [ -n "$BAZARR_CONFIG_FILE" ]; then
-  BAZARR_AUTH_USER=$(sed -n '/^auth:/,/^[^ ]/{s/^  username: *//p;}' "$BAZARR_CONFIG_FILE" 2>/dev/null | head -1 || echo "")
-  check "Bazarr → auth configured" "$([ -n "$BAZARR_AUTH_USER" ] && [ "$BAZARR_AUTH_USER" != "''" ] && echo true || echo false)"
-fi
-
-# --- 10. Health checks ---
-info "Health checks..."
-
-[ -n "$SONARR_KEY" ] && {
-  SONARR_ERRORS=$(api GET "$SONARR_URL/api/v3/health" -H "X-Api-Key: $SONARR_KEY" | jq '[.[] | select(.type == "error")] | length' 2>/dev/null || echo "0")
-  check "Sonarr → no health errors" "$([ "$SONARR_ERRORS" = "0" ] && echo true || echo false)"
-}
-
-[ -n "$RADARR_KEY" ] && {
-  RADARR_ERRORS=$(api GET "$RADARR_URL/api/v3/health" -H "X-Api-Key: $RADARR_KEY" | jq '[.[] | select(.type == "error")] | length' 2>/dev/null || echo "0")
-  check "Radarr → no health errors" "$([ "$RADARR_ERRORS" = "0" ] && echo true || echo false)"
-}
-
-# --- 12. Landing page & proxy ---
-info "Landing page..."
-
-LANDING_HEADERS=$(curl -sf -D - -o /dev/null http://localhost 2>/dev/null || echo "")
-LANDING=$(curl -sf http://localhost 2>/dev/null || echo "")
-check "Landing page → serves HTML" "$(echo "$LANDING" | grep -q 'Media.*Server' && echo true || echo false)"
-check "Landing page → Content-Type text/html" "$(echo "$LANDING_HEADERS" | grep -qi 'content-type.*text/html' && echo true || echo false)"
-check "Landing page → service grid" "$(echo "$LANDING" | grep -q 'Jellyfin' && echo true || echo false)"
-check "Landing page → downloads widget" "$(echo "$LANDING" | grep -q 'qbt/torrents' && echo true || echo false)"
-
-QBT_PROXY=$(curl -sf http://localhost/api/qbt/torrents/info 2>/dev/null || echo "")
-check "Landing page → qBittorrent proxy" "$(echo "$QBT_PROXY" | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-
-check "Proxy → Sonarr calendar" "$(curl -sf http://localhost/api/sonarr/calendar 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-check "Proxy → Sonarr Anime calendar" "$(curl -sf http://localhost/api/sonarr-anime/calendar 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-check "Proxy → Radarr calendar" "$(curl -sf http://localhost/api/radarr/calendar 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-check "Proxy → Jellyfin latest" "$(curl -sf 'http://localhost/api/jellyfin/Items?SortBy=DateCreated&SortOrder=Descending&Limit=3&Recursive=true&IncludeItemTypes=Movie,Series' 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-check "Proxy → Jellyseerr requests" "$(curl -sf http://localhost/api/jellyseerr/request 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-check "Proxy → SABnzbd queue" "$(curl -sf 'http://localhost/api/sabnzbd/?mode=queue&output=json' 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-
-# --- 13. Docker containers ---
-info "Docker containers..."
-
-for container in jellyfin sonarr sonarr-anime radarr lidarr lazylibrarian prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr autobrr tubearchivist archivist-es archivist-redis tdarr janitorr ollama open-webui watchtower dozzle crowdsec beszel navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage; do
-  STATUS=$(docker inspect -f '{{.State.Status}}' "$container" 2>/dev/null || echo "missing")
-  check "Container: $container" "$([ "$STATUS" = "running" ] && echo true || echo false)"
-done
-
-# --- 14. Tailscale ---
-info "Tailscale..."
-TS_CLI="$(detect_tailscale_cli)"
-if [ -n "$TS_CLI" ]; then
-  pass "Tailscale installed"
-  if "$TS_CLI" status &>/dev/null; then
-    TS_IP=$("$TS_CLI" ip -4 2>/dev/null || echo "")
-    if [ -n "$TS_IP" ]; then
-      pass "Tailscale connected ($TS_IP)"
-    else
-      fail "Tailscale connected but no IPv4 address"
-    fi
-    SERVE_STATUS=$("$TS_CLI" serve status 2>/dev/null || echo "")
-    if echo "$SERVE_STATUS" | grep -q "https"; then
-      pass "Tailscale HTTPS configured"
-    else
-      skip "Tailscale HTTPS not configured"
-    fi
-  else
-    skip "Tailscale not connected (remote access unavailable)"
-  fi
-else
-  skip "Tailscale not installed"
-fi
-
-# --- 15. Summary ---
-TOTAL=$((TESTS_PASSED + TESTS_FAILED))
-echo ""
-echo "  ────────────────────────────────────────────────────────────"
-if [ "$TESTS_FAILED" -eq 0 ]; then
-  printf "\033[1;32m   All %d checks passed!" "$TOTAL"
-  [ "$TESTS_SKIPPED" -gt 0 ] && printf " (%d skipped)" "$TESTS_SKIPPED"
-  printf "\033[0m\n"
-else
-  printf "\033[1;31m   %d/%d checks failed" "$TESTS_FAILED" "$TOTAL"
-  [ "$TESTS_SKIPPED" -gt 0 ] && printf " (%d skipped)" "$TESTS_SKIPPED"
-  printf "\033[0m\n"
-fi
-echo ""
-
-[ "$MODE" = "test" ] && exit "$TESTS_FAILED"
-
-# ═══════════════════════════════════════════════════════════════════
+VERIFY_EXIT=0
+run_verification || VERIFY_EXIT=$?
+[ "$MODE" = "test" ] && exit "$VERIFY_EXIT"
 # DONE
 # ═══════════════════════════════════════════════════════════════════
 echo ""
