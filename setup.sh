@@ -6,6 +6,8 @@ IFS=$'\n\t'
 # Media Server — One-command setup (fresh install or re-run)
 # Usage: ./setup.sh                      Full setup + verification
 #        ./setup.sh --preflight          Fast local prerequisite + config checks
+#        ./setup.sh --check-config       Validate config.toml only
+#        ./setup.sh --yes                Non-interactive mode (skip prompts)
 #        ./setup.sh --test               Run verification only
 #        ./setup.sh --update             Backup + pull latest images + restart
 #        ./setup.sh --backup             Backup service configs
@@ -36,9 +38,42 @@ trap 'on_error "$LINENO" "$BASH_COMMAND" "$?"' ERR
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 require_cmd() { has_cmd "$1" || err "$1 is required"; }
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif has_cmd sudo; then
+    sudo "$@"
+  else
+    err "Need root privileges to run: $*"
+  fi
+}
 require_docker_running() {
   require_cmd docker
   docker info >/dev/null 2>&1 || err "Docker is not running"
+}
+install_package() {
+  local pkg="$1"
+  if has_cmd brew; then
+    brew install "$pkg"
+  elif has_cmd apt-get; then
+    as_root apt-get update
+    as_root apt-get install -y "$pkg"
+  elif has_cmd dnf; then
+    as_root dnf install -y "$pkg"
+  elif has_cmd pacman; then
+    as_root pacman -Sy --noconfirm "$pkg"
+  else
+    return 1
+  fi
+}
+detect_tailscale_cli() {
+  if has_cmd tailscale; then
+    command -v tailscale
+  elif [ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]; then
+    echo "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+  else
+    echo ""
+  fi
 }
 
 detect_timeout_cmd() {
@@ -73,6 +108,49 @@ sed_inplace() {
   else
     sed -i '' -e "$expr" "$file"
   fi
+}
+
+try_load_config_json() {
+  local path="$1"
+  local out=""
+
+  if has_cmd python3; then
+    if out="$(python3 - "$path" << 'PY' 2>/dev/null
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        sys.exit(2)
+
+with open(path, "rb") as f:
+    data = tomllib.load(f)
+
+json.dump(data, sys.stdout)
+PY
+)"; then
+      echo "$out"
+      return 0
+    fi
+  fi
+
+  if has_cmd yq; then
+    yq -p toml -o json '.' "$path" 2>/dev/null
+    return $?
+  fi
+
+  return 1
+}
+load_config_json() {
+  local path="$1"
+  local out=""
+  out="$(try_load_config_json "$path")" || err "Unable to parse config.toml (need Python 3.11+ or python3-tomli, or yq)"
+  echo "$out"
 }
 
 api() {
@@ -111,6 +189,23 @@ validate_required_config() {
   cfg_required_string '.quality.sonarr_anime_profile' 'quality.sonarr_anime_profile'
   cfg_required_string '.quality.radarr_profile' 'quality.radarr_profile'
 }
+is_non_negative_number() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
+is_non_negative_int() { [[ "$1" =~ ^[0-9]+$ ]]; }
+validate_config_semantics() {
+  local dl_complete dl_incomplete seed_ratio seed_time timezone
+
+  dl_complete=$(cfg '.downloads.complete')
+  dl_incomplete=$(cfg '.downloads.incomplete')
+  seed_ratio=$(cfg '.downloads.seeding_ratio')
+  seed_time=$(cfg '.downloads.seeding_time_minutes')
+  timezone=$(cfg '.timezone // empty')
+
+  [[ "$dl_complete" == /* ]] || err "downloads.complete must be an absolute path"
+  [[ "$dl_incomplete" == /* ]] || err "downloads.incomplete must be an absolute path"
+  is_non_negative_number "$seed_ratio" || err "downloads.seeding_ratio must be a non-negative number"
+  is_non_negative_int "$seed_time" || err "downloads.seeding_time_minutes must be a non-negative integer"
+  [ -n "$timezone" ] || err "timezone must be set"
+}
 
 get_api_key() {
   local f="$CONFIG_DIR/$1/config.xml"
@@ -118,15 +213,35 @@ get_api_key() {
 }
 
 # ─── Mode selection ──────────────────────────────────────────────
-case "${1:-}" in
-  --preflight) MODE=preflight ;;
-  --test)    MODE=test ;;
-  --update)  MODE=update ;;
-  --backup)  MODE=backup ;;
-  --restore) MODE=restore; RESTORE_FILE="${2:-}" ;;
-  "")        MODE=setup ;;
-  *)         echo "Usage: ./setup.sh [--preflight|--test|--update|--backup|--restore <file>]"; exit 1 ;;
-esac
+MODE=""
+RESTORE_FILE=""
+NON_INTERACTIVE=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --yes|-y)
+      NON_INTERACTIVE=true
+      shift
+      ;;
+    --preflight|--check-config|--test|--update|--backup)
+      [ -n "$MODE" ] && err "Only one mode can be used at a time"
+      MODE="${1#--}"
+      MODE="${MODE//-/_}"
+      shift
+      ;;
+    --restore)
+      [ -n "$MODE" ] && err "Only one mode can be used at a time"
+      MODE="restore"
+      shift
+      [ "$#" -gt 0 ] || err "Usage: ./setup.sh --restore <backup-file>"
+      RESTORE_FILE="$1"
+      shift
+      ;;
+    *)
+      err "Usage: ./setup.sh [--yes] [--preflight|--check-config|--test|--update|--backup|--restore <file>]"
+      ;;
+  esac
+done
+[ -z "$MODE" ] && MODE="setup"
 
 BACKUP_DIR="$MEDIA_DIR/backups"
 MAX_BACKUPS=10
@@ -196,9 +311,13 @@ do_restore() {
 
   info "Restoring from $RESTORE_FILE..."
   echo "  This will overwrite current configs in $CONFIG_DIR"
-  echo ""
-  read -r -p "  Continue? [y/N] " confirm
-  [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "  Aborted."; exit 0; }
+  if [ "$NON_INTERACTIVE" = "true" ]; then
+    ok "Non-interactive mode: restore confirmation auto-accepted"
+  else
+    echo ""
+    read -r -p "  Continue? [y/N] " confirm
+    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "  Aborted."; exit 0; }
+  fi
 
   info "Stopping containers..."
   dc down 2>/dev/null || true
@@ -270,7 +389,6 @@ do_preflight() {
   preflight_check_cmd bash
   preflight_check_cmd curl
   preflight_check_cmd jq
-  preflight_check_cmd yq
   preflight_check_cmd python3
 
   if has_cmd docker; then
@@ -286,8 +404,8 @@ do_preflight() {
 
   if [ -f "$CONFIG_FILE" ]; then
     pf_ok "config.toml exists"
-    if has_cmd yq && has_cmd jq; then
-      if config_json=$(yq -p toml -o json '.' "$CONFIG_FILE" 2>/dev/null); then
+    if has_cmd jq; then
+      if config_json=$(try_load_config_json "$CONFIG_FILE" 2>/dev/null); then
         pf_ok "config.toml parses as valid TOML"
         for path in \
           ".jellyfin.username" \
@@ -306,11 +424,22 @@ do_preflight() {
             pf_fail "required config missing: $path"
           fi
         done
+
+        value=$(echo "$config_json" | jq -r '.downloads.complete // empty')
+        [[ "$value" == /* ]] && pf_ok "downloads.complete is absolute" || pf_fail "downloads.complete must be an absolute path"
+        value=$(echo "$config_json" | jq -r '.downloads.incomplete // empty')
+        [[ "$value" == /* ]] && pf_ok "downloads.incomplete is absolute" || pf_fail "downloads.incomplete must be an absolute path"
+        value=$(echo "$config_json" | jq -r '.downloads.seeding_ratio // empty')
+        is_non_negative_number "$value" && pf_ok "downloads.seeding_ratio is valid" || pf_fail "downloads.seeding_ratio must be a non-negative number"
+        value=$(echo "$config_json" | jq -r '.downloads.seeding_time_minutes // empty')
+        is_non_negative_int "$value" && pf_ok "downloads.seeding_time_minutes is valid" || pf_fail "downloads.seeding_time_minutes must be a non-negative integer"
+        value=$(echo "$config_json" | jq -r '.timezone // empty')
+        [ -n "$value" ] && pf_ok "timezone is set" || pf_fail "timezone must be set"
       else
         pf_fail "config.toml is invalid TOML"
       fi
     else
-      pf_warn "skipping config content validation (jq/yq unavailable)"
+      pf_warn "skipping config content validation (jq unavailable)"
     fi
   else
     pf_warn "config.toml is missing (copy config.toml.example first)"
@@ -342,8 +471,21 @@ do_preflight() {
   fi
   return "$failed"
 }
+do_check_config() {
+  require_cmd jq
+  [ -f "$CONFIG_FILE" ] || err "config.toml not found"
+  CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
+  validate_required_config
+  validate_config_semantics
+
+  info "Config validation passed"
+  ok "Credentials and required fields are present"
+  ok "Download paths and numeric values are valid"
+  ok "Timezone is set"
+}
 
 # ─── Mode dispatch ──────────────────────────────────────────────
+if [ "$MODE" = "check_config" ]; then do_check_config; exit 0; fi
 if [ "$MODE" = "preflight" ]; then
   if do_preflight; then
     exit 0
@@ -357,12 +499,12 @@ if [ "$MODE" = "update" ];  then do_update; exit 0; fi
 
 if [ "$MODE" = "test" ]; then
   require_cmd jq
-  require_cmd yq
   require_cmd python3
   require_docker_running
   [ -f "$CONFIG_FILE" ] || err "config.toml not found"
-  CONFIG_JSON=$(yq -p toml -o json '.' "$CONFIG_FILE")
+  CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
   validate_required_config
+  validate_config_semantics
 
   JELLYFIN_USER=$(cfg '.jellyfin.username')
   JELLYFIN_PASS=$(cfg '.jellyfin.password')
@@ -412,26 +554,42 @@ if [ "$MODE" = "setup" ]; then
 # ═══════════════════════════════════════════════════════════════════
 info "Checking prerequisites..."
 
-# Homebrew
-if ! command -v brew &>/dev/null; then
-  info "Installing Homebrew..."
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
-  ok "Homebrew installed"
-else
-  ok "Homebrew"
+OS_NAME="$(uname -s)"
+if [ "$OS_NAME" = "Darwin" ]; then
+  # Homebrew (macOS package manager)
+  if ! has_cmd brew; then
+    info "Installing Homebrew..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
+    ok "Homebrew installed"
+  else
+    ok "Homebrew"
+  fi
 fi
 
 # Docker
-if ! command -v docker &>/dev/null; then
-  info "Installing Docker Desktop..."
-  brew install --cask docker
-  ok "Docker Desktop installed — please open it from Applications and wait for it to start"
-  echo ""
-  echo "  After Docker Desktop is running, re-run this script."
-  echo ""
-  exit 0
-elif ! docker info &>/dev/null; then
+if ! has_cmd docker; then
+  if [ "$OS_NAME" = "Darwin" ]; then
+    info "Installing Docker Desktop..."
+    brew install --cask docker
+    ok "Docker Desktop installed — please open it from Applications and wait for it to start"
+    echo ""
+    echo "  After Docker Desktop is running, re-run this script."
+    echo ""
+    exit 0
+  elif [ "$OS_NAME" = "Linux" ]; then
+    info "Installing Docker Engine (Linux)..."
+    require_cmd curl
+    curl -fsSL https://get.docker.com | as_root sh
+    if has_cmd systemctl; then
+      as_root systemctl enable --now docker >/dev/null 2>&1 || true
+    fi
+    ok "Docker installed"
+  else
+    err "Unsupported OS for automatic Docker install: $OS_NAME"
+  fi
+fi
+if ! docker info &>/dev/null; then
   err "Docker is installed but not running. Start Docker Desktop and re-run this script."
 fi
 ok "Docker"
@@ -444,47 +602,56 @@ else
 fi
 
 # jq
-if ! command -v jq &>/dev/null; then
-  brew install jq
+if ! has_cmd jq; then
+  info "Installing jq..."
+  install_package jq || err "Could not install jq automatically. Please install jq and re-run."
   ok "jq installed"
 else
   ok "jq"
 fi
 
-# yq (TOML/YAML parser)
-if ! command -v yq &>/dev/null; then
-  brew install yq
-  ok "yq installed"
-else
+# yq is optional (python3 TOML parser is preferred fallback)
+if has_cmd yq; then
   ok "yq"
+else
+  warn "yq not found (using python TOML parser fallback)"
 fi
 
 # Tailscale (remote access)
-if ! command -v /Applications/Tailscale.app/Contents/MacOS/Tailscale &>/dev/null; then
+TS_CLI="$(detect_tailscale_cli)"
+if [ -n "$TS_CLI" ]; then
+  ok "Tailscale"
+elif [ "$OS_NAME" = "Darwin" ] && has_cmd brew; then
   info "Installing Tailscale..."
   brew install --cask tailscale
-  ok "Tailscale installed"
+  TS_CLI="$(detect_tailscale_cli)"
+  [ -n "$TS_CLI" ] && ok "Tailscale installed" || warn "Could not detect tailscale CLI after install"
 else
-  ok "Tailscale"
+  warn "Tailscale not installed (remote access step will be skipped)"
 fi
 
 # config.toml
 if [ ! -f "$CONFIG_FILE" ]; then
-  err "Missing config.toml — copy config.toml.example and fill in your values"
+  cp "$SCRIPT_DIR/config.toml.example" "$CONFIG_FILE"
+  warn "config.toml not found — created from config.toml.example with defaults"
 fi
-CONFIG_JSON=$(yq -p toml -o json '.' "$CONFIG_FILE")
+CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
 validate_required_config
+validate_config_semantics
 
 # Check Tailscale connection
-TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 TS_IP=""
 TS_HOSTNAME=""
-if ! "$TS_CLI" status &>/dev/null; then
+if [ -z "$TS_CLI" ]; then
+  warn "Skipping Tailscale setup (CLI not found)"
+elif ! "$TS_CLI" status &>/dev/null; then
   warn "Tailscale is not connected"
   echo "  Open Tailscale from the menu bar and sign in to enable remote access."
   echo "  You can skip this — local access will still work."
-  echo ""
-  read -r -p "  Press Enter to continue..."
+  if [ "$NON_INTERACTIVE" != "true" ]; then
+    echo ""
+    read -r -p "  Press Enter to continue..."
+  fi
 else
   TS_IP=$("$TS_CLI" ip -4 2>/dev/null || echo "")
   TS_HOSTNAME=$("$TS_CLI" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
@@ -666,7 +833,13 @@ else
   echo ""
   echo "  Adding .media.local domains to /etc/hosts (requires sudo)..."
   echo ""
-  if sudo -n true 2>/dev/null || sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"; then
+  if sudo -n true 2>/dev/null; then
+    sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"
+    ok "Hosts entries added"
+  elif [ "$NON_INTERACTIVE" = "true" ]; then
+    warn "Could not update /etc/hosts in non-interactive mode (no passwordless sudo)."
+    echo "    echo '127.0.0.1 $DOMAINS' | sudo tee -a /etc/hosts"
+  elif sudo bash -c "echo '' >> /etc/hosts && echo '# Media Server' >> /etc/hosts && echo '127.0.0.1 $DOMAINS' >> /etc/hosts"; then
     ok "Hosts entries added"
   else
     warn "Could not update /etc/hosts (no sudo). Run manually:"
@@ -2462,8 +2635,8 @@ done
 
 # --- 14. Tailscale ---
 info "Tailscale..."
-TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-if command -v "$TS_CLI" &>/dev/null; then
+TS_CLI="$(detect_tailscale_cli)"
+if [ -n "$TS_CLI" ]; then
   pass "Tailscale installed"
   if "$TS_CLI" status &>/dev/null; then
     TS_IP=$("$TS_CLI" ip -4 2>/dev/null || echo "")
@@ -2514,8 +2687,9 @@ echo "    Request:      http://jellyseerr.media.local"
 echo "    Watch:        http://jellyfin.media.local"
 echo "    All services: http://media.local"
 echo ""
-TS_CLI="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-TS_HOSTNAME=$("$TS_CLI" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
+TS_CLI="$(detect_tailscale_cli)"
+TS_HOSTNAME=""
+[ -n "$TS_CLI" ] && TS_HOSTNAME=$("$TS_CLI" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
 if [ -n "$TS_HOSTNAME" ]; then
 echo "  Remote (HTTPS):"
 echo "    Jellyfin:     https://$TS_HOSTNAME:8096"

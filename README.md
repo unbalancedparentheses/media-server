@@ -96,16 +96,15 @@ Clones the repo to `~/media-server`, copies the example config, and tells you to
 ```bash
 git clone https://github.com/unbalancedparentheses/media-server.git
 cd media-server
-cp config.toml.example config.toml
-# Edit config.toml with your credentials
-./setup.sh
+# Optional: copy/edit config.toml first (setup will auto-create it if missing)
+./setup.sh --yes
 ```
 
 ### What setup.sh does
 
 Fully idempotent — safe to re-run at any time.
 
-1. **Installs prerequisites** — Homebrew, Docker Desktop, jq, yq, Tailscale
+1. **Installs prerequisites** — Docker + jq (uses Python TOML parsing, yq optional), Tailscale optional
 2. **Checks Tailscale** — configures remote access (optional)
 3. **Creates `~/media/` directory structure** — libraries, downloads, configs, backups
 4. **Pre-seeds SABnzbd** — generates API key, skips first-run wizard
@@ -217,7 +216,9 @@ timezone = "America/New_York"
 
 ```bash
 ./setup.sh --preflight          # Fast local prerequisite + config checks
-./setup.sh                      # Full setup (idempotent)
+./setup.sh --check-config       # Validate config.toml only
+./setup.sh --yes                # Full setup, non-interactive
+./setup.sh                      # Full setup (idempotent, interactive)
 ./setup.sh --test               # Verification checks only
 ./setup.sh --update             # Backup + pull latest images + restart
 ./setup.sh --backup             # Backup all service configs
