@@ -708,26 +708,6 @@ services:
       radarr:
         condition: service_healthy
 
-  # --- Dashboard (Homepage) ---
-  homepage:
-    image: ghcr.io/gethomepage/homepage:latest
-    container_name: homepage
-    ports:
-      - "3002:3000"
-    volumes:
-      - ~/media/config/homepage:/app/config
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      - PUID=${PUID:-501}
-      - PGID=${PGID:-20}
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
 
   # --- Media Cleanup (rule-based auto-deletion) ---
   janitorr:
@@ -900,6 +880,7 @@ services:
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./landing.html:/usr/share/nginx/landing/index.html:ro
+      - ./admin.html:/usr/share/nginx/landing/admin.html:ro
       - ~/media/config/nginx/api-proxy.conf:/etc/nginx/api-proxy.conf:ro
     logging: *logging
     restart: unless-stopped

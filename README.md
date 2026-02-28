@@ -73,7 +73,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-
 | **Beszel** | Lightweight system monitoring — CPU, RAM, disk, per-container stats |
 | **Scrutiny** | Hard drive S.M.A.R.T. monitoring |
 | **Uptime Kuma** | Service uptime monitoring with push notifications |
-| **Homepage** | Dashboard with live widgets — transfers, calendar, requests, disk space |
 | **Gitea** | Local Git mirror and repository hosting |
 | **Tailscale** | Mesh VPN for remote access with automatic HTTPS certificates |
 
@@ -267,7 +266,6 @@ Share access with family/friends by inviting them to your tailnet. Skip during s
 | Scrutiny | 9091 | http://scrutiny.media.local |
 | Gitea | 3000 | http://gitea.media.local |
 | Uptime Kuma | 3001 | http://uptime-kuma.media.local |
-| Homepage | 3002 | http://homepage.media.local |
 
 ## Directory structure
 

@@ -26,7 +26,6 @@ init_service_registry() {
   SCRUTINY_URL="http://localhost:9091"
   GITEA_URL="http://localhost:3000"
   UPTIME_KUMA_URL="http://localhost:3001"
-  HOMEPAGE_URL="http://localhost:3002"
 
   SONARR_INTERNAL="http://sonarr:8989"
   SONARR_ANIME_INTERNAL="http://sonarr-anime:8989"
@@ -58,7 +57,7 @@ init_service_registry() {
   SERVICE_HEALTH_ENDPOINTS+=$'Dozzle|'"$DOZZLE_URL"$'\n'
   SERVICE_HEALTH_ENDPOINTS+=$'Beszel|'"$BESZEL_URL"$'/api/health\n'
   SERVICE_HEALTH_ENDPOINTS+=$'CrowdSec|'"$CROWDSEC_URL"$'/health\n'
-  SERVICE_HEALTH_ENDPOINTS+=$'Homepage|'"$HOMEPAGE_URL"
+  SERVICE_HEALTH_ENDPOINTS="${SERVICE_HEALTH_ENDPOINTS%$'\n'}"
 
-  CONTAINER_LIST="jellyfin sonarr sonarr-anime radarr lidarr lazylibrarian prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr autobrr tubearchivist archivist-es archivist-redis tdarr janitorr ollama open-webui watchtower dozzle crowdsec beszel navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma homepage"
+  CONTAINER_LIST="jellyfin sonarr sonarr-anime radarr lidarr lazylibrarian prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr autobrr tubearchivist archivist-es archivist-redis tdarr janitorr ollama open-webui watchtower dozzle crowdsec beszel navidrome kavita immich immich-machine-learning immich-redis immich-postgres scrutiny gitea uptime-kuma"
 }

@@ -31,17 +31,6 @@ write_janitorr_config_from_template() {
   render_template "$SCRIPT_DIR/templates/janitorr.application.yml.tpl" "$JANITORR_CONFIG"
 }
 
-write_homepage_services_from_template() {
-  local bazarr_widget_key=""
-  if [ -f "$CONFIG_DIR/bazarr/config/config/config.yaml" ]; then
-    bazarr_widget_key=$(sed -n 's/^apikey: *//p' "$CONFIG_DIR/bazarr/config/config/config.yaml" 2>/dev/null | head -1)
-  fi
-
-  export JELLYFIN_TOKEN JELLYSEERR_KEY SONARR_KEY SONARR_ANIME_KEY RADARR_KEY LIDARR_KEY PROWLARR_KEY
-  export QBIT_USER QBIT_PASS SABNZBD_KEY
-  export BAZARR_WIDGET_KEY="$bazarr_widget_key"
-  render_template "$SCRIPT_DIR/templates/homepage.services.yaml.tpl" "$HP_DIR/services.yaml"
-}
 
 write_api_proxy_from_template() {
   export SONARR_KEY SONARR_ANIME_KEY RADARR_KEY JELLYFIN_API_KEY JELLYSEERR_KEY SABNZBD_KEY

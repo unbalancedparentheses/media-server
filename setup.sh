@@ -800,7 +800,7 @@ mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
 mkdir -p "$MEDIA_DIR"/{youtube,transcode_cache,leaving-soon}
-mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,autobrr,gluetun,tubearchivist/cache,archivist-es,archivist-redis,tdarr/server,tdarr/configs,tdarr/logs,janitorr,ollama,open-webui,crowdsec/config,crowdsec/data,beszel,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma,homepage}/logs
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,autobrr,gluetun,tubearchivist/cache,archivist-es,archivist-redis,tdarr/server,tdarr/configs,tdarr/logs,janitorr,ollama,open-webui,crowdsec/config,crowdsec/data,beszel,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma}/logs
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
@@ -945,7 +945,7 @@ ok "All containers started"
 # ═══════════════════════════════════════════════════════════════════
 info "Checking /etc/hosts..."
 
-DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local tubearchivist.media.local tdarr.media.local autobrr.media.local open-webui.media.local dozzle.media.local beszel.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local homepage.media.local"
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local tubearchivist.media.local tdarr.media.local autobrr.media.local open-webui.media.local dozzle.media.local beszel.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local"
 
 if grep -qE "^[[:space:]]*127\.0\.0\.1[[:space:]].*\bmedia\.local\b" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
@@ -1973,65 +1973,6 @@ else
   ok "Already configured"
 fi
 
-# ═══════════════════════════════════════════════════════════════════
-# 17. HOMEPAGE — dashboard with service widgets
-# ═══════════════════════════════════════════════════════════════════
-info "Configuring Homepage dashboard..."
-
-HP_DIR="$CONFIG_DIR/homepage"
-mkdir -p "$HP_DIR"
-
-# settings.yaml
-cat > "$HP_DIR/settings.yaml" <<'HPEOF'
-title: Media Server
-theme: dark
-color: slate
-headerStyle: clean
-layout:
-  Media:
-    style: row
-    columns: 4
-  Library Management:
-    style: row
-    columns: 4
-  Downloads:
-    style: row
-    columns: 2
-  Tools:
-    style: row
-    columns: 4
-HPEOF
-ok "settings.yaml"
-
-# docker.yaml — let Homepage talk to Docker socket
-cat > "$HP_DIR/docker.yaml" <<'HPEOF'
-local:
-  socket: /var/run/docker.sock
-HPEOF
-ok "docker.yaml"
-
-# bookmarks.yaml (empty)
-cat > "$HP_DIR/bookmarks.yaml" <<'HPEOF'
-[]
-HPEOF
-
-# widgets.yaml — system info
-cat > "$HP_DIR/widgets.yaml" <<'HPEOF'
-- resources:
-    cpu: true
-    memory: true
-    disk: /
-- datetime:
-    text_size: xl
-    format:
-      dateStyle: long
-      timeStyle: short
-HPEOF
-ok "widgets.yaml"
-
-# services.yaml — all services with API key integration
-write_homepage_services_from_template
-ok "services.yaml"
 
 # ═══════════════════════════════════════════════════════════════════
 # 18. API PROXY CONFIG (landing page widgets)

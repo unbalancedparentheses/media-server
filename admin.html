@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Media Server — Admin</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9881;</text></svg>">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,-apple-system,sans-serif;background:#0f0f1a;color:#e0e0e0;min-height:100vh}
+  .header{background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);padding:2rem 2rem 1.5rem;border-bottom:1px solid #2a2a4a}
+  .header h1{font-size:1.6rem;font-weight:700;letter-spacing:-0.02em}
+  .header h1 span{color:#e94560}
+  .header p{color:#7a7a9a;font-size:0.85rem;margin-top:0.3rem}
+  .header p a{color:#7a7a9a;text-decoration:none;border:1px solid #2a2a4a;padding:0.2rem 0.6rem;border-radius:5px;margin-left:1rem;transition:all 0.2s}
+  .header p a:hover{border-color:#3a3a5a;color:#e0e0e0}
+  .content{max-width:1200px;margin:0 auto;padding:1.5rem 2rem 3rem}
+  .section{margin-bottom:2rem}
+  .section-title{font-size:0.7rem;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:#7a7a9a;margin-bottom:0.75rem;padding-left:0.25rem}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:0.75rem}
+  .card{display:flex;align-items:center;gap:1rem;padding:1rem 1.2rem;background:#1a1a2e;border:1px solid #2a2a4a;border-radius:10px;color:#e0e0e0;text-decoration:none;transition:all 0.2s ease}
+  .card:hover{background:#1e2240;border-color:#3a3a5a;transform:translateY(-1px)}
+  .icon{width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1.3rem;flex-shrink:0}
+  .card-info{flex:1;min-width:0}
+  .card-name{font-size:0.95rem;font-weight:600}
+  .card-desc{font-size:0.75rem;color:#7a7a9a;margin-top:0.15rem}
+  .card-port{font-size:0.65rem;color:#e94560;font-weight:500;margin-top:0.2rem}
+  .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:#3a3a5a;transition:background 0.3s ease}
+  .dot.up{background:#4ade80}
+  .dot.down{background:#ef4444}
+  .cat-manage .icon{background:#3b82f620;color:#3b82f6}
+  .cat-download .icon{background:#f59e0b20;color:#f59e0b}
+  .cat-infra .icon{background:#8b5cf620;color:#8b5cf6}
+</style></head>
+<body>
+  <div class="header"><h1><span>Media</span> Server — Admin</h1><p>Infrastructure &amp; library management <a href="/">Dashboard</a></p></div>
+  <div class="content">
+    <div id="app"></div>
+  </div>
+  <script>
+    var h=location.hostname;
+    var icons={
+      Sonarr:'\uD83D\uDCFA','Sonarr Anime':'\uD83C\uDF1F',
+      Radarr:'\uD83C\uDFA5',Lidarr:'\uD83C\uDFB5',LazyLibrarian:'\uD83D\uDCDA',
+      Prowlarr:'\uD83D\uDD0D',Bazarr:'\uD83D\uDCAC',Autobrr:'\u26A1',
+      Tdarr:'\uD83D\uDD04',Dozzle:'\uD83D\uDCDC',Beszel:'\uD83D\uDCCA',
+      Gitea:'\uD83D\uDCBB',Scrutiny:'\uD83D\uDCBF','Uptime Kuma':'\uD83D\uDFE2'
+    };
+    var sections=[
+      ["Library Management","cat-manage",[
+        [8989,"Sonarr","TV show automation"],
+        [8990,"Sonarr Anime","Anime series"],
+        [7878,"Radarr","Movie automation"],
+        [8686,"Lidarr","Music automation"],
+        [5299,"LazyLibrarian","Book automation"],
+        [9696,"Prowlarr","Indexer management"],
+        [6767,"Bazarr","Subtitle downloads"]
+      ]],
+      ["Downloads","cat-download",[
+        [7474,"Autobrr","IRC/RSS automation"]
+      ]],
+      ["Infrastructure","cat-infra",[
+        [8265,"Tdarr","Transcode automation"],
+        [9999,"Dozzle","Live Docker logs"],
+        [8090,"Beszel","System monitoring"],
+        [3000,"Gitea","Git mirror & hosting"],
+        [9091,"Scrutiny","Disk health monitoring"],
+        [3001,"Uptime Kuma","Service uptime"]
+      ]]
+    ];
+
+    var gridHtml='';
+    var allServices=[];
+    sections.forEach(function(sec){
+      gridHtml+='<div class="section"><div class="section-title">'+sec[0]+'</div><div class="grid">';
+      sec[2].forEach(function(s){
+        var ico=icons[s[1]]||'\u25CF';
+        gridHtml+='<a href="http://'+h+':'+s[0]+'" class="card '+sec[1]+'">'
+          +'<div class="icon">'+ico+'</div>'
+          +'<div class="card-info"><div class="card-name">'+s[1]+'</div>'
+          +'<div class="card-desc">'+s[2]+'</div>'
+          +'<div class="card-port">:'+s[0]+'</div></div>'
+          +'<div class="dot" id="d'+s[0]+'"></div></a>';
+        allServices.push(s[0]);
+      });
+      gridHtml+='</div></div>';
+    });
+    document.getElementById("app").innerHTML=gridHtml;
+
+    function checkHealth(){
+      allServices.forEach(function(port){
+        var d=document.getElementById("d"+port);
+        if(!d)return;
+        fetch("http://"+h+":"+port,{mode:"no-cors",signal:AbortSignal.timeout(3000)})
+          .then(function(){d.className="dot up"})
+          .catch(function(){d.className="dot down"});
+      });
+    }
+    checkHealth();
+    setInterval(checkHealth,30000);
+  </script>
+</body></html>
