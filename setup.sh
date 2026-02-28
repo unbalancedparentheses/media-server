@@ -1569,6 +1569,18 @@ if subtitle_langs:
     set_value('general', 'serie_default_enabled', True)
     set_value('general', 'movie_default_enabled', True)
 
+# Subtitle quality: minimum score filters out mislabeled subs
+set_value('general', 'minimum_score', 90)
+set_value('general', 'minimum_score_movie', 70)
+
+# Auto-upgrade subs when a higher-score match appears
+set_value('general', 'upgrade_subs', True)
+set_value('general', 'upgrade_frequency', 12)
+set_value('general', 'days_to_upgrade_subs', 7)
+
+# Prefer embedded subs (always correctly labeled)
+set_value('general', 'use_embedded_subs', True)
+
 with open(config_path, 'w') as f:
     f.writelines(lines)
 

@@ -20,7 +20,19 @@ seeding_time_minutes = 10080
 
 [subtitles]
 languages = ["en", "es"]
-providers = ["opensubtitlescom"]
+providers = [
+  "opensubtitlescom",  # Largest subtitle database
+  "podnapisi",         # High quality, well-labeled
+  "addic7ed",          # Curated TV subtitles
+  "subf2m",            # Subscene successor, huge coverage
+  "yifysubtitles",     # Great for movies
+  "tvsubtitles",       # TV-focused provider
+  "gestdown",          # Good general coverage
+  "supersubtitles",    # Broad coverage
+  "subdivx",           # Excellent for Spanish
+  "argenteam",         # Good for Spanish
+  "embeddedsubtitles", # Extracts subs already in the file
+]
 
 # ─── Quality (Recyclarr TRaSH Guide profiles) ──────────────────
 
