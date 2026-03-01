@@ -5,7 +5,7 @@ x-logging: &logging
     max-file: "3"
 
 services:
-  # --- Media Server ---
+  # ── Streaming ──────────────────────────────────────────────────
   jellyfin:
     image: jellyfin/jellyfin:latest
     container_name: jellyfin
@@ -25,7 +25,55 @@ services:
       retries: 3
       start_period: 60s
 
-  # --- TV ---
+  navidrome:
+    image: deluan/navidrome:latest
+    container_name: navidrome
+    environment:
+      - ND_SCANSCHEDULE=15m
+      - ND_LOGLEVEL=info
+      - ND_MUSICFOLDER=/music
+    ports:
+      - "4533:4533"
+    volumes:
+      - ~/media/config/navidrome:/data
+      - ~/media/music:/music:ro
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4533/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── Requests & Automation ──────────────────────────────────────
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    container_name: jellyseerr
+    environment:
+      - TZ=${TZ:-America/New_York}
+    ports:
+      - "5055:5055"
+    volumes:
+      - ~/media/config/jellyseerr:/app/config
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5055/api/v1/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      jellyfin:
+        condition: service_started
+      sonarr:
+        condition: service_started
+      sonarr-anime:
+        condition: service_started
+      radarr:
+        condition: service_started
+
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
@@ -84,7 +132,6 @@ services:
       sabnzbd:
         condition: service_healthy
 
-  # --- Movies ---
   radarr:
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
@@ -114,178 +161,6 @@ services:
       sabnzbd:
         condition: service_healthy
 
-  # --- Indexers ---
-  prowlarr:
-    image: lscr.io/linuxserver/prowlarr:latest
-    container_name: prowlarr
-    environment:
-      - PUID=${PUID:-501}
-      - PGID=${PGID:-20}
-      - TZ=${TZ:-America/New_York}
-    ports:
-      - "9696:9696"
-    volumes:
-      - ~/media/config/prowlarr:/config
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9696/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    depends_on:
-      flaresolverr:
-        condition: service_healthy
-
-  # --- Subtitles ---
-  bazarr:
-    image: lscr.io/linuxserver/bazarr:latest
-    container_name: bazarr
-    environment:
-      - PUID=${PUID:-501}
-      - PGID=${PGID:-20}
-      - TZ=${TZ:-America/New_York}
-    ports:
-      - "6767:6767"
-    volumes:
-      - ~/media/config/bazarr:/config
-      - ~/media/movies:/media/movies
-      - ~/media/tv:/media/tv
-      - ~/media/anime:/media/anime
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6767"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # --- VPN (routes torrent traffic through VPN tunnel) ---
-  # Enable with: docker compose --profile vpn up -d
-  # Requires WIREGUARD_PRIVATE_KEY and WIREGUARD_ADDRESSES in .env
-  gluetun:
-    image: qmcgaw/gluetun:latest
-    container_name: gluetun
-    profiles: ["vpn"]
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    environment:
-      - TZ=${TZ:-America/New_York}
-      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER:-mullvad}
-      - VPN_TYPE=${VPN_TYPE:-wireguard}
-      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
-      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
-      - SERVER_COUNTRIES=${VPN_SERVER_COUNTRIES:-}
-    ports:
-      - "6881:6881"
-      - "6881:6881/udp"
-    volumes:
-      - ~/media/config/gluetun:/gluetun
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider https://1.1.1.1 2>/dev/null || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # --- Downloaders ---
-  sabnzbd:
-    image: lscr.io/linuxserver/sabnzbd:latest
-    container_name: sabnzbd
-    environment:
-      - PUID=${PUID:-501}
-      - PGID=${PGID:-20}
-      - TZ=${TZ:-America/New_York}
-    ports:
-      - "8080:8080"
-    volumes:
-      - ~/media/config/sabnzbd:/config
-      - ~/media/downloads:/downloads
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
-    container_name: qbittorrent
-    environment:
-      - PUID=${PUID:-501}
-      - PGID=${PGID:-20}
-      - TZ=${TZ:-America/New_York}
-      - WEBUI_PORT=8081
-    # Ports and network_mode are set in docker-compose.override.yml
-    # (generated by setup.sh based on VPN_ENABLE in config.toml)
-    volumes:
-      - ~/media/config/qbittorrent:/config
-      - ~/media/downloads:/downloads
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # --- Request Management ---
-  jellyseerr:
-    image: fallenbagel/jellyseerr:latest
-    container_name: jellyseerr
-    environment:
-      - TZ=${TZ:-America/New_York}
-    ports:
-      - "5055:5055"
-    volumes:
-      - ~/media/config/jellyseerr:/app/config
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:5055/api/v1/status || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    depends_on:
-      jellyfin:
-        condition: service_started
-      sonarr:
-        condition: service_started
-      sonarr-anime:
-        condition: service_started
-      radarr:
-        condition: service_started
-
-  # --- Cloudflare Bypass for Prowlarr (internal only) ---
-  flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
-    container_name: flaresolverr
-    environment:
-      - TZ=${TZ:-America/New_York}
-    logging: *logging
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8191/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # --- Music ---
   lidarr:
     image: lscr.io/linuxserver/lidarr:latest
     container_name: lidarr
@@ -315,103 +190,154 @@ services:
       sabnzbd:
         condition: service_started
 
-  navidrome:
-    image: deluan/navidrome:latest
-    container_name: navidrome
-    environment:
-      - ND_SCANSCHEDULE=15m
-      - ND_LOGLEVEL=info
-      - ND_MUSICFOLDER=/music
-    ports:
-      - "4533:4533"
-    volumes:
-      - ~/media/config/navidrome:/data
-      - ~/media/music:/music:ro
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4533/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # --- Books ---
-  lazylibrarian:
-    image: lscr.io/linuxserver/lazylibrarian:latest
-    container_name: lazylibrarian
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: prowlarr
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "5299:5299"
+      - "9696:9696"
     volumes:
-      - ~/media/config/lazylibrarian:/config
-      - ~/media/books:/media/books
-      - ~/media/downloads:/downloads
+      - ~/media/config/prowlarr:/config
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5299"]
+      test: ["CMD", "curl", "-f", "http://localhost:9696/ping"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
     depends_on:
-      prowlarr:
-        condition: service_started
-      qbittorrent:
-        condition: service_started
-      sabnzbd:
-        condition: service_started
+      flaresolverr:
+        condition: service_healthy
 
-  kavita:
-    image: jvmilazz0/kavita:latest
-    container_name: kavita
-    ports:
-      - "5001:5000"
-    volumes:
-      - ~/media/config/kavita:/kavita/config
-      - ~/media/books:/media/books:ro
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # --- Download Automation (IRC/RSS for private trackers) ---
-  autobrr:
-    image: ghcr.io/autobrr/autobrr:latest
-    container_name: autobrr
-    user: "${PUID:-501}:${PGID:-20}"
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
     environment:
       - TZ=${TZ:-America/New_York}
-      - AUTOBRR__HOST=0.0.0.0
-    ports:
-      - "7474:7474"
-    volumes:
-      - ~/media/config/autobrr:/config
     logging: *logging
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474/api/healthz/liveness || curl -fsS http://localhost:7474/api/healthz/liveness >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8191/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
-    depends_on:
-      prowlarr:
-        condition: service_started
-      qbittorrent:
-        condition: service_started
-      sabnzbd:
-        condition: service_started
+      start_period: 60s
 
-  # --- Download Extraction ---
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
+    ports:
+      - "6767:6767"
+    volumes:
+      - ~/media/config/bazarr:/config
+      - ~/media/movies:/media/movies
+      - ~/media/tv:/media/tv
+      - ~/media/anime:/media/anime
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6767"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  recyclarr:
+    image: recyclarr/recyclarr:latest
+    container_name: recyclarr
+    environment:
+      - TZ=${TZ:-America/New_York}
+      - CRON_SCHEDULE=@weekly
+    volumes:
+      - ~/media/config/recyclarr:/config
+    logging: *logging
+    restart: unless-stopped
+    depends_on:
+      sonarr:
+        condition: service_healthy
+      sonarr-anime:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+
+  janitorr:
+    image: ghcr.io/schaka/janitorr:jvm-stable
+    container_name: janitorr
+    user: "${PUID:-501}:${PGID:-20}"
+    volumes:
+      - ~/media/config/janitorr/application.yml:/config/application.yml:ro
+      - ~/media/config/janitorr/logs:/logs
+      - ~/media/movies:/media/movies
+      - ~/media/tv:/media/tv
+      - ~/media/anime:/media/anime
+      - ~/media/leaving-soon:/media/leaving-soon
+    logging: *logging
+    restart: unless-stopped
+    mem_limit: 256m
+    depends_on:
+      sonarr:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+      jellyfin:
+        condition: service_healthy
+
+  # ── Downloads ──────────────────────────────────────────────────
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    environment:
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
+      - WEBUI_PORT=8081
+    # Ports and network_mode are set in docker-compose.override.yml
+    # (generated by setup.sh based on VPN_ENABLE in config.toml)
+    volumes:
+      - ~/media/config/qbittorrent:/config
+      - ~/media/downloads:/downloads
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    container_name: sabnzbd
+    environment:
+      - PUID=${PUID:-501}
+      - PGID=${PGID:-20}
+      - TZ=${TZ:-America/New_York}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ~/media/config/sabnzbd:/config
+      - ~/media/downloads:/downloads
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
   unpackerr:
     image: golift/unpackerr:latest
     container_name: unpackerr
@@ -431,84 +357,37 @@ services:
         condition: service_healthy
       lidarr:
         condition: service_healthy
-      lazylibrarian:
-        condition: service_healthy
 
-  # --- YouTube Archiving ---
-  tubearchivist:
-    image: bbilly1/tubearchivist:latest
-    container_name: tubearchivist
-    ports:
-      - "8000:8000"
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    profiles: ["vpn"]
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     environment:
       - TZ=${TZ:-America/New_York}
-      - ES_URL=http://archivist-es:9200
-      - REDIS_CON=redis://archivist-redis:6379
-      - HOST_UID=${PUID:-501}
-      - HOST_GID=${PGID:-20}
-      - TA_HOST=http://tubearchivist.media.local
-      - TA_USERNAME=${TA_USERNAME:-admin}
-      - TA_PASSWORD=${TA_PASSWORD:-changeme}
-      - ELASTIC_PASSWORD=${TA_ELASTIC_PASSWORD:-changeme}
+      - VPN_SERVICE_PROVIDER=${VPN_SERVICE_PROVIDER:-mullvad}
+      - VPN_TYPE=${VPN_TYPE:-wireguard}
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
+      - SERVER_COUNTRIES=${VPN_SERVER_COUNTRIES:-}
+    ports:
+      - "6881:6881"
+      - "6881:6881/udp"
     volumes:
-      - ~/media/youtube:/youtube
-      - ~/media/config/tubearchivist/cache:/cache
+      - ~/media/config/gluetun:/gluetun
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8000/api/ping || curl -fsS http://localhost:8000/api/ping >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -q --spider https://1.1.1.1 2>/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
-    depends_on:
-      archivist-es:
-        condition: service_healthy
-      archivist-redis:
-        condition: service_healthy
+      start_period: 30s
 
-  archivist-es:
-    image: elasticsearch:8.17.0
-    container_name: archivist-es
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
-    environment:
-      - ELASTIC_PASSWORD=${TA_ELASTIC_PASSWORD:-changeme}
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
-      - xpack.security.enabled=true
-      - discovery.type=single-node
-      - path.repo=/usr/share/elasticsearch/data/snapshot
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - ~/media/config/archivist-es:/usr/share/elasticsearch/data
-    logging: *logging
-    restart: unless-stopped
-    mem_limit: 2g
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -u elastic:${TA_ELASTIC_PASSWORD:-changeme} http://localhost:9200/_cluster/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  archivist-redis:
-    image: redis:7-alpine
-    container_name: archivist-redis
-    volumes:
-      - ~/media/config/archivist-redis:/data
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-
-  # --- Transcoding Automation ---
+  # ── Transcoding ────────────────────────────────────────────────
   tdarr:
     image: ghcr.io/haveagitgat/tdarr:latest
     container_name: tdarr
@@ -544,7 +423,7 @@ services:
       retries: 3
       start_period: 60s
 
-  # --- Photos ---
+  # ── Photos ─────────────────────────────────────────────────────
   immich:
     image: ghcr.io/immich-app/immich-server:release
     container_name: immich
@@ -606,8 +485,6 @@ services:
   immich-postgres:
     image: tensorchord/pgvecto-rs:pg14-v0.2.0
     container_name: immich-postgres
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
     environment:
       - POSTGRES_PASSWORD=${IMMICH_DB_PASSWORD}
       - POSTGRES_USER=postgres
@@ -625,178 +502,25 @@ services:
       retries: 3
       start_period: 30s
 
-  # --- Git Mirror ---
-  gitea:
-    image: gitea/gitea:latest
-    container_name: gitea
-    environment:
-      - USER_UID=${PUID:-501}
-      - USER_GID=${PGID:-20}
-      - GITEA__database__DB_TYPE=sqlite3
-      - GITEA__server__ROOT_URL=http://localhost:3000
-      - GITEA__mirror__DEFAULT_INTERVAL=1h
+  # ── Infrastructure ─────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: media-nginx
     ports:
-      - "3000:3000"
+      - "80:80"
     volumes:
-      - ~/media/config/gitea:/data
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./landing.html:/usr/share/nginx/landing/index.html:ro
+      - ./admin.html:/usr/share/nginx/landing/admin.html:ro
+      - ~/media/config/nginx/api-proxy.conf:/etc/nginx/api-proxy.conf:ro
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/version"]
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
-
-  # --- Monitoring ---
-  uptime-kuma:
-    image: louislam/uptime-kuma:latest
-    container_name: uptime-kuma
-    ports:
-      - "3001:3001"
-    volumes:
-      - ~/media/config/uptime-kuma:/app/data
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/entry-page', (r) => { process.exit(r.statusCode === 200 ? 0 : 1) })"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # --- Disk Health ---
-  scrutiny:
-    image: ghcr.io/analogj/scrutiny:master-omnibus
-    container_name: scrutiny
-    cap_add:
-      - SYS_RAWIO
-    ports:
-      - "9091:8080"
-    volumes:
-      - ~/media/config/scrutiny:/opt/scrutiny/config
-      - /run/udev:/run/udev:ro
-    # Add your disk devices below, e.g.:
-    # devices:
-    #   - /dev/sda
-    #   - /dev/sdb
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  # --- Quality Profile Sync (weekly) ---
-  recyclarr:
-    image: recyclarr/recyclarr:latest
-    container_name: recyclarr
-    environment:
-      - TZ=${TZ:-America/New_York}
-      - CRON_SCHEDULE=@weekly
-    volumes:
-      - ~/media/config/recyclarr:/config
-    logging: *logging
-    restart: unless-stopped
-    depends_on:
-      sonarr:
-        condition: service_healthy
-      sonarr-anime:
-        condition: service_healthy
-      radarr:
-        condition: service_healthy
-
-
-  # --- Media Cleanup (rule-based auto-deletion) ---
-  janitorr:
-    image: ghcr.io/schaka/janitorr:jvm-stable
-    container_name: janitorr
-    user: "${PUID:-501}:${PGID:-20}"
-    volumes:
-      - ~/media/config/janitorr/application.yml:/config/application.yml:ro
-      - ~/media/config/janitorr/logs:/logs
-      - ~/media/movies:/media/movies
-      - ~/media/tv:/media/tv
-      - ~/media/anime:/media/anime
-      - ~/media/leaving-soon:/media/leaving-soon
-    logging: *logging
-    restart: unless-stopped
-    mem_limit: 256m
-    depends_on:
-      sonarr:
-        condition: service_healthy
-      radarr:
-        condition: service_healthy
-      jellyfin:
-        condition: service_healthy
-
-  # --- Local LLMs ---
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    labels:
-      - "com.centurylinklabs.watchtower.enable=false"
-    ports:
-      - "127.0.0.1:11434:11434"
-    environment:
-      - OLLAMA_HOST=0.0.0.0:11434
-    volumes:
-      - ~/media/config/ollama:/root/.ollama
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:11434/api/tags >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    ports:
-      - "3100:8080"
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-    volumes:
-      - ~/media/config/open-webui:/app/backend/data
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080 || curl -fsS http://localhost:8080 >/dev/null || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    depends_on:
-      ollama:
-        condition: service_healthy
-
-  # --- Container Management ---
-  watchtower:
-    image: containrrr/watchtower:latest
-    container_name: watchtower
-    environment:
-      - TZ=${TZ:-America/New_York}
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_SCHEDULE=0 0 4 * * *
-      - WATCHTOWER_ROLLING_RESTART=true
-      - WATCHTOWER_HTTP_API_METRICS=true
-      - WATCHTOWER_HTTP_API_TOKEN=watchtower
-    ports:
-      - "127.0.0.1:8282:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/v1/metrics || exit 1"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
+      start_period: 15s
 
   dozzle:
     image: amir20/dozzle:latest
@@ -816,31 +540,6 @@ services:
       retries: 3
       start_period: 15s
 
-  # --- Security ---
-  # CrowdSec monitors logs and detects threats. To actively block IPs,
-  # add a bouncer (e.g. crowdsec-firewall-bouncer or cs-nginx-bouncer).
-  crowdsec:
-    image: crowdsecurity/crowdsec:latest
-    container_name: crowdsec
-    ports:
-      - "127.0.0.1:8180:8080"
-    environment:
-      - TZ=${TZ:-America/New_York}
-      - COLLECTIONS=crowdsecurity/nginx crowdsecurity/linux crowdsecurity/http-cve
-    volumes:
-      - ~/media/config/crowdsec/config:/etc/crowdsec
-      - ~/media/config/crowdsec/data:/var/lib/crowdsec/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    logging: *logging
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "cscli", "version"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-
-  # --- System Monitoring ---
   beszel:
     image: henrygd/beszel:latest
     container_name: beszel
@@ -871,22 +570,41 @@ services:
     logging: *logging
     restart: unless-stopped
 
-  # --- Reverse Proxy + Landing Page ---
-  nginx:
-    image: nginx:alpine
-    container_name: media-nginx
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    container_name: uptime-kuma
     ports:
-      - "80:80"
+      - "3001:3001"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./landing.html:/usr/share/nginx/landing/index.html:ro
-      - ./admin.html:/usr/share/nginx/landing/admin.html:ro
-      - ~/media/config/nginx/api-proxy.conf:/etc/nginx/api-proxy.conf:ro
+      - ~/media/config/uptime-kuma:/app/data
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:80/ || exit 1"]
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/api/entry-page', (r) => { process.exit(r.statusCode === 200 ? 0 : 1) })"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 30s
+
+  scrutiny:
+    image: ghcr.io/analogj/scrutiny:master-omnibus
+    container_name: scrutiny
+    cap_add:
+      - SYS_RAWIO
+    ports:
+      - "9091:8080"
+    volumes:
+      - ~/media/config/scrutiny:/opt/scrutiny/config
+      - /run/udev:/run/udev:ro
+    # Add your disk devices below, e.g.:
+    # devices:
+    #   - /dev/sda
+    #   - /dev/sdb
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

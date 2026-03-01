@@ -1,6 +1,6 @@
 # media-server
 
-One-command self-hosted media server. 40+ Docker containers, fully automated, pre-wired, and verified. Request a movie and it's downloaded, organized, subtitled, and ready to watch.
+One-command self-hosted media server. 25+ Docker containers, fully automated, pre-wired, and verified. Request a movie and it's downloaded, organized, subtitled, and ready to watch.
 
 ```
 bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)
@@ -14,8 +14,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-
 |---------|-------------|
 | **Jellyfin** | Open-source media player — streams movies, TV, and anime via browser or native apps (iOS, Android, Apple TV, Fire TV, Roku) |
 | **Navidrome** | Music streaming server with Subsonic API — works with DSub, Symfonium, etc. |
-| **Kavita** | Digital library for ebooks, comics, and manga |
-| **TubeArchivist** | YouTube archive — subscribe to channels, download videos, full-text search, offline playback |
 
 ### Library Automation
 
@@ -26,7 +24,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-
 | **Sonarr Anime** | Dedicated Sonarr instance with anime-specific indexers (Nyaa, SubsPlease, Mikan) |
 | **Radarr** | Movie automation — same as Sonarr but for films |
 | **Lidarr** | Music automation — monitors artists and downloads new releases |
-| **LazyLibrarian** | Book/audiobook automation — ARM64-native replacement for Readarr |
 | **Prowlarr** | Centralized indexer manager — configure once, synced to all *arr services |
 | **Bazarr** | Automatic subtitle downloads — English always, Spanish when available |
 | **Recyclarr** | Syncs TRaSH Guide quality profiles to Sonarr/Radarr weekly |
@@ -38,17 +35,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-
 |---------|-------------|
 | **qBittorrent** | Torrent client, routed through Gluetun VPN |
 | **SABnzbd** | Usenet client — faster and more private, requires paid provider |
-| **Autobrr** | IRC/RSS automation — grabs releases from private trackers within seconds |
 | **Unpackerr** | Auto-extracts compressed downloads for *arr import |
 | **FlareSolverr** | Cloudflare bypass for protected indexers |
 | **Gluetun** | VPN tunnel for torrent traffic — built-in kill switch (optional, disabled by default) |
-
-### AI
-
-| Service | Description |
-|---------|-------------|
-| **Ollama** | Local LLM runtime — run Llama, Mistral, Gemma, etc. on your machine |
-| **Open WebUI** | ChatGPT-like web interface for Ollama models |
 
 ### Photos
 
@@ -67,18 +56,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-
 | Service | Description |
 |---------|-------------|
 | **Nginx** | Reverse proxy — maps `.media.local` domains, serves landing page with live widgets |
-| **Watchtower** | Auto-updates all containers daily at 4 AM with rolling restarts |
-| **Dozzle** | Live Docker log viewer — invaluable with 35+ containers |
-| **CrowdSec** | Collaborative IPS — blocks malicious IPs hitting your Nginx |
+| **Dozzle** | Live Docker log viewer — invaluable with 25+ containers |
 | **Beszel** | Lightweight system monitoring — CPU, RAM, disk, per-container stats |
 | **Scrutiny** | Hard drive S.M.A.R.T. monitoring |
 | **Uptime Kuma** | Service uptime monitoring with push notifications |
-| **Gitea** | Local Git mirror and repository hosting |
 | **Tailscale** | Mesh VPN for remote access with automatic HTTPS certificates |
-
-### Note on LazyLibrarian vs Readarr
-
-The official Readarr Docker image (`lscr.io/linuxserver/readarr:develop`) historically had no ARM64 builds, breaking setup on Apple Silicon Macs. ARM64 support was added in late 2024 via the `develop` tag, but it remains unstable. LazyLibrarian is the practical alternative — it has native ARM64 support, integrates with qBittorrent/SABnzbd, and works reliably. Both can coexist if you want to try Readarr alongside LazyLibrarian.
 
 ## Quick start
 
@@ -184,14 +166,6 @@ server_countries = "Switzerland"
 
 Routes torrent traffic through [Gluetun](https://github.com/qdm12/gluetun). 30+ providers supported. Kill switch built in. Optional — disabled by default.
 
-### YouTube archive
-
-```toml
-[tubearchivist]
-username = "admin"
-password = "changeme"
-```
-
 ### Usenet providers
 
 ```toml
@@ -251,20 +225,12 @@ Share access with family/friends by inviting them to your tailnet. Skip during s
 | qBittorrent | 8081 | http://qbittorrent.media.local |
 | SABnzbd | 8080 | http://sabnzbd.media.local |
 | Lidarr | 8686 | http://lidarr.media.local |
-| LazyLibrarian | 5299 | http://lazylibrarian.media.local |
 | Navidrome | 4533 | http://navidrome.media.local |
-| Kavita | 5001 | http://kavita.media.local |
-| TubeArchivist | 8000 | http://tubearchivist.media.local |
 | Tdarr | 8265 | http://tdarr.media.local |
-| Autobrr | 7474 | http://autobrr.media.local |
 | Immich | 2283 | http://immich.media.local |
-| Open WebUI | 3100 | http://open-webui.media.local |
-| Ollama | 11434 | — |
 | Dozzle | 9999 | http://dozzle.media.local |
 | Beszel | 8090 | http://beszel.media.local |
-| CrowdSec | 8180 | — |
 | Scrutiny | 9091 | http://scrutiny.media.local |
-| Gitea | 3000 | http://gitea.media.local |
 | Uptime Kuma | 3001 | http://uptime-kuma.media.local |
 
 ## Directory structure
@@ -275,9 +241,7 @@ Share access with family/friends by inviting them to your tailnet. Skip during s
 ├── tv/                         # Sonarr
 ├── anime/                      # Sonarr Anime
 ├── music/                      # Lidarr
-├── books/                      # LazyLibrarian
 ├── photos/                     # Immich
-├── youtube/                    # TubeArchivist
 ├── transcode_cache/            # Tdarr working directory
 ├── downloads/
 │   ├── torrents/{complete,incomplete}
@@ -313,7 +277,11 @@ User ──> Jellyseerr ──> Sonarr/Radarr ──> Prowlarr ──> Indexers
 
 ## What else could you add
 
-The stack is already at the enthusiast/completionist tier. Niche additions if you need them:
+Niche additions if you need them:
 
+- **Kavita** — digital library for ebooks, comics, and manga
+- **Readarr / LazyLibrarian** — book/audiobook automation
 - **Audiobookshelf** — audiobook and podcast server
 - **Mylar3 / Kapowarr** — comic book automation
+- **TubeArchivist** — YouTube archive and offline playback
+- **Autobrr** — IRC/RSS automation for private trackers

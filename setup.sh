@@ -174,16 +174,15 @@ load_config_json() {
 }
 write_secure_defaults_to_config() {
   local path="$1"
-  local jellyfin_pass qbittorrent_pass tubearchivist_pass
+  local jellyfin_pass qbittorrent_pass
   jellyfin_pass="$(generate_secret)"
   qbittorrent_pass="$(generate_secret)"
-  tubearchivist_pass="$(generate_secret)"
 
-  python3 - "$path" "$jellyfin_pass" "$qbittorrent_pass" "$tubearchivist_pass" << 'PY'
+  python3 - "$path" "$jellyfin_pass" "$qbittorrent_pass" << 'PY'
 import re
 import sys
 
-path, jf, qb, ta = sys.argv[1:]
+path, jf, qb = sys.argv[1:]
 with open(path, "r", encoding="utf-8") as f:
     lines = f.readlines()
 
@@ -198,8 +197,6 @@ for i, line in enumerate(lines):
             lines[i] = 'password = "{}"\n'.format(jf)
         elif section == "qbittorrent":
             lines[i] = 'password = "{}"\n'.format(qb)
-        elif section == "tubearchivist":
-            lines[i] = 'password = "{}"\n'.format(ta)
 
 with open(path, "w", encoding="utf-8") as f:
     f.writelines(lines)
@@ -208,7 +205,6 @@ PY
   ok "Generated secure default passwords in config.toml"
   echo "  Jellyfin password: $jellyfin_pass"
   echo "  qBittorrent password: $qbittorrent_pass"
-  echo "  TubeArchivist password: $tubearchivist_pass"
 }
 ensure_compose_ready() {
   require_docker_running
@@ -569,7 +565,7 @@ smoke_check_generated_files() {
   local f
 
   info "Running generated-file smoke checks..."
-  for f in "$SCRIPT_DIR/.env" "$SCRIPT_DIR/docker-compose.override.yml" "$CONFIG_DIR/crowdsec/config/acquis.yaml"; do
+  for f in "$SCRIPT_DIR/.env" "$SCRIPT_DIR/docker-compose.override.yml"; do
     if [ -s "$f" ]; then
       ok "Present: $f"
     else
@@ -795,18 +791,15 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 info "Creating directory structure..."
 
-mkdir -p "$MEDIA_DIR"/{movies,tv,anime,music,books,photos}
+mkdir -p "$MEDIA_DIR"/{movies,tv,anime,music,photos}
 mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
-mkdir -p "$MEDIA_DIR"/{youtube,transcode_cache,leaving-soon}
-mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,lazylibrarian,navidrome,kavita,unpackerr,autobrr,gluetun,tubearchivist/cache,archivist-es,archivist-redis,tdarr/server,tdarr/configs,tdarr/logs,janitorr,ollama,open-webui,crowdsec/config,crowdsec/data,beszel,immich-ml,immich-postgres,scrutiny,gitea,uptime-kuma}/logs
+mkdir -p "$MEDIA_DIR"/{transcode_cache,leaving-soon}
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,navidrome,unpackerr,gluetun,tdarr/server,tdarr/configs,tdarr/logs,janitorr,beszel,immich-ml,immich-postgres,scrutiny,uptime-kuma}/logs
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
-
-# Elasticsearch writes as uid 1000 — fix permissions on macOS (uid 501)
-chmod 777 "$CONFIG_DIR/archivist-es" 2>/dev/null || true
 
 ok "~/media/ directory tree ready"
 
@@ -825,18 +818,6 @@ SABEOF
   ok "SABnzbd: pre-seeded config (wizard skipped)"
 fi
 
-# Pre-seed Kavita appsettings.json with a JWT token key (prevents null TokenKey crash)
-if [ ! -f "$CONFIG_DIR/kavita/appsettings.json" ]; then
-  KAVITA_TOKEN_KEY=$(openssl rand -base64 128 | tr -d '\n')
-  cat > "$CONFIG_DIR/kavita/appsettings.json" << KAVEOF
-{
-  "TokenKey": "$KAVITA_TOKEN_KEY",
-  "Port": 5000,
-  "IpAddresses": "0.0.0.0"
-}
-KAVEOF
-  ok "Kavita: pre-seeded appsettings.json (TokenKey generated)"
-fi
 
 # ═══════════════════════════════════════════════════════════════════
 # 3. DOCKER COMPOSE
@@ -860,17 +841,6 @@ VPN_WG_KEY=$(cfg '.vpn.wireguard_private_key // ""')
 VPN_WG_ADDR=$(cfg '.vpn.wireguard_addresses // ""')
 VPN_COUNTRIES=$(cfg '.vpn.server_countries // ""')
 
-# TubeArchivist settings
-TA_USER=$(cfg '.tubearchivist.username // "admin"')
-TA_PASS=$(cfg '.tubearchivist.password // "changeme"')
-
-# Generate a stable TubeArchivist ES password (reuse existing if present)
-if [ -f "$SCRIPT_DIR/.env" ] && grep -q "^TA_ELASTIC_PASSWORD=" "$SCRIPT_DIR/.env" 2>/dev/null; then
-  TA_ES_PASS=$(sed -n 's/^TA_ELASTIC_PASSWORD=//p' "$SCRIPT_DIR/.env")
-else
-  TA_ES_PASS=$(openssl rand -hex 16)
-fi
-
 COMPOSE_PROFILES_VALUE=""
 [ "$VPN_ENABLE" = "true" ] && COMPOSE_PROFILES_VALUE="vpn"
 
@@ -884,9 +854,6 @@ VPN_TYPE=$VPN_TYPE
 WIREGUARD_PRIVATE_KEY=$VPN_WG_KEY
 WIREGUARD_ADDRESSES=$VPN_WG_ADDR
 VPN_SERVER_COUNTRIES=$VPN_COUNTRIES
-TA_USERNAME=$TA_USER
-TA_PASSWORD=$TA_PASS
-TA_ELASTIC_PASSWORD=$TA_ES_PASS
 BESZEL_AGENT_KEY=$(cfg '.beszel.agent_key // ""')
 COMPOSE_PROFILES=$COMPOSE_PROFILES_VALUE
 EOF
@@ -918,18 +885,6 @@ if [ ! -f "$SCRIPT_DIR/docker-compose.override.yml" ] || [ "$(cat "$SCRIPT_DIR/d
 fi
 ok "$OVERRIDE_MSG"
 
-# Generate CrowdSec acquisition config for nginx logs
-info "Generating CrowdSec acquisition config..."
-mkdir -p "$CONFIG_DIR/crowdsec/config"
-cat > "$CONFIG_DIR/crowdsec/config/acquis.yaml" << 'CSEOF'
-source: docker
-container_name:
-  - media-nginx
-labels:
-  type: nginx
-CSEOF
-ok "acquis.yaml (reads nginx container logs)"
-
 # Janitorr application.yml is generated later in section 16.10
 # after API keys are available from Sonarr/Radarr/Jellyfin
 
@@ -945,7 +900,7 @@ ok "All containers started"
 # ═══════════════════════════════════════════════════════════════════
 info "Checking /etc/hosts..."
 
-DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local lazylibrarian.media.local navidrome.media.local kavita.media.local immich.media.local tubearchivist.media.local tdarr.media.local autobrr.media.local open-webui.media.local dozzle.media.local beszel.media.local scrutiny.media.local gitea.media.local uptime-kuma.media.local"
+DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local navidrome.media.local immich.media.local tdarr.media.local dozzle.media.local beszel.media.local scrutiny.media.local uptime-kuma.media.local"
 
 if grep -qE "^[[:space:]]*127\.0\.0\.1[[:space:]].*\bmedia\.local\b" /etc/hosts 2>/dev/null; then
   ok "Hosts entries already present"
@@ -1194,28 +1149,28 @@ fi
 # 11. SONARR / RADARR — root folders + download clients
 # ═══════════════════════════════════════════════════════════════════
 configure_arr() {
-  local name="$1" url="$2" key="$3" root_folder="$4" cat_field="$5"
+  local name="$1" url="$2" key="$3" root_folder="$4" cat_field="$5" api_ver="${6:-v3}"
   info "Configuring $name..."
   local H="X-Api-Key: $key"
 
   # Remove stale root folders (e.g. /downloads) and ensure only the correct one exists
-  EXISTING_ROOTS=$(api GET "$url/api/v3/rootfolder" -H "$H" 2>/dev/null || echo "[]")
+  EXISTING_ROOTS=$(api GET "$url/api/$api_ver/rootfolder" -H "$H" 2>/dev/null || echo "[]")
   while read -r stale_id; do
-    [ -n "$stale_id" ] && api DELETE "$url/api/v3/rootfolder/$stale_id" -H "$H" >/dev/null 2>&1 && \
+    [ -n "$stale_id" ] && api DELETE "$url/api/$api_ver/rootfolder/$stale_id" -H "$H" >/dev/null 2>&1 && \
       ok "Removed stale root folder (id: $stale_id)"
   done < <(echo "$EXISTING_ROOTS" | jq -r '.[] | select(.path != "'"$root_folder"'") | .id' 2>/dev/null)
 
   if echo "$EXISTING_ROOTS" | jq -r '.[].path' 2>/dev/null | grep -q "^${root_folder}$"; then
     ok "Root folder: $root_folder"
   else
-    api POST "$url/api/v3/rootfolder" -H "$H" -d "{\"path\":\"$root_folder\"}" >/dev/null && \
+    api POST "$url/api/$api_ver/rootfolder" -H "$H" -d "{\"path\":\"$root_folder\"}" >/dev/null && \
       ok "Root folder: $root_folder" || warn "Could not add root folder"
   fi
 
-  EXISTING_DL=$(api GET "$url/api/v3/downloadclient" -H "$H" | jq -r '.[].name' 2>/dev/null || echo "")
+  EXISTING_DL=$(api GET "$url/api/$api_ver/downloadclient" -H "$H" | jq -r '.[].name' 2>/dev/null || echo "")
 
   if ! echo "$EXISTING_DL" | grep -q "qBittorrent"; then
-    api POST "$url/api/v3/downloadclient" -H "$H" -d '{
+    api POST "$url/api/$api_ver/downloadclient" -H "$H" -d '{
       "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
       "enable":true,"protocol":"torrent","priority":1,
       "fields":[{"name":"host","value":"qbittorrent"},{"name":"port","value":8081},
@@ -1225,7 +1180,7 @@ configure_arr() {
   else ok "qBittorrent connected"; fi
 
   if [ -n "$SABNZBD_KEY" ] && ! echo "$EXISTING_DL" | grep -q "SABnzbd"; then
-    api POST "$url/api/v3/downloadclient" -H "$H" -d '{
+    api POST "$url/api/$api_ver/downloadclient" -H "$H" -d '{
       "name":"SABnzbd","implementation":"Sabnzbd","configContract":"SabnzbdSettings",
       "enable":true,"protocol":"usenet","priority":2,
       "fields":[{"name":"host","value":"sabnzbd"},{"name":"port","value":8080},
@@ -1235,9 +1190,9 @@ configure_arr() {
 
   # Add Jellyfin notification connection (triggers library scan on import/upgrade)
   if [ -n "$JELLYFIN_API_KEY" ]; then
-    EXISTING_NOTIF=$(api GET "$url/api/v3/notification" -H "$H" | jq -r '.[].name' 2>/dev/null || echo "")
+    EXISTING_NOTIF=$(api GET "$url/api/$api_ver/notification" -H "$H" | jq -r '.[].name' 2>/dev/null || echo "")
     if ! echo "$EXISTING_NOTIF" | grep -q "^Jellyfin$"; then
-      api POST "$url/api/v3/notification" -H "$H" -d '{
+      api POST "$url/api/$api_ver/notification" -H "$H" -d '{
         "name":"Jellyfin","implementation":"MediaBrowser","configContract":"MediaBrowserSettings",
         "enable":true,"onDownload":true,"onUpgrade":true,"onRename":true,
         "fields":[{"name":"host","value":"jellyfin"},{"name":"port","value":8096},
@@ -1248,7 +1203,7 @@ configure_arr() {
   fi
 
   # Configure web UI authentication (Sonarr v4 / Radarr v5 enable auth by default)
-  HOST_CONFIG=$(api GET "$url/api/v3/config/host" -H "$H" 2>/dev/null || echo "")
+  HOST_CONFIG=$(api GET "$url/api/$api_ver/config/host" -H "$H" 2>/dev/null || echo "")
   if [ -n "$HOST_CONFIG" ] && [ "$HOST_CONFIG" != "null" ]; then
     CURRENT_AUTH_USER=$(echo "$HOST_CONFIG" | jq -r '.username // empty' 2>/dev/null)
     if [ -z "$CURRENT_AUTH_USER" ]; then
@@ -1256,7 +1211,7 @@ configure_arr() {
       UPDATED_HOST=$(echo "$HOST_CONFIG" | jq -c \
         --arg user "$JELLYFIN_USER" --arg pass "$JELLYFIN_PASS" \
         '.authenticationMethod = "forms" | .username = $user | .password = $pass | .passwordConfirmation = $pass | .authenticationRequired = "enabled"' 2>/dev/null)
-      api PUT "$url/api/v3/config/host/$HOST_ID" -H "$H" -d "$UPDATED_HOST" >/dev/null 2>&1 && \
+      api PUT "$url/api/$api_ver/config/host/$HOST_ID" -H "$H" -d "$UPDATED_HOST" >/dev/null 2>&1 && \
         ok "Auth set: $JELLYFIN_USER" || warn "Could not set authentication"
     else
       ok "Auth: $CURRENT_AUTH_USER"
@@ -1901,12 +1856,12 @@ docker restart unpackerr >/dev/null 2>&1 && ok "Unpackerr restarted with new con
 # 16.6 LIDARR — configure download clients and root folders
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring Lidarr..."
-[ -n "$LIDARR_KEY" ] && configure_arr "lidarr" "$LIDARR_URL" "$LIDARR_KEY" "/media/music" "musicCategory"
+[ -n "$LIDARR_KEY" ] && configure_arr "lidarr" "$LIDARR_URL" "$LIDARR_KEY" "/media/music" "musicCategory" "v1"
 
 # Add Lidarr to Prowlarr
 if [ -n "$PROWLARR_KEY" ]; then
   PH="X-Api-Key: $PROWLARR_KEY"
-  MUSIC_CATS='[3000,3010,3020,3030,3040,3050,3060]'
+  MUSIC_CATS="3000,3010,3020,3030,3040,3050,3060"
   [ -n "$LIDARR_KEY" ]  && add_prowlarr_app "Lidarr"  "Lidarr"  "$LIDARR_INTERNAL"  "$LIDARR_KEY"  "$MUSIC_CATS"
 fi
 
@@ -1930,28 +1885,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# 16.8 KAVITA — create admin user and add book library
-# ═══════════════════════════════════════════════════════════════════
-info "Configuring Kavita..."
-
-KV_RESULT=$(curl -s -X POST "$KAVITA_URL/api/Account/register" \
-  -H "Content-Type: application/json" \
-  -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{username:$u,password:$p}')" 2>/dev/null || true)
-if echo "$KV_RESULT" | jq -e '.token' >/dev/null 2>&1; then
-  KV_TOKEN=$(echo "$KV_RESULT" | jq -r '.token')
-  ok "Admin user created: $JELLYFIN_USER"
-  # Add book library
-  curl -sf -X POST "$KAVITA_URL/api/Library" \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $KV_TOKEN" \
-    -d '{"name":"Books","type":2,"folders":["/media/books"],"manageCollections":true,"manageReadingLists":true,"includeInDashboard":true,"includeInRecommended":true,"includeInSearch":true}' >/dev/null 2>&1 && \
-    ok "Library 'Books' → /media/books" || warn "Could not add book library"
-else
-  ok "Already configured"
-fi
-
-# ═══════════════════════════════════════════════════════════════════
-# 16.9 IMMICH — create admin user
+# 16.8 IMMICH — create admin user
 # ═══════════════════════════════════════════════════════════════════
 info "Configuring Immich..."
 

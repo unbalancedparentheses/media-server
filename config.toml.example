@@ -132,12 +132,6 @@ wireguard_private_key = ""     # Your WireGuard private key
 wireguard_addresses = ""       # Your WireGuard address (e.g., "10.x.x.x/32")
 server_countries = ""          # Preferred server country (e.g., "Switzerland")
 
-# ─── YouTube Archive (TubeArchivist) ─────────────────────────
-
-[tubearchivist]
-username = "admin"
-password = "changeme"
-
 # ─── System Monitoring (Beszel) ────────────────────────────────
 # After starting Beszel hub (http://localhost:8090), create an account,
 # click "Add System", and paste the generated key below.
