@@ -1570,7 +1570,7 @@ if subtitle_langs:
     set_value('general', 'movie_default_enabled', True)
 
 # Subtitle quality: minimum score filters out mislabeled subs
-set_value('general', 'minimum_score', 90)
+set_value('general', 'minimum_score', 70)
 set_value('general', 'minimum_score_movie', 70)
 
 # Auto-upgrade subs when a higher-score match appears
