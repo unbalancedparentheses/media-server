@@ -45,5 +45,5 @@ init_service_registry() {
   SERVICE_HEALTH_ENDPOINTS+=$'Beszel|'"$BESZEL_URL"$'/api/health\n'
   SERVICE_HEALTH_ENDPOINTS="${SERVICE_HEALTH_ENDPOINTS%$'\n'}"
 
-  CONTAINER_LIST="jellyfin navidrome sonarr sonarr-anime radarr lidarr prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr tdarr janitorr dozzle beszel immich immich-machine-learning immich-redis immich-postgres scrutiny uptime-kuma"
+  CONTAINER_LIST="jellyfin navidrome sonarr sonarr-anime radarr lidarr prowlarr bazarr sabnzbd qbittorrent jellyseerr flaresolverr media-nginx recyclarr unpackerr tdarr janitorr dozzle beszel beszel-agent immich immich-machine-learning immich-redis immich-postgres scrutiny uptime-kuma"
 }

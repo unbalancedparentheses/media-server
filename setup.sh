@@ -172,17 +172,17 @@ load_config_json() {
   out="$(try_load_config_json "$path")" || err "Unable to parse config.toml (need Python 3.11+ or python3-tomli, or yq)"
   echo "$out"
 }
-write_secure_defaults_to_config() {
-  local path="$1"
-  local jellyfin_pass qbittorrent_pass
-  jellyfin_pass="$(generate_secret)"
-  qbittorrent_pass="$(generate_secret)"
+write_credentials_to_config() {
+  local path="$1" jf_user="$2" jf_pass="$3" qbit_user="$4" qbit_pass="$5"
 
-  python3 - "$path" "$jellyfin_pass" "$qbittorrent_pass" << 'PY'
+  python3 - "$path" "$jf_user" "$jf_pass" "$qbit_user" "$qbit_pass" << 'PY'
 import re
 import sys
 
-path, jf, qb = sys.argv[1:]
+def toml_escape(s):
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+path, jf_user, jf_pass, qb_user, qb_pass = sys.argv[1:]
 with open(path, "r", encoding="utf-8") as f:
     lines = f.readlines()
 
@@ -192,19 +192,69 @@ for i, line in enumerate(lines):
     if m:
         section = m.group(1).strip()
         continue
-    if re.match(r'^\s*password\s*=', line):
-        if section == "jellyfin":
-            lines[i] = 'password = "{}"\n'.format(jf)
-        elif section == "qbittorrent":
-            lines[i] = 'password = "{}"\n'.format(qb)
+    if section == "jellyfin":
+        if re.match(r'^\s*username\s*=', line):
+            lines[i] = 'username = "{}"\n'.format(toml_escape(jf_user))
+        elif re.match(r'^\s*password\s*=', line):
+            lines[i] = 'password = "{}"\n'.format(toml_escape(jf_pass))
+    elif section == "qbittorrent":
+        if re.match(r'^\s*username\s*=', line):
+            lines[i] = 'username = "{}"\n'.format(toml_escape(qb_user))
+        elif re.match(r'^\s*password\s*=', line):
+            lines[i] = 'password = "{}"\n'.format(toml_escape(qb_pass))
 
 with open(path, "w", encoding="utf-8") as f:
     f.writelines(lines)
 PY
+}
+
+write_secure_defaults_to_config() {
+  local path="$1"
+  local jellyfin_pass qbittorrent_pass
+  jellyfin_pass="$(generate_secret)"
+  qbittorrent_pass="$(generate_secret)"
+
+  write_credentials_to_config "$path" "admin" "$jellyfin_pass" "admin" "$qbittorrent_pass"
 
   ok "Generated secure default passwords in config.toml"
   echo "  Jellyfin password: $jellyfin_pass"
   echo "  qBittorrent password: $qbittorrent_pass"
+}
+
+prompt_credentials() {
+  local path="$1"
+  info "Setting up credentials..."
+  echo "  Jellyfin credentials are shared across most services"
+  echo "  (Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd, Navidrome, Immich)."
+  echo ""
+
+  local jf_user jf_pass jf_pass2 qbit_user qbit_pass qbit_pass2
+
+  read -r -p "  Jellyfin username [admin]: " jf_user
+  jf_user="${jf_user:-admin}"
+  while true; do
+    read -r -s -p "  Jellyfin password: " jf_pass; echo
+    [ -z "$jf_pass" ] && warn "Password cannot be empty" && continue
+    read -r -s -p "  Confirm password:  " jf_pass2; echo
+    [ "$jf_pass" = "$jf_pass2" ] && break
+    warn "Passwords don't match — try again"
+  done
+  ok "Jellyfin: $jf_user"
+  echo ""
+
+  read -r -p "  qBittorrent username [admin]: " qbit_user
+  qbit_user="${qbit_user:-admin}"
+  while true; do
+    read -r -s -p "  qBittorrent password: " qbit_pass; echo
+    [ -z "$qbit_pass" ] && warn "Password cannot be empty" && continue
+    read -r -s -p "  Confirm password:     " qbit_pass2; echo
+    [ "$qbit_pass" = "$qbit_pass2" ] && break
+    warn "Passwords don't match — try again"
+  done
+  ok "qBittorrent: $qbit_user"
+
+  write_credentials_to_config "$path" "$jf_user" "$jf_pass" "$qbit_user" "$qbit_pass"
+  ok "Credentials saved to config.toml"
 }
 ensure_compose_ready() {
   require_docker_running
@@ -222,12 +272,21 @@ wait_for() {
   while true; do
     local code
     code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 "$url" 2>/dev/null || echo "000")
-    [ "$code" != "000" ] && break
+    { [ "${code:0:1}" = "2" ] || [ "${code:0:1}" = "3" ]; } && break
     i=$((i + 1))
     [ "$i" -ge "$max" ] && echo " timeout!" && return 1
     sleep 1
   done
   echo " up"
+}
+
+api_retry() {
+  local retries=3 delay=2 i
+  for i in $(seq 1 "$retries"); do
+    if "$@" ; then return 0; fi
+    [ "$i" -lt "$retries" ] && sleep "$delay"
+  done
+  return 1
 }
 
 cfg() { echo "$CONFIG_JSON" | jq -r "$1"; }
@@ -257,6 +316,12 @@ validate_config_semantics() {
   seed_ratio=$(cfg '.downloads.seeding_ratio')
   seed_time=$(cfg '.downloads.seeding_time_minutes')
   timezone=$(cfg '.timezone // empty')
+
+  local jf_pass qbit_pass
+  jf_pass=$(cfg '.jellyfin.password // ""')
+  qbit_pass=$(cfg '.qbittorrent.password // ""')
+  [ "$jf_pass" = "changeme" ] && err "jellyfin.password is still the default 'changeme' — set a real password in config.toml"
+  [ "$qbit_pass" = "changeme" ] && err "qbittorrent.password is still the default 'changeme' — set a real password in config.toml"
 
   [[ "$dl_complete" == /* ]] || err "downloads.complete must be an absolute path"
   [[ "$dl_incomplete" == /* ]] || err "downloads.incomplete must be an absolute path"
@@ -747,11 +812,29 @@ if [ ! -f "$CONFIG_FILE" ]; then
     write_secure_defaults_to_config "$CONFIG_FILE"
     warn "config.toml not found — created with secure generated defaults"
   else
-    warn "config.toml not found — created from config.toml.example with defaults"
+    warn "config.toml not found — created from config.toml.example"
+    prompt_credentials "$CONFIG_FILE"
   fi
 fi
 CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
 validate_required_config
+
+# Prompt for credentials if still using defaults (interactive mode only)
+needs_credentials=false
+jf_pass_check=$(cfg '.jellyfin.password // ""')
+qbit_pass_check=$(cfg '.qbittorrent.password // ""')
+if [ "$jf_pass_check" = "changeme" ] || [ "$qbit_pass_check" = "changeme" ]; then
+  needs_credentials=true
+fi
+if [ "$needs_credentials" = "true" ]; then
+  if [ "$NON_INTERACTIVE" = "true" ]; then
+    write_secure_defaults_to_config "$CONFIG_FILE"
+  else
+    prompt_credentials "$CONFIG_FILE"
+  fi
+  CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
+fi
+
 validate_config_semantics
 
 # Check Tailscale connection
@@ -796,7 +879,9 @@ mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
 mkdir -p "$MEDIA_DIR"/backups
 mkdir -p "$MEDIA_DIR"/{transcode_cache,leaving-soon}
-mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,navidrome,unpackerr,gluetun,tdarr/server,tdarr/configs,tdarr/logs,janitorr,beszel,immich-ml,immich-postgres,scrutiny,uptime-kuma}/logs
+mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,navidrome,unpackerr,gluetun,janitorr,beszel,immich-ml,scrutiny,uptime-kuma}/logs
+mkdir -p "$MEDIA_DIR"/config/tdarr/{server,configs,logs}
+mkdir -p "$MEDIA_DIR"/config/immich-postgres
 
 # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
 [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
@@ -828,7 +913,7 @@ TZ_VALUE=$(cfg '.timezone // "America/New_York"')
 
 # Generate a stable Immich DB password (reuse existing if present)
 if [ -f "$SCRIPT_DIR/.env" ] && grep -q "^IMMICH_DB_PASSWORD=" "$SCRIPT_DIR/.env" 2>/dev/null; then
-  IMMICH_DB_PASS=$(sed -n 's/^IMMICH_DB_PASSWORD=//p' "$SCRIPT_DIR/.env")
+  IMMICH_DB_PASS=$(sed -n 's/^IMMICH_DB_PASSWORD=//p' "$SCRIPT_DIR/.env" | tr -d '"')
 else
   IMMICH_DB_PASS=$(openssl rand -hex 16)
 fi
@@ -847,14 +932,14 @@ COMPOSE_PROFILES_VALUE=""
 cat > "$SCRIPT_DIR/.env" << EOF
 PUID=$(id -u)
 PGID=$(id -g)
-TZ=$TZ_VALUE
-IMMICH_DB_PASSWORD=$IMMICH_DB_PASS
-VPN_SERVICE_PROVIDER=$VPN_PROVIDER
-VPN_TYPE=$VPN_TYPE
-WIREGUARD_PRIVATE_KEY=$VPN_WG_KEY
-WIREGUARD_ADDRESSES=$VPN_WG_ADDR
-VPN_SERVER_COUNTRIES=$VPN_COUNTRIES
-BESZEL_AGENT_KEY=$(cfg '.beszel.agent_key // ""')
+TZ="$TZ_VALUE"
+IMMICH_DB_PASSWORD="$IMMICH_DB_PASS"
+VPN_SERVICE_PROVIDER="$VPN_PROVIDER"
+VPN_TYPE="$VPN_TYPE"
+WIREGUARD_PRIVATE_KEY="$VPN_WG_KEY"
+WIREGUARD_ADDRESSES="$VPN_WG_ADDR"
+VPN_SERVER_COUNTRIES="$VPN_COUNTRIES"
+BESZEL_AGENT_KEY="$(cfg '.beszel.agent_key // ""')"
 COMPOSE_PROFILES=$COMPOSE_PROFILES_VALUE
 EOF
 ok ".env (PUID=$(id -u), PGID=$(id -g), TZ=$TZ_VALUE)"
@@ -968,7 +1053,7 @@ if [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ]; then
   if ! grep -q "^host_whitelist.*sabnzbd" "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null; then
     sed_inplace 's/^host_whitelist = .*/& sabnzbd/' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null
     docker restart sabnzbd >/dev/null 2>&1 && ok "SABnzbd: added Docker hostname to whitelist" || true
-    sleep 3
+    wait_for "SABnzbd" "$SABNZBD_URL"
   fi
 fi
 
@@ -997,7 +1082,7 @@ info "Configuring qBittorrent..."
 # Try configured password first, then temp password
 QBIT_COOKIE=""
 for try_pass in "$QBIT_PASS" "$QBIT_TEMP_PASS"; do
-  QBIT_COOKIE=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
+  QBIT_COOKIE=$(api_retry curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
     -d "username=$QBIT_USER&password=$try_pass" 2>/dev/null | extract_cookie SID || echo "")
   [ -n "$QBIT_COOKIE" ] && break
 done
@@ -1054,7 +1139,7 @@ else
   ok "Already configured"
 fi
 
-JF_AUTH_RESP=$(api POST "$JELLYFIN_URL/Users/AuthenticateByName" -H "$JF_HEADER" \
+JF_AUTH_RESP=$(api_retry api POST "$JELLYFIN_URL/Users/AuthenticateByName" -H "$JF_HEADER" \
   -d "{\"Username\":\"$JELLYFIN_USER\",\"Pw\":\"$JELLYFIN_PASS\"}" || echo "")
 JELLYFIN_TOKEN=$(echo "$JF_AUTH_RESP" | jq -r '.AccessToken // empty' 2>/dev/null || echo "")
 
@@ -1089,8 +1174,9 @@ if [ -n "$JELLYFIN_TOKEN" ]; then
   done
 
   EXISTING_KEYS=$(api GET "$JELLYFIN_URL/Auth/Keys" -H "X-Emby-Token: $JELLYFIN_TOKEN" 2>/dev/null | jq '.Items | length' 2>/dev/null || echo "0")
-  [ "$EXISTING_KEYS" = "0" ] || [ -z "$EXISTING_KEYS" ] && \
+  if [ "$EXISTING_KEYS" = "0" ] || [ -z "$EXISTING_KEYS" ]; then
     api POST "$JELLYFIN_URL/Auth/Keys?app=MediaServer" -H "X-Emby-Token: $JELLYFIN_TOKEN" >/dev/null 2>&1 || true
+  fi
   JELLYFIN_API_KEY=$(api GET "$JELLYFIN_URL/Auth/Keys" -H "X-Emby-Token: $JELLYFIN_TOKEN" 2>/dev/null | jq -r '.Items[-1].AccessToken // empty' 2>/dev/null || echo "")
   [ -n "$JELLYFIN_API_KEY" ] && ok "API key: $JELLYFIN_API_KEY"
 
@@ -1154,7 +1240,7 @@ configure_arr() {
   local H="X-Api-Key: $key"
 
   # Remove stale root folders (e.g. /downloads) and ensure only the correct one exists
-  EXISTING_ROOTS=$(api GET "$url/api/$api_ver/rootfolder" -H "$H" 2>/dev/null || echo "[]")
+  EXISTING_ROOTS=$(api_retry api GET "$url/api/$api_ver/rootfolder" -H "$H" 2>/dev/null || echo "[]")
   while read -r stale_id; do
     [ -n "$stale_id" ] && api DELETE "$url/api/$api_ver/rootfolder/$stale_id" -H "$H" >/dev/null 2>&1 && \
       ok "Removed stale root folder (id: $stale_id)"
@@ -1163,7 +1249,7 @@ configure_arr() {
   if echo "$EXISTING_ROOTS" | jq -r '.[].path' 2>/dev/null | grep -q "^${root_folder}$"; then
     ok "Root folder: $root_folder"
   else
-    api POST "$url/api/$api_ver/rootfolder" -H "$H" -d "{\"path\":\"$root_folder\"}" >/dev/null && \
+    api_retry api POST "$url/api/$api_ver/rootfolder" -H "$H" -d "{\"path\":\"$root_folder\"}" >/dev/null && \
       ok "Root folder: $root_folder" || warn "Could not add root folder"
   fi
 
@@ -1228,7 +1314,7 @@ enable_unknown_quality() {
   local url="$1" key="$2" api_ver="${3:-v3}"
   local H="X-Api-Key: $key"
   local PROFILE=$(api GET "$url/api/$api_ver/qualityprofile/1" -H "$H" 2>/dev/null || echo "")
-  [ -z "$PROFILE" ] || [ "$PROFILE" = "null" ] && return
+  { [ -z "$PROFILE" ] || [ "$PROFILE" = "null" ]; } && return
   local UNKNOWN_ALLOWED=$(echo "$PROFILE" | jq '[.items[] | select(.quality.id == 0) | .allowed][0]' 2>/dev/null)
   if [ "$UNKNOWN_ALLOWED" = "false" ]; then
     local UPDATED=$(echo "$PROFILE" | jq '.items = [.items[] | if (.quality.id == 0) then .allowed = true else . end]')
@@ -1238,6 +1324,7 @@ enable_unknown_quality() {
 }
 [ -n "$SONARR_KEY" ]       && enable_unknown_quality "$SONARR_URL"       "$SONARR_KEY"
 [ -n "$SONARR_ANIME_KEY" ] && enable_unknown_quality "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
+[ -n "$RADARR_KEY" ]       && enable_unknown_quality "$RADARR_URL"       "$RADARR_KEY"
 
 # ═══════════════════════════════════════════════════════════════════
 # 12. PROWLARR — connect apps + FlareSolverr + indexers
@@ -1253,7 +1340,7 @@ if [ -n "$PROWLARR_KEY" ]; then
     if ! echo "$EXISTING_APPS" | grep -q "^${name}$"; then
       local tags_json="[]"
       [ -n "$tags" ] && tags_json="[$tags]"
-      api POST "$PROWLARR_URL/api/v1/applications" -H "$PH" -d '{
+      api_retry api POST "$PROWLARR_URL/api/v1/applications" -H "$PH" -d '{
         "name":"'"$name"'","implementation":"'"$impl"'","configContract":"'"$impl"'Settings",
         "syncLevel":"fullSync","tags":'"$tags_json"',
         "fields":[{"name":"prowlarrUrl","value":"'"$PROWLARR_INTERNAL"'"},
@@ -1320,11 +1407,12 @@ if [ -n "$PROWLARR_KEY" ]; then
   fi
 
   # Add indexers from config.json
-  INDEXER_COUNT=$(cfg '.indexers | length')
+  INDEXER_COUNT=$(cfg '.indexers | length' 2>/dev/null || echo "0")
+  [[ "$INDEXER_COUNT" =~ ^[0-9]+$ ]] || INDEXER_COUNT=0
   EXISTING_INDEXERS=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
   SCHEMAS=""
 
-  if [ "$INDEXER_COUNT" -gt 0 ] 2>/dev/null; then
+  if [ "$INDEXER_COUNT" -gt 0 ]; then
     info "Adding indexers from config..."
     for i in $(seq 0 $((INDEXER_COUNT - 1))); do
       IDX_ENABLED=$(cfg ".indexers[$i].enable")
@@ -1396,8 +1484,9 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 # 13. SABNZBD — usenet providers
 # ═══════════════════════════════════════════════════════════════════
-PROVIDER_COUNT=$(cfg '.usenet_providers | length')
-if [ "$PROVIDER_COUNT" -gt 0 ] 2>/dev/null && [ -n "$SABNZBD_KEY" ]; then
+PROVIDER_COUNT=$(cfg '.usenet_providers | length' 2>/dev/null || echo "0")
+[[ "$PROVIDER_COUNT" =~ ^[0-9]+$ ]] || PROVIDER_COUNT=0
+if [ "$PROVIDER_COUNT" -gt 0 ] && [ -n "$SABNZBD_KEY" ]; then
   info "Configuring SABnzbd usenet providers..."
 
   for i in $(seq 0 $((PROVIDER_COUNT - 1))); do
@@ -1577,7 +1666,7 @@ if [ -n "$BAZARR_CONFIG" ] && [ -n "$SUBTITLE_LANGS" ]; then
       PROFILE_JSON=$(jq -n --argjson items "$LANG_ITEMS" \
         '[{"profileId":1,"name":"Default","cutoff":null,"items":$items,"mustContain":"","mustNotContain":"","originalFormat":null}]')
 
-      curl -sf -X POST "$BAZARR_URL/api/system/settings?apikey=$BAZARR_API_KEY_VAL" \
+      api_retry curl -sf -X POST "$BAZARR_URL/api/system/settings?apikey=$BAZARR_API_KEY_VAL" \
         "${LANG_ENABLED_ARGS[@]}" \
         --data-urlencode "languages-profiles=$PROFILE_JSON" \
         -d "settings-general-serie_default_profile=1" \
@@ -1701,7 +1790,7 @@ JS_COOKIE=""
 for AUTH_BODY in \
   "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\",\"email\":\"admin@media.local\",\"serverType\":2}" \
   "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\",\"email\":\"admin@media.local\"}"; do
-  JS_AUTH_RESP=$(curl -s -c - -X POST "$JELLYSEERR_URL/api/v1/auth/jellyfin" \
+  JS_AUTH_RESP=$(api_retry curl -s -c - -X POST "$JELLYSEERR_URL/api/v1/auth/jellyfin" \
     -H "Content-Type: application/json" \
     -d "$AUTH_BODY" 2>/dev/null || echo "")
   JS_COOKIE=$(echo "$JS_AUTH_RESP" | extract_cookie connect.sid || echo "")
@@ -1726,44 +1815,42 @@ if [ -n "$JS_COOKIE" ]; then
   fi
 
   # Add Sonarr
-  EXISTING_JS_SONARR=$(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
-  if [ "$EXISTING_JS_SONARR" = "0" ] || [ -z "$EXISTING_JS_SONARR" ]; then
-    [ -n "$SONARR_KEY" ] && {
-      PROFILE=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" | jq '.[0]' 2>/dev/null)
-      PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
-      PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
-      api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d '{
-        "name":"Sonarr","hostname":"sonarr","port":8989,"useSsl":false,"apiKey":"'"$SONARR_KEY"'",
-        "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/tv",
-        "is4k":false,"enableSeasonFolders":true,"isDefault":true,"externalUrl":"http://localhost:8989",
-        "enableSearch":true
-      }' >/dev/null 2>&1 && ok "Sonarr connected" || warn "Could not add Sonarr"
-    }
-    [ -n "$SONARR_ANIME_KEY" ] && {
-      PROFILE=$(api GET "$SONARR_ANIME_URL/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_ANIME_KEY" | jq '.[0]' 2>/dev/null)
-      PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
-      PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
-      api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d '{
-        "name":"Sonarr Anime","hostname":"sonarr-anime","port":8989,"useSsl":false,"apiKey":"'"$SONARR_ANIME_KEY"'",
-        "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/anime",
-        "is4k":false,"enableSeasonFolders":true,"isDefault":false,"externalUrl":"http://localhost:8990",
-        "seriesType":"anime","animeSeriesType":"anime",
-        "enableSearch":true
-      }' >/dev/null 2>&1 && ok "Sonarr Anime connected" || warn "Could not add Sonarr Anime"
-    }
-  else
-    # Ensure enableSearch is set on existing connections
-    while IFS= read -r JS_SONARR; do
-      JS_SID=$(echo "$JS_SONARR" | jq -r '.id')
-      JS_SEARCH=$(echo "$JS_SONARR" | jq -r '.enableSearch // false')
-      if [ "$JS_SEARCH" != "true" ]; then
-        UPDATED_JS=$(echo "$JS_SONARR" | jq '.enableSearch = true')
-        api PUT "$JELLYSEERR_URL/api/v1/settings/sonarr/$JS_SID" "${JA[@]}" -d "$UPDATED_JS" >/dev/null 2>&1 && \
-          ok "Sonarr $JS_SID: enableSearch set" || true
-      fi
-    done < <(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null)
-    ok "Sonarr already connected"
-  fi
+  EXISTING_JS_SONARR_NAMES=$(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -r '.[].name' 2>/dev/null || echo "")
+
+  add_js_sonarr() {
+    local name="$1" hostname="$2" key="$3" url="$4" dir="$5" ext_url="$6" is_default="$7" extra="${8:-}"
+    if echo "$EXISTING_JS_SONARR_NAMES" | grep -q "^${name}$"; then
+      ok "$name already connected"
+      return
+    fi
+    PROFILE=$(api GET "$url/api/v3/qualityprofile" -H "X-Api-Key: $key" | jq '.[0]' 2>/dev/null)
+    PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
+    PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
+    api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d '{
+      "name":"'"$name"'","hostname":"'"$hostname"'","port":8989,"useSsl":false,"apiKey":"'"$key"'",
+      "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"'"$dir"'",
+      "is4k":false,"enableSeasonFolders":true,"isDefault":'"$is_default"',"externalUrl":"'"$ext_url"'",
+      '"$extra"'
+      "enableSearch":true
+    }' >/dev/null 2>&1 && ok "$name connected" || warn "Could not add $name"
+  }
+
+  [ -n "$SONARR_KEY" ] && \
+    add_js_sonarr "Sonarr" "sonarr" "$SONARR_KEY" "$SONARR_URL" "/media/tv" "http://localhost:8989" "true"
+  [ -n "$SONARR_ANIME_KEY" ] && \
+    add_js_sonarr "Sonarr Anime" "sonarr-anime" "$SONARR_ANIME_KEY" "$SONARR_ANIME_URL" "/media/anime" "http://localhost:8990" "false" '"seriesType":"anime","animeSeriesType":"anime",'
+
+  # Ensure enableSearch is set on all existing connections
+  while IFS= read -r JS_SONARR; do
+    [ -z "$JS_SONARR" ] && continue
+    JS_SID=$(echo "$JS_SONARR" | jq -r '.id')
+    JS_SEARCH=$(echo "$JS_SONARR" | jq -r '.enableSearch // false')
+    if [ "$JS_SEARCH" != "true" ]; then
+      UPDATED_JS=$(echo "$JS_SONARR" | jq '.enableSearch = true')
+      api PUT "$JELLYSEERR_URL/api/v1/settings/sonarr/$JS_SID" "${JA[@]}" -d "$UPDATED_JS" >/dev/null 2>&1 && \
+        ok "Sonarr $JS_SID: enableSearch set" || true
+    fi
+  done < <(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -c '.[]' 2>/dev/null)
 
   # Add Radarr
   EXISTING_JS_RADARR=$(api GET "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
@@ -1824,7 +1911,7 @@ info "Writing Unpackerr config..."
 UNPACKERR_CONF="$CONFIG_DIR/unpackerr/unpackerr.conf"
 mkdir -p "$(dirname "$UNPACKERR_CONF")"
 
-cat > "$UNPACKERR_CONF" << UNPACKEOF
+UNPACKERR_NEW=$(cat << UNPACKEOF
 ## Unpackerr — auto-generated by setup.sh
 
 [[sonarr]]
@@ -1846,11 +1933,16 @@ paths = ["/downloads"]
 url = "http://lidarr:8686"
 api_key = "$LIDARR_KEY"
 paths = ["/downloads"]
-
 UNPACKEOF
+)
 
-ok "Config written"
-docker restart unpackerr >/dev/null 2>&1 && ok "Unpackerr restarted with new config" || true
+if [ ! -f "$UNPACKERR_CONF" ] || [ "$(cat "$UNPACKERR_CONF")" != "$UNPACKERR_NEW" ]; then
+  printf '%s\n' "$UNPACKERR_NEW" > "$UNPACKERR_CONF"
+  ok "Config written"
+  docker restart unpackerr >/dev/null 2>&1 && ok "Unpackerr restarted with new config" || true
+else
+  ok "Config unchanged"
+fi
 
 # ═══════════════════════════════════════════════════════════════════
 # 16.6 LIDARR — configure download clients and root folders
@@ -1861,6 +1953,7 @@ info "Configuring Lidarr..."
 # Add Lidarr to Prowlarr
 if [ -n "$PROWLARR_KEY" ]; then
   PH="X-Api-Key: $PROWLARR_KEY"
+  EXISTING_APPS=$(api GET "$PROWLARR_URL/api/v1/applications" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
   MUSIC_CATS="3000,3010,3020,3030,3040,3050,3060"
   [ -n "$LIDARR_KEY" ]  && add_prowlarr_app "Lidarr"  "Lidarr"  "$LIDARR_INTERNAL"  "$LIDARR_KEY"  "$MUSIC_CATS"
 fi
@@ -1913,7 +2006,7 @@ if [ ! -f "$JANITORR_CONFIG" ]; then
   mkdir -p "$CONFIG_DIR/janitorr/logs"
   mkdir -p "$MEDIA_DIR/leaving-soon"
   write_janitorr_config_from_template
-  ok "Config written (dry-run mode)"
+  ok "Config written (dry-run enabled — edit application.yml to activate)"
   docker restart janitorr >/dev/null 2>&1 || true
 else
   ok "Already configured"
@@ -1935,7 +2028,6 @@ write_api_proxy_from_template
 ok "api-proxy.conf written"
 
 # Reload nginx to pick up the new proxy config
-sleep 2
 if docker exec media-nginx nginx -t >/dev/null 2>&1; then
   docker exec media-nginx nginx -s reload >/dev/null 2>&1 && \
     ok "nginx reloaded" || warn "Could not reload nginx (will apply on next restart)"

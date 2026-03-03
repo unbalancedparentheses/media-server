@@ -21,7 +21,7 @@ else
   ok "Cloned to $DEST"
 fi
 
-cd "$DEST"
+cd "$DEST" || err "Could not cd to $DEST"
 
 if [ ! -f config.toml ]; then
   cp config.toml.example config.toml

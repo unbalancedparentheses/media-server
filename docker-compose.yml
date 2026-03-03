@@ -50,6 +50,10 @@ services:
   jellyseerr:
     image: fallenbagel/jellyseerr:latest
     container_name: jellyseerr
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     environment:
       - TZ=${TZ:-America/New_York}
     ports:
@@ -66,17 +70,21 @@ services:
       start_period: 60s
     depends_on:
       jellyfin:
-        condition: service_started
+        condition: service_healthy
       sonarr:
-        condition: service_started
+        condition: service_healthy
       sonarr-anime:
-        condition: service_started
+        condition: service_healthy
       radarr:
-        condition: service_started
+        condition: service_healthy
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
@@ -106,6 +114,10 @@ services:
   sonarr-anime:
     image: lscr.io/linuxserver/sonarr:latest
     container_name: sonarr-anime
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
@@ -135,6 +147,10 @@ services:
   radarr:
     image: lscr.io/linuxserver/radarr:latest
     container_name: radarr
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
@@ -164,6 +180,10 @@ services:
   lidarr:
     image: lscr.io/linuxserver/lidarr:latest
     container_name: lidarr
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
@@ -184,15 +204,19 @@ services:
       start_period: 60s
     depends_on:
       prowlarr:
-        condition: service_started
+        condition: service_healthy
       qbittorrent:
-        condition: service_started
+        condition: service_healthy
       sabnzbd:
-        condition: service_started
+        condition: service_healthy
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
     container_name: prowlarr
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
@@ -234,6 +258,10 @@ services:
   bazarr:
     image: lscr.io/linuxserver/bazarr:latest
     container_name: bazarr
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
@@ -253,6 +281,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    depends_on:
+      sonarr:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
 
   recyclarr:
     image: recyclarr/recyclarr:latest
@@ -285,7 +318,10 @@ services:
       - ~/media/leaving-soon:/media/leaving-soon
     logging: *logging
     restart: unless-stopped
-    mem_limit: 256m
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     depends_on:
       sonarr:
         condition: service_healthy
@@ -298,6 +334,10 @@ services:
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
     container_name: qbittorrent
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
@@ -320,6 +360,10 @@ services:
   sabnzbd:
     image: lscr.io/linuxserver/sabnzbd:latest
     container_name: sabnzbd
+    deploy:
+      resources:
+        limits:
+          memory: 1G
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
@@ -391,6 +435,10 @@ services:
   tdarr:
     image: ghcr.io/haveagitgat/tdarr:latest
     container_name: tdarr
+    deploy:
+      resources:
+        limits:
+          memory: 4G
     environment:
       - PUID=${PUID:-501}
       - PGID=${PGID:-20}
@@ -427,6 +475,10 @@ services:
   immich:
     image: ghcr.io/immich-app/immich-server:release
     container_name: immich
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     ports:
       - "2283:2283"
     environment:
@@ -450,6 +502,8 @@ services:
       immich-redis:
         condition: service_healthy
       immich-postgres:
+        condition: service_healthy
+      immich-machine-learning:
         condition: service_healthy
 
   immich-machine-learning:

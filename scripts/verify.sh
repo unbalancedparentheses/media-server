@@ -41,7 +41,9 @@ run_verification() {
   if [ -n "$QBIT_COOKIE_V" ]; then
     QBIT_CATS=$(curl -sf "$QBIT_URL/api/v2/torrents/categories" -b "SID=$QBIT_COOKIE_V" 2>/dev/null || echo "{}")
     check "qBittorrent category: sonarr" "$(echo "$QBIT_CATS" | jq 'has("sonarr")' 2>/dev/null)"
+    check "qBittorrent category: sonarr-anime" "$(echo "$QBIT_CATS" | jq 'has("sonarr-anime")' 2>/dev/null)"
     check "qBittorrent category: radarr" "$(echo "$QBIT_CATS" | jq 'has("radarr")' 2>/dev/null)"
+    check "qBittorrent category: lidarr" "$(echo "$QBIT_CATS" | jq 'has("lidarr")' 2>/dev/null)"
   fi
 
   if [ -n "$SONARR_KEY" ]; then
@@ -59,11 +61,17 @@ run_verification() {
     check "Radarr → qBittorrent" "$(echo "$RADARR_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
   fi
 
+  if [ -n "$LIDARR_KEY" ]; then
+    LIDARR_DL=$(api GET "$LIDARR_URL/api/v1/downloadclient" -H "X-Api-Key: $LIDARR_KEY" || echo "[]")
+    check "Lidarr → qBittorrent" "$(echo "$LIDARR_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
+  fi
+
   info "Root folders..."
   [ -n "$SONARR_KEY" ] && check "Sonarr → /media/tv" "$(api GET "$SONARR_URL/api/v3/rootfolder" -H "X-Api-Key: $SONARR_KEY" | jq 'any(.[]; .path == "/media/tv")' 2>/dev/null)"
   [ -n "$SONARR_ANIME_KEY" ] && check "Sonarr Anime → /media/anime" "$(api GET "$SONARR_ANIME_URL/api/v3/rootfolder" -H "X-Api-Key: $SONARR_ANIME_KEY" | jq 'any(.[]; .path == "/media/anime")' 2>/dev/null)"
   [ -n "$RADARR_KEY" ] && check "Radarr → /media/movies" "$(api GET "$RADARR_URL/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" | jq 'any(.[]; .path == "/media/movies")' 2>/dev/null)"
   [ -n "$RADARR_KEY" ] && check "Radarr → no stale root folders" "$(api GET "$RADARR_URL/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" | jq '[.[] | .path] | all(. == "/media/movies")' 2>/dev/null)"
+  [ -n "$LIDARR_KEY" ] && check "Lidarr → /media/music" "$(api GET "$LIDARR_URL/api/v1/rootfolder" -H "X-Api-Key: $LIDARR_KEY" | jq 'any(.[]; .path == "/media/music")' 2>/dev/null)"
 
   info "Prowlarr..."
   if [ -n "$PROWLARR_KEY" ]; then
@@ -72,6 +80,7 @@ run_verification() {
     check "Prowlarr → Sonarr connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Sonarr")' 2>/dev/null)"
     check "Prowlarr → Sonarr Anime connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Sonarr Anime")' 2>/dev/null)"
     check "Prowlarr → Radarr connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Radarr")' 2>/dev/null)"
+    check "Prowlarr → Lidarr connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Lidarr")' 2>/dev/null)"
 
     INDEXER_COUNT=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" | jq '[.[] | select(.enable == true)] | length' 2>/dev/null || echo "0")
     check "Prowlarr → indexers enabled ($INDEXER_COUNT)" "$([ "$INDEXER_COUNT" -gt 0 ] && echo true || echo false)"
@@ -143,14 +152,15 @@ run_verification() {
 
   info "Quality profiles..."
   check_unknown_quality() {
-    local name="$1" url="$2" key="$3"
-    local PROFILE=$(api GET "$url/api/v3/qualityprofile/1" -H "X-Api-Key: $key" 2>/dev/null || echo "")
+    local name="$1" url="$2" key="$3" api_ver="${4:-v3}"
+    local PROFILE=$(api GET "$url/api/$api_ver/qualityprofile/1" -H "X-Api-Key: $key" 2>/dev/null || echo "")
     [ -z "$PROFILE" ] && { skip "$name → quality profile"; return; }
     local UNKNOWN=$(echo "$PROFILE" | jq '[.items[] | select(.quality.id == 0) | .allowed][0]' 2>/dev/null)
     check "$name → Unknown quality allowed" "$UNKNOWN"
   }
   [ -n "$SONARR_KEY" ] && check_unknown_quality "Sonarr" "$SONARR_URL" "$SONARR_KEY"
   [ -n "$SONARR_ANIME_KEY" ] && check_unknown_quality "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
+  [ -n "$RADARR_KEY" ] && check_unknown_quality "Radarr" "$RADARR_URL" "$RADARR_KEY"
 
   info "Authentication..."
   check_arr_auth() {
@@ -164,6 +174,7 @@ run_verification() {
   [ -n "$SONARR_ANIME_KEY" ] && check_arr_auth "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
   [ -n "$RADARR_KEY" ] && check_arr_auth "Radarr" "$RADARR_URL" "$RADARR_KEY"
   [ -n "$PROWLARR_KEY" ] && check_arr_auth "Prowlarr" "$PROWLARR_URL" "$PROWLARR_KEY" "v1"
+  [ -n "$LIDARR_KEY" ] && check_arr_auth "Lidarr" "$LIDARR_URL" "$LIDARR_KEY" "v1"
 
   if [ -n "${SABNZBD_KEY:-}" ]; then
     SAB_AUTH_USER=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=misc&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.config.misc.username // empty' 2>/dev/null)

@@ -60,9 +60,8 @@ location /api/jellyseerr/ {
     proxy_set_header X-Api-Key {{JELLYSEERR_KEY}};
 }
 
-# SABnzbd (key in query param)
+# SABnzbd (key in query param — uses literal upstream so nginx performs URI substitution)
 location /api/sabnzbd/ {
     limit_req zone=api burst=50 nodelay;
-    set $upstream_api_sabnzbd http://sabnzbd:8080;
-    proxy_pass $upstream_api_sabnzbd/api?apikey={{SABNZBD_KEY}}&$args;
+    proxy_pass http://sabnzbd:8080/api?apikey={{SABNZBD_KEY}}&$args;
 }

@@ -13,7 +13,9 @@ with open(src, "r", encoding="utf-8") as f:
 
 def repl(match):
     key = match.group(1)
-    return os.environ.get(key, "")
+    val = os.environ.get(key, "")
+    # Escape backslashes and double-quotes for safe embedding in YAML/nginx strings
+    return val.replace("\\", "\\\\").replace('"', '\\"')
 
 content = re.sub(r"\{\{([A-Za-z0-9_]+)\}\}", repl, content)
 with open(dst, "w", encoding="utf-8") as f:

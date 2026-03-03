@@ -8,3 +8,6 @@
 # Secrets — NEVER commit these
 config.toml
 .env
+
+# Generated at runtime
+docker-compose.override.yml

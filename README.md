@@ -1,66 +1,35 @@
 # media-server
 
-One-command self-hosted media server. 25+ Docker containers, fully automated, pre-wired, and verified. Request a movie and it's downloaded, organized, subtitled, and ready to watch.
+One-command self-hosted media server. Request a movie or TV show and it's automatically downloaded, organized, subtitled, and ready to stream — like running your own Netflix.
 
 ```
 bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)
 ```
 
-## Services
+## How it works
 
-### Streaming & Media
+```
+You ──> Jellyseerr (request) ──> Sonarr / Radarr ──> Prowlarr ──> Indexers
+                                        │
+                            qBittorrent / SABnzbd
+                              (through VPN tunnel)
+                                        │
+                                 download completes
+                                  ├── Bazarr (subtitles)
+                                  └── Tdarr (transcode to H.265)
+                                        │
+                               Jellyfin (stream it)
+                                        │
+                          Janitorr (clean up unwatched)
+```
 
-| Service | Description |
-|---------|-------------|
-| **Jellyfin** | Open-source media player — streams movies, TV, and anime via browser or native apps (iOS, Android, Apple TV, Fire TV, Roku) |
-| **Navidrome** | Music streaming server with Subsonic API — works with DSub, Symfonium, etc. |
-
-### Library Automation
-
-| Service | Description |
-|---------|-------------|
-| **Jellyseerr** | Netflix-like request portal — browse, request, and track movies/TV shows |
-| **Sonarr** | TV show automation — monitors, downloads, renames, and organizes episodes |
-| **Sonarr Anime** | Dedicated Sonarr instance with anime-specific indexers (Nyaa, SubsPlease, Mikan) |
-| **Radarr** | Movie automation — same as Sonarr but for films |
-| **Lidarr** | Music automation — monitors artists and downloads new releases |
-| **Prowlarr** | Centralized indexer manager — configure once, synced to all *arr services |
-| **Bazarr** | Automatic subtitle downloads — English always, Spanish when available |
-| **Recyclarr** | Syncs TRaSH Guide quality profiles to Sonarr/Radarr weekly |
-| **Janitorr** | Rule-based media cleanup — auto-removes unwatched content after a grace period |
-
-### Downloads
-
-| Service | Description |
-|---------|-------------|
-| **qBittorrent** | Torrent client, routed through Gluetun VPN |
-| **SABnzbd** | Usenet client — faster and more private, requires paid provider |
-| **Unpackerr** | Auto-extracts compressed downloads for *arr import |
-| **FlareSolverr** | Cloudflare bypass for protected indexers |
-| **Gluetun** | VPN tunnel for torrent traffic — built-in kill switch (optional, disabled by default) |
-
-### Photos
-
-| Service | Description |
-|---------|-------------|
-| **Immich** | Google Photos replacement with ML — face recognition, object detection, map view, mobile auto-upload |
-
-### Transcoding
-
-| Service | Description |
-|---------|-------------|
-| **Tdarr** | Distributed transcode automation — convert H.264 to H.265/HEVC, save 40-50% storage |
-
-### Infrastructure
-
-| Service | Description |
-|---------|-------------|
-| **Nginx** | Reverse proxy — maps `.media.local` domains, serves landing page with live widgets |
-| **Dozzle** | Live Docker log viewer — invaluable with 25+ containers |
-| **Beszel** | Lightweight system monitoring — CPU, RAM, disk, per-container stats |
-| **Scrutiny** | Hard drive S.M.A.R.T. monitoring |
-| **Uptime Kuma** | Service uptime monitoring with push notifications |
-| **Tailscale** | Mesh VPN for remote access with automatic HTTPS certificates |
+1. Request a movie or show through **Jellyseerr** (Netflix-like browse and request UI)
+2. **Sonarr** (TV/anime) or **Radarr** (movies) searches indexers via **Prowlarr**
+3. Best match is sent to **qBittorrent** (through VPN) or **SABnzbd** (Usenet)
+4. File is downloaded, renamed, and added to your **Jellyfin** library
+5. **Bazarr** fetches subtitles automatically (English + Spanish by default)
+6. **Tdarr** transcodes to H.265 in the background to save ~40-50% storage
+7. **Janitorr** removes content nobody has watched after a grace period
 
 ## Quick start
 
@@ -70,34 +39,89 @@ bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-
 bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)
 ```
 
-Clones or updates `~/media-server` and runs `./setup.sh --yes` for full non-interactive setup.
+Clones to `~/media-server`, prompts for credentials, and runs full setup.
 
 ### Manual
 
 ```bash
 git clone https://github.com/unbalancedparentheses/media-server.git
 cd media-server
-# Optional: copy/edit config.toml first (setup will auto-create it if missing)
-./setup.sh --yes
+cp config.toml.example config.toml  # optional — setup creates one if missing
+./setup.sh
 ```
 
 ### What setup.sh does
 
 Fully idempotent — safe to re-run at any time.
 
-1. **Installs prerequisites** — Docker + jq (uses Python TOML parsing, yq optional), Tailscale optional
-2. **Checks Tailscale** — configures remote access (optional)
-3. **Creates `~/media/` directory structure** — libraries, downloads, configs, backups
-4. **Pre-seeds SABnzbd** — generates API key, skips first-run wizard
-5. **Starts all containers** via Docker Compose
-6. **Adds `.media.local` domains** to `/etc/hosts`
-7. **Configures every service** — wires Jellyfin, Sonarr, Radarr, Prowlarr, Bazarr, Jellyseerr, qBittorrent, SABnzbd, and Nginx together
-8. **Runs 90+ verification checks** — every service healthy, every API wired, every container running
+1. Installs Docker + dependencies
+2. Creates `~/media/` directory structure (libraries, downloads, configs)
+3. Starts 25+ containers via Docker Compose
+4. Wires every service together (API keys, download clients, indexers, subtitles)
+5. Adds `.media.local` domains to `/etc/hosts`
+6. Runs 90+ verification checks
+
+```bash
+./setup.sh                      # Full setup (interactive)
+./setup.sh --yes                # Full setup (non-interactive, generates passwords)
+./setup.sh --test               # Run verification checks only
+./setup.sh --update             # Pull latest images + restart
+./setup.sh --backup             # Backup all service configs
+./setup.sh --restore <file>     # Restore from backup
+./setup.sh --preflight          # Check prerequisites + config
+./setup.sh --check-config       # Validate config.toml only
+./setup.sh --dry-run            # Preview actions without changing anything
+```
+
+## Services
+
+### Core — what you'll actually use
+
+| Service | What it does |
+|---------|-------------|
+| **[Jellyfin](https://jellyfin.org)** | Stream your library — browser, iOS, Android, Apple TV, Fire TV, Roku, Chromecast |
+| **[Jellyseerr](https://github.com/Fallenbagel/jellyseerr)** | Request movies and shows — browse trending, search, track requests |
+| **[Sonarr](https://sonarr.tv)** | Automatically downloads and organizes TV shows |
+| **[Sonarr Anime](https://sonarr.tv)** | Dedicated instance with anime indexers (Nyaa, SubsPlease, Mikan) |
+| **[Radarr](https://radarr.video)** | Automatically downloads and organizes movies |
+| **[Bazarr](https://www.bazarr.media)** | Automatic subtitle downloads |
+| **[Prowlarr](https://prowlarr.com)** | Manages all your indexers in one place |
+
+### Downloads
+
+| Service | What it does |
+|---------|-------------|
+| **[qBittorrent](https://www.qbittorrent.org)** | Torrent client, routed through VPN |
+| **[SABnzbd](https://sabnzbd.org)** | Usenet client (optional — requires a paid provider) |
+| **[Gluetun](https://github.com/qdm12/gluetun)** | VPN tunnel for torrent traffic with kill switch (optional) |
+| **[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)** | Bypasses Cloudflare on protected indexers |
+| **[Unpackerr](https://unpackerr.zip)** | Extracts compressed downloads so Sonarr/Radarr can import them |
+
+### Background automation
+
+| Service | What it does |
+|---------|-------------|
+| **[Recyclarr](https://recyclarr.dev)** | Syncs [TRaSH Guide](https://trash-guides.info/) quality profiles to Sonarr/Radarr weekly |
+| **[Janitorr](https://github.com/Schaka/Janitorr)** | Removes unwatched content after a configurable grace period |
+| **[Tdarr](https://home.tdarr.io)** | Transcodes media to H.265/HEVC to save storage |
+
+### Also included
+
+| Service | What it does |
+|---------|-------------|
+| **[Navidrome](https://www.navidrome.org)** | Music streaming (works with DSub, Symfonium, etc.) |
+| **[Lidarr](https://lidarr.audio)** | Music automation — monitors artists and downloads releases |
+| **[Immich](https://immich.app)** | Self-hosted Google Photos replacement with face/object recognition |
+| **[Nginx](https://nginx.org)** | Reverse proxy — `.media.local` domains + landing page |
+| **[Dozzle](https://dozzle.dev)** | Live Docker log viewer |
+| **[Beszel](https://beszel.dev)** | System monitoring (CPU, RAM, disk, per-container) |
+| **[Scrutiny](https://github.com/AnalogJ/scrutiny)** | Hard drive S.M.A.R.T. health monitoring |
+| **[Uptime Kuma](https://uptime.kuma.pet)** | Service uptime monitoring with notifications |
+| **[Tailscale](https://tailscale.com)** | Mesh VPN for remote access (optional) |
 
 ## Configuration
 
-Optional for first run: `setup.sh --yes` will auto-create `config.toml` with secure generated defaults.
-You can still copy/edit `config.toml.example` manually for full control.
+Edit `config.toml` before running setup, or let setup prompt you interactively.
 
 ### Credentials
 
@@ -111,23 +135,7 @@ username = "admin"
 password = "changeme"
 ```
 
-### Downloads
-
-```toml
-[downloads]
-seeding_ratio = 2
-seeding_time_minutes = 10080  # 7 days
-```
-
-### Subtitles
-
-```toml
-[subtitles]
-languages = ["en", "es"]
-providers = ["opensubtitlescom"]
-```
-
-English subtitles are always downloaded. Spanish is fetched when available. Add any [ISO 639-1 codes](https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes) you need.
+Setup will prompt you to set real passwords on first run (or generate them with `--yes`).
 
 ### Quality profiles
 
@@ -138,7 +146,17 @@ sonarr_anime_profile = "Remux-1080p - Anime"
 radarr_profile = "HD Bluray + WEB"
 ```
 
-[TRaSH Guide](https://trash-guides.info/) profiles synced by Recyclarr. Defaults: 1080p web for TV, HD bluray for movies.
+[TRaSH Guide](https://trash-guides.info/) profiles synced by Recyclarr. Defaults: 1080p web for TV, remux for anime, HD bluray for movies.
+
+### Subtitles
+
+```toml
+[subtitles]
+languages = ["en", "es"]
+providers = ["opensubtitlescom", "podnapisi", "yifysubtitles"]
+```
+
+English always downloaded, additional languages when available. Providers that need accounts (OpenSubtitles, Addic7ed) can be configured in the Bazarr UI after setup.
 
 ### Indexers
 
@@ -147,10 +165,10 @@ radarr_profile = "HD Bluray + WEB"
 name = "1337x"
 definitionName = "1337x"
 enable = true
-flaresolverr = true
+flaresolverr = true      # needs FlareSolverr for Cloudflare bypass
 ```
 
-Public torrent indexers, anime indexers (Nyaa, SubsPlease, Mikan), and optional usenet indexers (NZBgeek). Set `flaresolverr = true` for Cloudflare-protected sites.
+Pre-configured with public torrent indexers + anime indexers (Nyaa, SubsPlease, Mikan, Bangumi). Add private trackers or usenet indexers as needed.
 
 ### VPN
 
@@ -166,7 +184,7 @@ server_countries = "Switzerland"
 
 Routes torrent traffic through [Gluetun](https://github.com/qdm12/gluetun). 30+ providers supported. Kill switch built in. Optional — disabled by default.
 
-### Usenet providers
+### Usenet
 
 ```toml
 [[usenet_providers]]
@@ -180,108 +198,56 @@ password = ""
 connections = 20
 ```
 
-### Timezone
+Optional. Faster and more private than torrents, but requires a paid Usenet provider.
 
-```toml
-timezone = "America/New_York"
-```
+## Access
 
-## Usage
+All services are available at `http://<service>.media.local` after setup.
 
-```bash
-./setup.sh --preflight          # Fast local prerequisite + config checks
-./setup.sh --check-config       # Validate config.toml only
-./setup.sh --dry-run            # Preview setup actions without changing state
-./setup.sh --yes                # Full setup, non-interactive
-./setup.sh                      # Full setup (idempotent, interactive)
-./setup.sh --test               # Verification checks only
-./setup.sh --update             # Backup + pull latest images + restart
-./setup.sh --backup             # Backup all service configs
-./setup.sh --restore <file>     # Restore from backup
-```
+| Service | URL |
+|---------|-----|
+| Landing page | http://media.local |
+| Jellyfin | http://jellyfin.media.local |
+| Jellyseerr | http://jellyseerr.media.local |
+| Sonarr | http://sonarr.media.local |
+| Sonarr Anime | http://sonarr-anime.media.local |
+| Radarr | http://radarr.media.local |
+| Prowlarr | http://prowlarr.media.local |
+| Bazarr | http://bazarr.media.local |
+| qBittorrent | http://qbittorrent.media.local |
+| SABnzbd | http://sabnzbd.media.local |
+| Lidarr | http://lidarr.media.local |
+| Navidrome | http://navidrome.media.local |
+| Immich | http://immich.media.local |
+| Tdarr | http://tdarr.media.local |
 
-## Remote access
-
-[Tailscale](https://tailscale.com) provides mesh VPN with automatic HTTPS:
-
-- `https://<hostname>.ts.net:8096` — Jellyfin
-- `https://<hostname>.ts.net:5055` — Jellyseerr
-- `https://<hostname>.ts.net` — Landing page
-
-Share access with family/friends by inviting them to your tailnet. Skip during setup if you only need local access.
-
-## Ports
-
-| Service | Port | URL |
-|---------|------|-----|
-| Nginx (landing) | 80 | http://media.local |
-| Jellyfin | 8096 | http://jellyfin.media.local |
-| Jellyseerr | 5055 | http://jellyseerr.media.local |
-| Sonarr | 8989 | http://sonarr.media.local |
-| Sonarr Anime | 8990 | http://sonarr-anime.media.local |
-| Radarr | 7878 | http://radarr.media.local |
-| Prowlarr | 9696 | http://prowlarr.media.local |
-| Bazarr | 6767 | http://bazarr.media.local |
-| qBittorrent | 8081 | http://qbittorrent.media.local |
-| SABnzbd | 8080 | http://sabnzbd.media.local |
-| Lidarr | 8686 | http://lidarr.media.local |
-| Navidrome | 4533 | http://navidrome.media.local |
-| Tdarr | 8265 | http://tdarr.media.local |
-| Immich | 2283 | http://immich.media.local |
-| Dozzle | 9999 | http://dozzle.media.local |
-| Beszel | 8090 | http://beszel.media.local |
-| Scrutiny | 9091 | http://scrutiny.media.local |
-| Uptime Kuma | 3001 | http://uptime-kuma.media.local |
+For remote access, [Tailscale](https://tailscale.com) provides mesh VPN with automatic HTTPS. Share with family/friends by inviting them to your tailnet.
 
 ## Directory structure
 
 ```
 ~/media/
-├── movies/                     # Radarr
-├── tv/                         # Sonarr
-├── anime/                      # Sonarr Anime
-├── music/                      # Lidarr
-├── photos/                     # Immich
-├── transcode_cache/            # Tdarr working directory
+├── movies/              # Radarr
+├── tv/                  # Sonarr
+├── anime/               # Sonarr Anime
+├── music/               # Lidarr / Navidrome
+├── photos/              # Immich
 ├── downloads/
-│   ├── torrents/{complete,incomplete}
-│   └── usenet/{complete,incomplete}
-├── config/                     # One directory per service
-└── backups/                    # 10 retained, oldest pruned
+│   ├── torrents/
+│   └── usenet/
+├── config/              # Per-service config directories
+├── transcode_cache/     # Tdarr working directory
+├── leaving-soon/        # Janitorr staging area
+└── backups/             # Auto-pruned, keeps last 10
 ```
 
-## How it works
+## Extending
 
-```
-User ──> Jellyseerr ──> Sonarr/Radarr ──> Prowlarr ──> Indexers
-                                │
-                    qBittorrent/SABnzbd (via Gluetun VPN)
-                                │
-                         download completes
-                          ├── Jellyfin (library scan)
-                          ├── Bazarr (subtitles)
-                          └── Tdarr (transcode queue)
-                                │
-                     User watches on Jellyfin
-                                │
-                     Janitorr cleans up unwatched content
-```
+Some things you could add alongside this stack:
 
-1. You request a movie or show in Jellyseerr
-2. Sonarr/Radarr searches indexers via Prowlarr
-3. Best match sent to qBittorrent (through VPN) or SABnzbd
-4. Downloaded, imported, renamed, and added to Jellyfin
-5. Bazarr fetches subtitles in English (+ Spanish when available)
-6. Tdarr transcodes to H.265 in the background to save storage
-7. Janitorr removes content nobody watches after your configured grace period
-
-## What else could you add
-
-Niche additions if you need them:
-
-- **Kavita** — digital library for ebooks, comics, and manga
-- **Readarr / LazyLibrarian** — book/audiobook automation
-- **Audiobookshelf** — audiobook and podcast server
-- **Mylar3 / Kapowarr** — comic book automation
-- **TubeArchivist** — YouTube archive and offline playback
-- **Autobrr** — IRC/RSS automation for private trackers
+- **[Kavita](https://www.kavitareader.com)** — ebooks, comics, manga
+- **[Readarr](https://readarr.com)** — book/audiobook automation
+- **[Audiobookshelf](https://www.audiobookshelf.org)** — audiobook and podcast server
+- **[Mylar3](https://github.com/mylar3/mylar3)** — comic book automation
+- **[TubeArchivist](https://www.tubearchivist.com)** — YouTube archive
+- **[Autobrr](https://autobrr.com)** — IRC/RSS automation for private trackers
