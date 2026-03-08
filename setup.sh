@@ -96,6 +96,8 @@ detect_tailscale_cli() {
   fi
 }
 
+urlencode() { jq -sRr @uri <<< "$1"; }
+
 detect_timeout_cmd() {
   if has_cmd timeout; then
     echo "timeout"
@@ -1083,7 +1085,7 @@ info "Configuring qBittorrent..."
 QBIT_COOKIE=""
 for try_pass in "$QBIT_PASS" "$QBIT_TEMP_PASS"; do
   QBIT_COOKIE=$(api_retry curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
-    -d "username=$QBIT_USER&password=$try_pass" 2>/dev/null | extract_cookie SID || echo "")
+    --data-urlencode "username=$QBIT_USER" --data-urlencode "password=$try_pass" 2>/dev/null | extract_cookie SID || echo "")
   [ -n "$QBIT_COOKIE" ] && break
 done
 
@@ -1091,22 +1093,19 @@ if [ -n "$QBIT_COOKIE" ]; then
   ok "Logged in"
 
   # Set permanent password + preferences
+  QBIT_PREFS=$(jq -nc \
+    --arg user "$QBIT_USER" --arg pass "$QBIT_PASS" \
+    --arg save "$DL_COMPLETE" --arg temp "$DL_INCOMPLETE" \
+    --argjson ratio "$SEED_RATIO" --argjson seed_time "$SEED_TIME" \
+    '{web_ui_username:$user, web_ui_password:$pass,
+      save_path:$save, temp_path:$temp, temp_path_enabled:true,
+      web_ui_port:8081, max_ratio:$ratio, max_seeding_time:$seed_time,
+      up_limit:102400, web_ui_csrf_protection_enabled:false,
+      bypass_auth_subnet_whitelist_enabled:true,
+      bypass_auth_subnet_whitelist:"172.16.0.0/12,192.168.0.0/16"}')
   curl -sf -o /dev/null "$QBIT_URL/api/v2/app/setPreferences" \
     -b "SID=$QBIT_COOKIE" \
-    --data-urlencode "json={
-      \"web_ui_username\": \"$QBIT_USER\",
-      \"web_ui_password\": \"$QBIT_PASS\",
-      \"save_path\": \"$DL_COMPLETE\",
-      \"temp_path\": \"$DL_INCOMPLETE\",
-      \"temp_path_enabled\": true,
-      \"web_ui_port\": 8081,
-      \"max_ratio\": $SEED_RATIO,
-      \"max_seeding_time\": $SEED_TIME,
-      \"up_limit\": 102400,
-      \"web_ui_csrf_protection_enabled\": false,
-      \"bypass_auth_subnet_whitelist_enabled\": true,
-      \"bypass_auth_subnet_whitelist\": \"172.16.0.0/12,192.168.0.0/16\"
-    }" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"
+    --data-urlencode "json=$QBIT_PREFS" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"
 
   for cat in sonarr sonarr-anime radarr lidarr; do
     curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/createCategory" \
@@ -1132,7 +1131,7 @@ if echo "$JELLYFIN_STARTUP" | grep -q "UICulture"; then
   api POST "$JELLYFIN_URL/Startup/Configuration" -H "$JF_HEADER" \
     -d '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}' || true
   api POST "$JELLYFIN_URL/Startup/User" -H "$JF_HEADER" \
-    -d "{\"Name\":\"$JELLYFIN_USER\",\"Password\":\"$JELLYFIN_PASS\"}" || true
+    -d "$(jq -nc --arg n "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{Name:$n,Password:$p}')" || true
   api POST "$JELLYFIN_URL/Startup/Complete" -H "$JF_HEADER" || true
   ok "Admin user '$JELLYFIN_USER' created"
 else
@@ -1140,7 +1139,7 @@ else
 fi
 
 JF_AUTH_RESP=$(api_retry api POST "$JELLYFIN_URL/Users/AuthenticateByName" -H "$JF_HEADER" \
-  -d "{\"Username\":\"$JELLYFIN_USER\",\"Pw\":\"$JELLYFIN_PASS\"}" || echo "")
+  -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{Username:$u,Pw:$p}')" || echo "")
 JELLYFIN_TOKEN=$(echo "$JF_AUTH_RESP" | jq -r '.AccessToken // empty' 2>/dev/null || echo "")
 
 JELLYFIN_API_KEY=""
@@ -1256,13 +1255,14 @@ configure_arr() {
   EXISTING_DL=$(api GET "$url/api/$api_ver/downloadclient" -H "$H" | jq -r '.[].name' 2>/dev/null || echo "")
 
   if ! echo "$EXISTING_DL" | grep -q "qBittorrent"; then
-    api POST "$url/api/$api_ver/downloadclient" -H "$H" -d '{
-      "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
-      "enable":true,"protocol":"torrent","priority":1,
-      "fields":[{"name":"host","value":"qbittorrent"},{"name":"port","value":8081},
-        {"name":"username","value":"'"$QBIT_USER"'"},{"name":"password","value":"'"$QBIT_PASS"'"},
-        {"name":"'"$cat_field"'","value":"'"$name"'"}]
-    }' >/dev/null 2>&1 && ok "qBittorrent connected (category: $name)" || warn "Could not add qBittorrent"
+    QBIT_DL_JSON=$(jq -nc --arg u "$QBIT_USER" --arg p "$QBIT_PASS" --arg cf "$cat_field" --arg cn "$name" \
+      '{name:"qBittorrent",implementation:"QBittorrent",configContract:"QBittorrentSettings",
+        enable:true,protocol:"torrent",priority:1,
+        fields:[{name:"host",value:"qbittorrent"},{name:"port",value:8081},
+          {name:"username",value:$u},{name:"password",value:$p},
+          {name:$cf,value:$cn}]}')
+    api POST "$url/api/$api_ver/downloadclient" -H "$H" -d "$QBIT_DL_JSON" >/dev/null 2>&1 && \
+      ok "qBittorrent connected (category: $name)" || warn "Could not add qBittorrent"
   else ok "qBittorrent connected"; fi
 
   if [ -n "$SABNZBD_KEY" ] && ! echo "$EXISTING_DL" | grep -q "SABnzbd"; then
@@ -1377,13 +1377,14 @@ if [ -n "$PROWLARR_KEY" ]; then
   # qBittorrent in Prowlarr
   EXISTING_DLC=$(api GET "$PROWLARR_URL/api/v1/downloadclient" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
   if ! echo "$EXISTING_DLC" | grep -q "qBittorrent"; then
-    api POST "$PROWLARR_URL/api/v1/downloadclient" -H "$PH" -d '{
-      "name":"qBittorrent","implementation":"QBittorrent","configContract":"QBittorrentSettings",
-      "enable":true,"protocol":"torrent","priority":1,
-      "fields":[{"name":"host","value":"qbittorrent"},{"name":"port","value":8081},
-        {"name":"username","value":"'"$QBIT_USER"'"},{"name":"password","value":"'"$QBIT_PASS"'"},
-        {"name":"category","value":"prowlarr"}]
-    }' >/dev/null 2>&1 && ok "qBittorrent connected to Prowlarr" || true
+    PROWL_QBIT_JSON=$(jq -nc --arg u "$QBIT_USER" --arg p "$QBIT_PASS" \
+      '{name:"qBittorrent",implementation:"QBittorrent",configContract:"QBittorrentSettings",
+        enable:true,protocol:"torrent",priority:1,
+        fields:[{name:"host",value:"qbittorrent"},{name:"port",value:8081},
+          {name:"username",value:$u},{name:"password",value:$p},
+          {name:"category",value:"prowlarr"}]}')
+    api POST "$PROWLARR_URL/api/v1/downloadclient" -H "$PH" -d "$PROWL_QBIT_JSON" >/dev/null 2>&1 && \
+      ok "qBittorrent connected to Prowlarr" || true
   fi
 
   # Create FlareSolverr tag if it doesn't exist
@@ -1505,18 +1506,18 @@ if [ "$PROVIDER_COUNT" -gt 0 ] && [ -n "$SABNZBD_KEY" ]; then
 
     # SABnzbd server config via API
     curl -sf -o /dev/null "$SABNZBD_URL/api" \
-      -d "mode=config" \
-      -d "name=set_server" \
-      -d "apikey=$SABNZBD_KEY" \
-      -d "output=json" \
-      -d "keyword=$PROV_NAME" \
-      -d "host=$PROV_HOST" \
-      -d "port=$PROV_PORT" \
-      -d "ssl=$SSL_VAL" \
-      -d "username=$PROV_USER" \
-      -d "password=$PROV_PASS" \
-      -d "connections=$PROV_CONN" \
-      -d "enable=1" 2>/dev/null && \
+      --data-urlencode "mode=config" \
+      --data-urlencode "name=set_server" \
+      --data-urlencode "apikey=$SABNZBD_KEY" \
+      --data-urlencode "output=json" \
+      --data-urlencode "keyword=$PROV_NAME" \
+      --data-urlencode "host=$PROV_HOST" \
+      --data-urlencode "port=$PROV_PORT" \
+      --data-urlencode "ssl=$SSL_VAL" \
+      --data-urlencode "username=$PROV_USER" \
+      --data-urlencode "password=$PROV_PASS" \
+      --data-urlencode "connections=$PROV_CONN" \
+      --data-urlencode "enable=1" 2>/dev/null && \
       ok "$PROV_NAME ($PROV_HOST:$PROV_PORT)" || warn "Could not add $PROV_NAME"
   done
 fi
@@ -1738,8 +1739,8 @@ fi
 if [ -n "$SABNZBD_KEY" ]; then
   SAB_AUTH_USER=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=misc&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.config.misc.username // empty' 2>/dev/null)
   if [ -z "$SAB_AUTH_USER" ]; then
-    curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=username&value=$JELLYFIN_USER&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
-    curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=password&value=$JELLYFIN_PASS&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
+    curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=username&value=$(urlencode "$JELLYFIN_USER")&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
+    curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=password&value=$(urlencode "$JELLYFIN_PASS")&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
     ok "SABnzbd auth set: $JELLYFIN_USER"
   else
     ok "SABnzbd auth: $SAB_AUTH_USER"
@@ -1787,9 +1788,10 @@ fi
 
 # Authenticate — serverType:2 = Jellyfin (required for initial admin creation)
 JS_COOKIE=""
+JS_BODY_BASE=$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{username:$u,password:$p,email:"admin@media.local"}')
 for AUTH_BODY in \
-  "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\",\"email\":\"admin@media.local\",\"serverType\":2}" \
-  "{\"username\":\"$JELLYFIN_USER\",\"password\":\"$JELLYFIN_PASS\",\"email\":\"admin@media.local\"}"; do
+  "$(echo "$JS_BODY_BASE" | jq -c '. + {serverType:2}')" \
+  "$JS_BODY_BASE"; do
   JS_AUTH_RESP=$(api_retry curl -s -c - -X POST "$JELLYSEERR_URL/api/v1/auth/jellyfin" \
     -H "Content-Type: application/json" \
     -d "$AUTH_BODY" 2>/dev/null || echo "")
@@ -1818,7 +1820,7 @@ if [ -n "$JS_COOKIE" ]; then
   EXISTING_JS_SONARR_NAMES=$(api GET "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -r '.[].name' 2>/dev/null || echo "")
 
   add_js_sonarr() {
-    local name="$1" hostname="$2" key="$3" url="$4" dir="$5" ext_url="$6" is_default="$7" extra="${8:-}"
+    local name="$1" hostname="$2" key="$3" url="$4" dir="$5" ext_url="$6" is_default="$7" anime="${8:-false}"
     if echo "$EXISTING_JS_SONARR_NAMES" | grep -q "^${name}$"; then
       ok "$name already connected"
       return
@@ -1826,19 +1828,22 @@ if [ -n "$JS_COOKIE" ]; then
     PROFILE=$(api GET "$url/api/v3/qualityprofile" -H "X-Api-Key: $key" | jq '.[0]' 2>/dev/null)
     PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
     PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
-    api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d '{
-      "name":"'"$name"'","hostname":"'"$hostname"'","port":8989,"useSsl":false,"apiKey":"'"$key"'",
-      "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"'"$dir"'",
-      "is4k":false,"enableSeasonFolders":true,"isDefault":'"$is_default"',"externalUrl":"'"$ext_url"'",
-      '"$extra"'
-      "enableSearch":true
-    }' >/dev/null 2>&1 && ok "$name connected" || warn "Could not add $name"
+    JS_SONARR_JSON=$(jq -nc \
+      --arg name "$name" --arg host "$hostname" --arg key "$key" \
+      --argjson pid "$PID" --arg pname "$PNAME" --arg dir "$dir" \
+      --argjson is_default "$is_default" --arg ext "$ext_url" --argjson anime "$anime" \
+      '{name:$name, hostname:$host, port:8989, useSsl:false, apiKey:$key,
+        baseUrl:"", activeProfileId:$pid, activeProfileName:$pname, activeDirectory:$dir,
+        is4k:false, enableSeasonFolders:true, isDefault:$is_default, externalUrl:$ext,
+        enableSearch:true} + (if $anime then {seriesType:"anime", animeSeriesType:"anime"} else {} end)')
+    api POST "$JELLYSEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d "$JS_SONARR_JSON" >/dev/null 2>&1 && \
+      ok "$name connected" || warn "Could not add $name"
   }
 
   [ -n "$SONARR_KEY" ] && \
     add_js_sonarr "Sonarr" "sonarr" "$SONARR_KEY" "$SONARR_URL" "/media/tv" "http://localhost:8989" "true"
   [ -n "$SONARR_ANIME_KEY" ] && \
-    add_js_sonarr "Sonarr Anime" "sonarr-anime" "$SONARR_ANIME_KEY" "$SONARR_ANIME_URL" "/media/anime" "http://localhost:8990" "false" '"seriesType":"anime","animeSeriesType":"anime",'
+    add_js_sonarr "Sonarr Anime" "sonarr-anime" "$SONARR_ANIME_KEY" "$SONARR_ANIME_URL" "/media/anime" "http://localhost:8990" "false" "true"
 
   # Ensure enableSearch is set on all existing connections
   while IFS= read -r JS_SONARR; do
@@ -1859,12 +1864,14 @@ if [ -n "$JS_COOKIE" ]; then
       PROFILE=$(api GET "$RADARR_URL/api/v3/qualityprofile" -H "X-Api-Key: $RADARR_KEY" | jq '.[0]' 2>/dev/null)
       PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
       PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
-      api POST "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" -d '{
-        "name":"Radarr","hostname":"radarr","port":7878,"useSsl":false,"apiKey":"'"$RADARR_KEY"'",
-        "baseUrl":"","activeProfileId":'"$PID"',"activeProfileName":"'"$PNAME"'","activeDirectory":"/media/movies",
-        "is4k":false,"isDefault":true,"externalUrl":"http://localhost:7878","minimumAvailability":"released",
-        "enableSearch":true
-      }' >/dev/null 2>&1 && ok "Radarr connected" || warn "Could not add Radarr"
+      JS_RADARR_JSON=$(jq -nc \
+        --arg key "$RADARR_KEY" --argjson pid "$PID" --arg pname "$PNAME" \
+        '{name:"Radarr", hostname:"radarr", port:7878, useSsl:false, apiKey:$key,
+          baseUrl:"", activeProfileId:$pid, activeProfileName:$pname, activeDirectory:"/media/movies",
+          is4k:false, isDefault:true, externalUrl:"http://localhost:7878", minimumAvailability:"released",
+          enableSearch:true}')
+      api POST "$JELLYSEERR_URL/api/v1/settings/radarr" "${JA[@]}" -d "$JS_RADARR_JSON" >/dev/null 2>&1 && \
+        ok "Radarr connected" || warn "Could not add Radarr"
     }
   else
     # Ensure enableSearch is set on existing connections

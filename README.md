@@ -55,11 +55,13 @@ cp config.toml.example config.toml  # optional — setup creates one if missing
 Fully idempotent — safe to re-run at any time.
 
 1. Installs Docker + dependencies
-2. Creates `~/media/` directory structure (libraries, downloads, configs)
-3. Starts 25+ containers via Docker Compose
-4. Wires every service together (API keys, download clients, indexers, subtitles)
-5. Adds `.media.local` domains to `/etc/hosts`
-6. Runs 90+ verification checks
+2. Prompts for Jellyfin and qBittorrent credentials (or generates them with `--yes`)
+3. Creates `~/media/` directory structure (libraries, downloads, configs)
+4. Starts 25+ containers via Docker Compose
+5. Wires every service together (API keys, download clients, indexers, subtitles)
+6. Sets authentication on all services (Jellyfin credentials shared across the stack)
+7. Adds `.media.local` domains to `/etc/hosts`
+8. Runs 90+ verification checks
 
 ```bash
 ./setup.sh                      # Full setup (interactive)
@@ -75,17 +77,22 @@ Fully idempotent — safe to re-run at any time.
 
 ## Services
 
-### Core — what you'll actually use
+### Core — streaming and requests
 
 | Service | What it does |
 |---------|-------------|
 | **[Jellyfin](https://jellyfin.org)** | Stream your library — browser, iOS, Android, Apple TV, Fire TV, Roku, Chromecast |
 | **[Jellyseerr](https://github.com/Fallenbagel/jellyseerr)** | Request movies and shows — browse trending, search, track requests |
+
+### TV, anime, and movies
+
+| Service | What it does |
+|---------|-------------|
 | **[Sonarr](https://sonarr.tv)** | Automatically downloads and organizes TV shows |
-| **[Sonarr Anime](https://sonarr.tv)** | Dedicated instance with anime indexers (Nyaa, SubsPlease, Mikan) |
+| **[Sonarr Anime](https://sonarr.tv)** | Dedicated instance with anime indexers (Nyaa, SubsPlease, Mikan, Bangumi) |
 | **[Radarr](https://radarr.video)** | Automatically downloads and organizes movies |
-| **[Bazarr](https://www.bazarr.media)** | Automatic subtitle downloads |
-| **[Prowlarr](https://prowlarr.com)** | Manages all your indexers in one place |
+| **[Bazarr](https://www.bazarr.media)** | Automatic subtitle downloads for everything |
+| **[Prowlarr](https://prowlarr.com)** | Manages all your indexers in one place, syncs to Sonarr/Radarr |
 
 ### Downloads
 
@@ -102,7 +109,7 @@ Fully idempotent — safe to re-run at any time.
 | Service | What it does |
 |---------|-------------|
 | **[Recyclarr](https://recyclarr.dev)** | Syncs [TRaSH Guide](https://trash-guides.info/) quality profiles to Sonarr/Radarr weekly |
-| **[Janitorr](https://github.com/Schaka/Janitorr)** | Removes unwatched content after a configurable grace period |
+| **[Janitorr](https://github.com/Schaka/Janitorr)** | Removes unwatched content after a configurable grace period (starts in dry-run mode) |
 | **[Tdarr](https://home.tdarr.io)** | Transcodes media to H.265/HEVC to save storage |
 
 ### Also included
@@ -112,8 +119,8 @@ Fully idempotent — safe to re-run at any time.
 | **[Navidrome](https://www.navidrome.org)** | Music streaming (works with DSub, Symfonium, etc.) |
 | **[Lidarr](https://lidarr.audio)** | Music automation — monitors artists and downloads releases |
 | **[Immich](https://immich.app)** | Self-hosted Google Photos replacement with face/object recognition |
-| **[Nginx](https://nginx.org)** | Reverse proxy — `.media.local` domains + landing page |
-| **[Dozzle](https://dozzle.dev)** | Live Docker log viewer |
+| **[Nginx](https://nginx.org)** | Reverse proxy — `.media.local` domains + landing page with live widgets |
+| **[Dozzle](https://dozzle.dev)** | Live Docker log viewer (SSE streaming) |
 | **[Beszel](https://beszel.dev)** | System monitoring (CPU, RAM, disk, per-container) |
 | **[Scrutiny](https://github.com/AnalogJ/scrutiny)** | Hard drive S.M.A.R.T. health monitoring |
 | **[Uptime Kuma](https://uptime.kuma.pet)** | Service uptime monitoring with notifications |
@@ -121,7 +128,7 @@ Fully idempotent — safe to re-run at any time.
 
 ## Configuration
 
-Edit `config.toml` before running setup, or let setup prompt you interactively.
+Edit `config.toml` before running setup, or let setup prompt you interactively. See `config.toml.example` for all options.
 
 ### Credentials
 
@@ -135,7 +142,7 @@ username = "admin"
 password = "changeme"
 ```
 
-Setup will prompt you to set real passwords on first run (or generate them with `--yes`).
+Setup prompts for real passwords on first run. With `--yes`, secure random passwords are generated automatically. Jellyfin credentials are shared across most services (Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd, Navidrome, Immich).
 
 ### Quality profiles
 
@@ -156,9 +163,11 @@ languages = ["en", "es"]
 providers = ["opensubtitlescom", "podnapisi", "yifysubtitles"]
 ```
 
-English always downloaded, additional languages when available. Providers that need accounts (OpenSubtitles, Addic7ed) can be configured in the Bazarr UI after setup.
+English always downloaded, additional languages when available. Nine providers pre-configured — some need free accounts (OpenSubtitles, Addic7ed), configurable in the Bazarr UI after setup.
 
 ### Indexers
+
+Pre-configured with public torrent indexers and anime indexers:
 
 ```toml
 [[indexers]]
@@ -166,9 +175,15 @@ name = "1337x"
 definitionName = "1337x"
 enable = true
 flaresolverr = true      # needs FlareSolverr for Cloudflare bypass
+
+[[indexers]]
+name = "Nyaa.si"
+definitionName = "nyaasi"
+enable = true
+anime = true             # routes to Sonarr Anime only
 ```
 
-Pre-configured with public torrent indexers + anime indexers (Nyaa, SubsPlease, Mikan, Bangumi). Add private trackers or usenet indexers as needed.
+Included by default: 1337x, EZTV, The Pirate Bay, YTS, Knaben, LimeTorrents, BitSearch, MegaPeer, Nyaa.si, SubsPlease, Mikan, Bangumi Moe. Add private trackers or usenet indexers as needed.
 
 ### VPN
 
@@ -182,7 +197,7 @@ wireguard_addresses = ""
 server_countries = "Switzerland"
 ```
 
-Routes torrent traffic through [Gluetun](https://github.com/qdm12/gluetun). 30+ providers supported. Kill switch built in. Optional — disabled by default.
+Routes torrent traffic through [Gluetun](https://github.com/qdm12/gluetun). 30+ providers supported (Mullvad, ProtonVPN, NordVPN, Surfshark, etc.). Kill switch built in. Optional — disabled by default.
 
 ### Usenet
 
@@ -198,7 +213,7 @@ password = ""
 connections = 20
 ```
 
-Optional. Faster and more private than torrents, but requires a paid Usenet provider.
+Optional. Faster and more private than torrents, but requires a paid Usenet provider (Newshosting, Eweka, Frugal Usenet, etc.).
 
 ## Access
 
