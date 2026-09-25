@@ -14,18 +14,42 @@ jobs:
 
       - name: Bash Syntax
         run: |
-          bash -n setup.sh
-          bash -n install.sh
+          for f in setup.sh install.sh scripts/*.sh scripts/steps/*.sh; do
+            bash -n "$f"
+          done
 
+      - name: ShellCheck
+        run: shellcheck -x -S warning setup.sh install.sh scripts/*.sh scripts/steps/*.sh
+
+      # The example ships with password "changeme", which setup rejects on
+      # purpose, so validate a copy with real-looking passwords
       - name: Config Validation
         run: |
-          cp config.toml.example config.toml
+          sed 's/"changeme"/"ci-not-a-real-password"/' config.toml.example > config.toml
           ./setup.sh --check-config
 
       - name: Preflight
+        run: ./setup.sh --preflight
+
+  compose-and-nginx:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compose Config
         run: |
-          if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-            ./setup.sh --preflight
-          else
-            echo "Skipping preflight: docker unavailable in runner"
-          fi
+          docker compose -f docker-compose.yml config -q
+          docker compose -f docker-compose.yml --profile vpn config -q
+
+      - name: Nginx Config
+        run: |
+          mkdir -p /tmp/nginx
+          sed -e 's/{{[A-Z_]*}}/0123456789abcdef/g' templates/nginx.api-proxy.conf.tpl > /tmp/nginx/api-proxy.conf
+          echo 'ci:$apr1$abcdefgh$0000000000000000000000' > /tmp/nginx/htpasswd
+          image=$(sed -n 's/^ *image: \(nginx:.*\)/\1/p' docker-compose.yml)
+          docker run --rm \
+            -v "$PWD/nginx.conf:/etc/nginx/nginx.conf:ro" \
+            -v /tmp/nginx/api-proxy.conf:/etc/nginx/api-proxy.conf:ro \
+            -v /tmp/nginx/htpasswd:/etc/nginx/htpasswd:ro \
+            "$image" nginx -t

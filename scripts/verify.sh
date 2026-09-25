@@ -24,14 +24,17 @@ run_verification() {
     JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
 
   info "Service health..."
-  while IFS='|' read -r name url; do
+  while IFS='|' read -r name url auth; do
     [ -z "$name" ] && continue
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
+    local curl_auth=()
+    [ "$auth" = "auth" ] && curl_auth=(-u "$JELLYFIN_USER:$JELLYFIN_PASS")
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 ${curl_auth[@]+"${curl_auth[@]}"} "$url" 2>/dev/null || true)
     if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
       sleep 5
-      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
+      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 ${curl_auth[@]+"${curl_auth[@]}"} "$url" 2>/dev/null || true)
     fi
-    check "$name responds ($HTTP_CODE)" "$([ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ] && echo true || echo false)"
+    # Behind basic auth, 401 means nginx answered but the credentials failed
+    check "$name responds ($HTTP_CODE)" "$([ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ] && [ "$HTTP_CODE" != "401" ] && echo true || echo false)"
   done <<< "$SERVICE_HEALTH_ENDPOINTS"
 
   info "Download clients..."
@@ -119,7 +122,8 @@ run_verification() {
   info "Jellyfin sync..."
   check_jellyfin_notification() {
     local name="$1" url="$2" key="$3"
-    local NOTIF=$(api GET "$url/api/v3/notification" -H "X-Api-Key: $key" || echo "[]")
+    local NOTIF
+    NOTIF=$(api GET "$url/api/v3/notification" -H "X-Api-Key: $key" || echo "[]")
     check "$name → Jellyfin notification" "$(echo "$NOTIF" | jq 'any(.[]; .name == "Jellyfin")' 2>/dev/null)"
   }
   [ -n "$SONARR_KEY" ] && check_jellyfin_notification "Sonarr" "$SONARR_URL" "$SONARR_KEY"
@@ -153,9 +157,10 @@ run_verification() {
   info "Quality profiles..."
   check_unknown_quality() {
     local name="$1" url="$2" key="$3" api_ver="${4:-v3}"
-    local PROFILE=$(api GET "$url/api/$api_ver/qualityprofile/1" -H "X-Api-Key: $key" 2>/dev/null || echo "")
+    local PROFILE UNKNOWN
+    PROFILE=$(api GET "$url/api/$api_ver/qualityprofile/1" -H "X-Api-Key: $key" 2>/dev/null || echo "")
     [ -z "$PROFILE" ] && { skip "$name → quality profile"; return; }
-    local UNKNOWN=$(echo "$PROFILE" | jq '[.items[] | select(.quality.id == 0) | .allowed][0]' 2>/dev/null)
+    UNKNOWN=$(echo "$PROFILE" | jq '[.items[] | select(.quality.id == 0) | .allowed][0]' 2>/dev/null)
     check "$name → Unknown quality allowed" "$UNKNOWN"
   }
   [ -n "$SONARR_KEY" ] && check_unknown_quality "Sonarr" "$SONARR_URL" "$SONARR_KEY"
@@ -165,9 +170,10 @@ run_verification() {
   info "Authentication..."
   check_arr_auth() {
     local name="$1" url="$2" key="$3" api_ver="${4:-v3}"
-    local HOST=$(api GET "$url/api/$api_ver/config/host" -H "X-Api-Key: $key" 2>/dev/null || echo "")
+    local HOST AUTH_USER
+    HOST=$(api GET "$url/api/$api_ver/config/host" -H "X-Api-Key: $key" 2>/dev/null || echo "")
     [ -z "$HOST" ] && { skip "$name → auth"; return; }
-    local AUTH_USER=$(echo "$HOST" | jq -r '.username // empty' 2>/dev/null)
+    AUTH_USER=$(echo "$HOST" | jq -r '.username // empty' 2>/dev/null)
     check "$name → auth configured" "$([ -n "$AUTH_USER" ] && echo true || echo false)"
   }
   [ -n "$SONARR_KEY" ] && check_arr_auth "Sonarr" "$SONARR_URL" "$SONARR_KEY"
@@ -217,6 +223,19 @@ run_verification() {
   check "Proxy → Jellyfin latest" "$(curl -sf 'http://localhost/api/jellyfin/Items?SortBy=DateCreated&SortOrder=Descending&Limit=3&Recursive=true&IncludeItemTypes=Movie,Series' 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
   check "Proxy → Jellyseerr requests" "$(curl -sf http://localhost/api/jellyseerr/request 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
   check "Proxy → SABnzbd queue" "$(curl -sf 'http://localhost/api/sabnzbd/?mode=queue&output=json' 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
+
+  info "Access control..."
+  http_code() { curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$@" 2>/dev/null || true; }
+  check "Proxy → rejects writes (POST Sonarr calendar: $(http_code -X POST http://localhost/api/sonarr/calendar))" \
+    "$([ "$(http_code -X POST http://localhost/api/sonarr/calendar)" = "403" ] && echo true || echo false)"
+  check "Proxy → hides other endpoints (Jellyfin Auth/Keys: $(http_code http://localhost/api/jellyfin/Auth/Keys))" \
+    "$([ "$(http_code http://localhost/api/jellyfin/Auth/Keys)" = "404" ] && echo true || echo false)"
+  check "Proxy → SABnzbd limited to queue/history" \
+    "$([ "$(http_code 'http://localhost/api/sabnzbd/?mode=get_config')" = "403" ] && echo true || echo false)"
+  check "Tdarr → requires login" "$([ "$(http_code "$TDARR_URL")" = "401" ] && echo true || echo false)"
+  check "Dozzle → requires login" "$([ "$(http_code "$DOZZLE_URL")" = "401" ] && echo true || echo false)"
+  check "Scrutiny → requires login" "$([ "$(http_code "$SCRUTINY_URL")" = "401" ] && echo true || echo false)"
+  check "qBittorrent → requires login" "$([ "$(http_code "$QBIT_URL/api/v2/app/version")" = "403" ] && echo true || echo false)"
 
   info "Docker containers..."
   for container in $CONTAINER_LIST; do

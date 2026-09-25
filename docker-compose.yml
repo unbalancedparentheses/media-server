@@ -7,7 +7,7 @@ x-logging: &logging
 services:
   # ── Streaming ──────────────────────────────────────────────────
   jellyfin:
-    image: jellyfin/jellyfin:latest
+    image: jellyfin/jellyfin:12.1
     container_name: jellyfin
     ports:
       - "8096:8096"
@@ -26,7 +26,7 @@ services:
       start_period: 60s
 
   navidrome:
-    image: deluan/navidrome:latest
+    image: deluan/navidrome:0.64.2
     container_name: navidrome
     environment:
       - ND_SCANSCHEDULE=15m
@@ -48,7 +48,7 @@ services:
 
   # ── Requests & Automation ──────────────────────────────────────
   jellyseerr:
-    image: fallenbagel/jellyseerr:latest
+    image: fallenbagel/jellyseerr:2.7.3
     container_name: jellyseerr
     deploy:
       resources:
@@ -79,7 +79,7 @@ services:
         condition: service_healthy
 
   sonarr:
-    image: lscr.io/linuxserver/sonarr:latest
+    image: lscr.io/linuxserver/sonarr:4.0.20.3014-ls325
     container_name: sonarr
     deploy:
       resources:
@@ -90,7 +90,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "8989:8989"
+      - "${ADMIN_BIND:-0.0.0.0}:8989:8989"
     volumes:
       - ~/media/config/sonarr:/config
       - ~/media/tv:/media/tv
@@ -112,7 +112,7 @@ services:
         condition: service_healthy
 
   sonarr-anime:
-    image: lscr.io/linuxserver/sonarr:latest
+    image: lscr.io/linuxserver/sonarr:4.0.20.3014-ls325
     container_name: sonarr-anime
     deploy:
       resources:
@@ -123,7 +123,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "8990:8989"
+      - "${ADMIN_BIND:-0.0.0.0}:8990:8989"
     volumes:
       - ~/media/config/sonarr-anime:/config
       - ~/media/anime:/media/anime
@@ -145,7 +145,7 @@ services:
         condition: service_healthy
 
   radarr:
-    image: lscr.io/linuxserver/radarr:latest
+    image: lscr.io/linuxserver/radarr:6.4.4.10685-ls318
     container_name: radarr
     deploy:
       resources:
@@ -156,7 +156,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "7878:7878"
+      - "${ADMIN_BIND:-0.0.0.0}:7878:7878"
     volumes:
       - ~/media/config/radarr:/config
       - ~/media/movies:/media/movies
@@ -178,7 +178,7 @@ services:
         condition: service_healthy
 
   lidarr:
-    image: lscr.io/linuxserver/lidarr:latest
+    image: lscr.io/linuxserver/lidarr:3.1.0.4875-ls42
     container_name: lidarr
     deploy:
       resources:
@@ -189,7 +189,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "8686:8686"
+      - "${ADMIN_BIND:-0.0.0.0}:8686:8686"
     volumes:
       - ~/media/config/lidarr:/config
       - ~/media/music:/media/music
@@ -211,7 +211,7 @@ services:
         condition: service_healthy
 
   prowlarr:
-    image: lscr.io/linuxserver/prowlarr:latest
+    image: lscr.io/linuxserver/prowlarr:2.6.5.5623-ls162
     container_name: prowlarr
     deploy:
       resources:
@@ -222,7 +222,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "9696:9696"
+      - "${ADMIN_BIND:-0.0.0.0}:9696:9696"
     volumes:
       - ~/media/config/prowlarr:/config
     logging: *logging
@@ -238,7 +238,7 @@ services:
         condition: service_healthy
 
   flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
+    image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
     container_name: flaresolverr
     environment:
       - TZ=${TZ:-America/New_York}
@@ -256,7 +256,7 @@ services:
       start_period: 60s
 
   bazarr:
-    image: lscr.io/linuxserver/bazarr:latest
+    image: lscr.io/linuxserver/bazarr:v1.6.1-ls365
     container_name: bazarr
     deploy:
       resources:
@@ -267,7 +267,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "6767:6767"
+      - "${ADMIN_BIND:-0.0.0.0}:6767:6767"
     volumes:
       - ~/media/config/bazarr:/config
       - ~/media/movies:/media/movies
@@ -288,7 +288,7 @@ services:
         condition: service_healthy
 
   recyclarr:
-    image: recyclarr/recyclarr:latest
+    image: ghcr.io/recyclarr/recyclarr:8.7.2
     container_name: recyclarr
     environment:
       - TZ=${TZ:-America/New_York}
@@ -306,7 +306,7 @@ services:
         condition: service_healthy
 
   janitorr:
-    image: ghcr.io/schaka/janitorr:jvm-stable
+    image: ghcr.io/schaka/janitorr:jvm-v2.2.2
     container_name: janitorr
     user: "${PUID:-501}:${PGID:-20}"
     volumes:
@@ -332,7 +332,7 @@ services:
 
   # ── Downloads ──────────────────────────────────────────────────
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:latest
+    image: lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls477
     container_name: qbittorrent
     deploy:
       resources:
@@ -358,7 +358,7 @@ services:
       start_period: 60s
 
   sabnzbd:
-    image: lscr.io/linuxserver/sabnzbd:latest
+    image: lscr.io/linuxserver/sabnzbd:5.1.3-ls274
     container_name: sabnzbd
     deploy:
       resources:
@@ -369,7 +369,7 @@ services:
       - PGID=${PGID:-20}
       - TZ=${TZ:-America/New_York}
     ports:
-      - "8080:8080"
+      - "${ADMIN_BIND:-0.0.0.0}:8080:8080"
     volumes:
       - ~/media/config/sabnzbd:/config
       - ~/media/downloads:/downloads
@@ -383,7 +383,7 @@ services:
       start_period: 60s
 
   unpackerr:
-    image: golift/unpackerr:latest
+    image: golift/unpackerr:v0.16.1
     container_name: unpackerr
     environment:
       - TZ=${TZ:-America/New_York}
@@ -403,7 +403,7 @@ services:
         condition: service_healthy
 
   gluetun:
-    image: qmcgaw/gluetun:latest
+    image: qmcgaw/gluetun:v3.41.3
     container_name: gluetun
     profiles: ["vpn"]
     cap_add:
@@ -417,9 +417,6 @@ services:
       - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
       - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES:-}
       - SERVER_COUNTRIES=${VPN_SERVER_COUNTRIES:-}
-    ports:
-      - "6881:6881"
-      - "6881:6881/udp"
     volumes:
       - ~/media/config/gluetun:/gluetun
     logging: *logging
@@ -433,7 +430,7 @@ services:
 
   # ── Transcoding ────────────────────────────────────────────────
   tdarr:
-    image: ghcr.io/haveagitgat/tdarr:latest
+    image: ghcr.io/haveagitgat/tdarr:2.90.01
     container_name: tdarr
     deploy:
       resources:
@@ -451,8 +448,7 @@ services:
       - ffmpegVersion=7
       - nodeName=InternalNode
     ports:
-      - "8265:8265"
-      - "8266:8266"
+      - "${ADMIN_BIND:-0.0.0.0}:8266:8266"
     volumes:
       - ~/media/config/tdarr/server:/app/server
       - ~/media/config/tdarr/configs:/app/configs
@@ -473,7 +469,7 @@ services:
 
   # ── Photos ─────────────────────────────────────────────────────
   immich:
-    image: ghcr.io/immich-app/immich-server:release
+    image: ghcr.io/immich-app/immich-server:v3.2.2
     container_name: immich
     deploy:
       resources:
@@ -488,16 +484,14 @@ services:
       - DB_PASSWORD=${IMMICH_DB_PASSWORD}
       - DB_DATABASE_NAME=immich
       - REDIS_HOSTNAME=immich-redis
+      # Keep the pre-v2 upload path; Immich's own default moved to /data
+      - IMMICH_MEDIA_LOCATION=/usr/src/app/upload
     volumes:
       - ~/media/photos:/usr/src/app/upload
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2283/api/server/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      disable: false  # use the image's built-in check (as Immich's compose does)
     depends_on:
       immich-redis:
         condition: service_healthy
@@ -507,7 +501,7 @@ services:
         condition: service_healthy
 
   immich-machine-learning:
-    image: ghcr.io/immich-app/immich-machine-learning:release
+    image: ghcr.io/immich-app/immich-machine-learning:v3.2.2
     container_name: immich-machine-learning
     volumes:
       - ~/media/config/immich-ml:/cache
@@ -518,27 +512,26 @@ services:
         limits:
           memory: 4G
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3003/ping')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
+      disable: false  # use the image's built-in check (as Immich's compose does)
 
   immich-redis:
-    image: redis:6.2-alpine
+    image: valkey/valkey:9.1.2-alpine
     container_name: immich-redis
     logging: *logging
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
 
   immich-postgres:
-    image: tensorchord/pgvecto-rs:pg14-v0.2.0
+    # Includes pgvecto.rs so databases created with the old tensorchord image
+    # can be migrated to VectorChord (see migrate_immich_vectors in setup.sh)
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
     container_name: immich-postgres
+    shm_size: 128mb
     environment:
       - POSTGRES_PASSWORD=${IMMICH_DB_PASSWORD}
       - POSTGRES_USER=postgres
@@ -550,7 +543,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -d immich"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d immich"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -558,15 +551,25 @@ services:
 
   # ── Infrastructure ─────────────────────────────────────────────
   nginx:
-    image: nginx:alpine
+    image: nginx:1.31.6-alpine
     container_name: media-nginx
     ports:
       - "80:80"
+      # Tdarr, Dozzle and Scrutiny have no login of their own; nginx fronts
+      # them on their usual ports with basic auth (see nginx.conf)
+      - "${ADMIN_BIND:-0.0.0.0}:8265:8265"
+      - "${ADMIN_BIND:-0.0.0.0}:9999:9999"
+      - "${ADMIN_BIND:-0.0.0.0}:9091:9091"
+    networks:
+      default:
+        # Fixed address: qBittorrent skips its login only for this IP
+        ipv4_address: ${NGINX_IP:-172.29.84.10}
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./landing.html:/usr/share/nginx/landing/index.html:ro
       - ./admin.html:/usr/share/nginx/landing/admin.html:ro
       - ~/media/config/nginx/api-proxy.conf:/etc/nginx/api-proxy.conf:ro
+      - ~/media/config/nginx/htpasswd:/etc/nginx/htpasswd:ro
     logging: *logging
     restart: unless-stopped
     healthcheck:
@@ -577,10 +580,8 @@ services:
       start_period: 15s
 
   dozzle:
-    image: amir20/dozzle:latest
+    image: amir20/dozzle:v11.1.1
     container_name: dozzle
-    ports:
-      - "9999:8080"
     environment:
       - DOZZLE_ENABLE_ACTIONS=true
     volumes:
@@ -595,10 +596,10 @@ services:
       start_period: 15s
 
   beszel:
-    image: henrygd/beszel:latest
+    image: henrygd/beszel:0.20.0
     container_name: beszel
     ports:
-      - "8090:8090"
+      - "${ADMIN_BIND:-0.0.0.0}:8090:8090"
     volumes:
       - ~/media/config/beszel:/beszel_data
     extra_hosts:
@@ -613,7 +614,7 @@ services:
       start_period: 15s
 
   beszel-agent:
-    image: henrygd/beszel-agent:latest
+    image: henrygd/beszel-agent:0.20.0
     container_name: beszel-agent
     network_mode: host
     environment:
@@ -625,10 +626,10 @@ services:
     restart: unless-stopped
 
   uptime-kuma:
-    image: louislam/uptime-kuma:latest
+    image: louislam/uptime-kuma:1.23.17
     container_name: uptime-kuma
     ports:
-      - "3001:3001"
+      - "${ADMIN_BIND:-0.0.0.0}:3001:3001"
     volumes:
       - ~/media/config/uptime-kuma:/app/data
     logging: *logging
@@ -641,12 +642,10 @@ services:
       start_period: 30s
 
   scrutiny:
-    image: ghcr.io/analogj/scrutiny:master-omnibus
+    image: ghcr.io/analogj/scrutiny:v0.9.4-omnibus
     container_name: scrutiny
     cap_add:
       - SYS_RAWIO
-    ports:
-      - "9091:8080"
     volumes:
       - ~/media/config/scrutiny:/opt/scrutiny/config
       - /run/udev:/run/udev:ro
@@ -662,3 +661,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET:-172.29.84.0/24}
+          # Dynamic addresses come from the upper half, so nginx's fixed
+          # address in the lower half is never taken by another container
+          ip_range: ${DOCKER_IP_RANGE:-172.29.84.128/25}

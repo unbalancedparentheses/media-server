@@ -39,7 +39,7 @@ You ──> Jellyseerr (request) ──> Sonarr / Radarr ──> Prowlarr ──
 bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)
 ```
 
-Clones to `~/media-server`, prompts for credentials, and runs full setup.
+Clones to `~/media-server` and runs full setup non-interactively: passwords are generated, printed once, and saved in `config.toml`.
 
 ### Manual
 
@@ -67,8 +67,8 @@ Fully idempotent — safe to re-run at any time.
 ./setup.sh                      # Full setup (interactive)
 ./setup.sh --yes                # Full setup (non-interactive, generates passwords)
 ./setup.sh --test               # Run verification checks only
-./setup.sh --update             # Pull latest images + restart
-./setup.sh --backup             # Backup all service configs
+./setup.sh --update             # Backup, git pull, pull pinned images, re-run setup
+./setup.sh --backup             # Backup configs, .env and config.toml
 ./setup.sh --restore <file>     # Restore from backup
 ./setup.sh --preflight          # Check prerequisites + config
 ./setup.sh --check-config       # Validate config.toml only
@@ -149,11 +149,11 @@ Setup prompts for real passwords on first run. With `--yes`, secure random passw
 ```toml
 [quality]
 sonarr_profile = "WEB-1080p"
-sonarr_anime_profile = "Remux-1080p - Anime"
+sonarr_anime_profile = "[Anime] Remux-1080p"
 radarr_profile = "HD Bluray + WEB"
 ```
 
-[TRaSH Guide](https://trash-guides.info/) profiles synced by Recyclarr. Defaults: 1080p web for TV, remux for anime, HD bluray for movies.
+[TRaSH Guide](https://trash-guides.info/) profiles. Recyclarr creates them in Sonarr/Radarr and keeps them synced weekly, and Jellyseerr sends requests with them. Defaults: 1080p web for TV, remux for anime, HD bluray for movies. `config.toml.example` lists the supported names.
 
 ### Subtitles
 
@@ -236,7 +236,25 @@ All services are available at `http://<service>.media.local` after setup.
 | Immich | http://immich.media.local |
 | Tdarr | http://tdarr.media.local |
 
+The `.media.local` names are added to `/etc/hosts` on the server only. From other devices, use the dashboard at `http://<server-ip>` (its cards link to each service's port) or Tailscale.
+
 For remote access, [Tailscale](https://tailscale.com) provides mesh VPN with automatic HTTPS. Share with family/friends by inviting them to your tailnet.
+
+## Security
+
+- **Logins.** Every admin UI requires a login. The *arr apps, Bazarr, SABnzbd and Navidrome use the Jellyfin credentials; Tdarr, Dozzle and Scrutiny have no login of their own, so nginx serves them (on their usual ports) behind basic auth with the same credentials.
+- **Dashboard widgets.** The dashboard's widgets go through nginx, which adds the API keys. Only the read-only endpoints the widgets use are exposed, and only for `GET`, so the dashboard can't be used to change or delete anything.
+- **qBittorrent.** qBittorrent skips its login only for nginx's fixed container address; everything else, including the *arr apps, logs in.
+- **Admin ports.** They listen on every interface by default. To keep them off the LAN, set `admin_bind` in `[network]`: `"127.0.0.1"` for this machine only, or your Tailscale IP for Tailscale only. Jellyfin, Jellyseerr, Navidrome, Immich and the dashboard stay reachable either way.
+- **Backups.** They contain every password and API key (`chmod 600`). Keep a copy on another disk.
+
+## Updates and backups
+
+Image versions are pinned in `docker-compose.yml` (Renovate opens PRs to bump them), so a stack doesn't change under you on a random restart. `./setup.sh --update` backs up, pulls this repo, pulls the pinned images and re-runs setup to apply any config changes.
+
+`./setup.sh --backup` briefly stops the containers so SQLite and Postgres files are consistent, then archives `~/media/config` together with `.env` and `config.toml`. The Immich database password lives in `.env`, so both are needed to restore on a new machine. `--restore` keeps the previous config as `config.pre-restore-<timestamp>`.
+
+Immich v3 dropped the pgvecto.rs database extension used by older installs of this stack. Setup detects an old database and migrates it to VectorChord by running Immich v2.7.5 once, after taking a database dump in `~/media/backups/`.
 
 ## Directory structure
 

@@ -1,0 +1,4 @@
+# setup.sh sources scripts/*.sh; variables set in one file are used in another
+external-sources=true
+source-path=SCRIPTDIR
+disable=SC2034
