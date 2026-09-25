@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sonarr / Radarr / Lidarr and Recyclarr.
+# Sonarr / Radarr.
 
 configure_arr() {
   local name="$1" url="$2" key="$3" root_folder="$4" cat_field="$5" api_ver="${6:-v3}"
@@ -97,36 +97,3 @@ configure_arrs() {
   [ -n "$RADARR_KEY" ]       && enable_unknown_quality "$RADARR_URL"       "$RADARR_KEY"
 }
 
-configure_recyclarr() {
-  info "Writing Recyclarr config..."
-  RECYCLARR_CONFIG="$CONFIG_DIR/recyclarr/recyclarr.yml"
-  if [ -n "$SONARR_KEY" ] && [ -n "$RADARR_KEY" ]; then
-    ANIME_KEY="${SONARR_ANIME_KEY:-$SONARR_KEY}"
-    write_recyclarr_config_from_template
-    ok "Config written"
-
-    # Initial sync creates the quality profiles Jellyseerr is pointed at below
-    local sync_log
-    if sync_log=$(docker exec recyclarr recyclarr sync 2>&1); then
-      ok "Recyclarr sync complete ($SONARR_PROFILE, $SONARR_ANIME_PROFILE, $RADARR_PROFILE)"
-    else
-      warn "Recyclarr sync failed (it retries on its weekly schedule):"
-      printf '%s\n' "$sync_log" | tail -5 | sed 's/^/     /'
-    fi
-  else
-    warn "Missing API keys, skipping"
-  fi
-}
-
-configure_lidarr() {
-  info "Configuring Lidarr..."
-  [ -n "$LIDARR_KEY" ] && configure_arr "lidarr" "$LIDARR_URL" "$LIDARR_KEY" "/media/music" "musicCategory" "v1"
-
-  # Add Lidarr to Prowlarr
-  if [ -n "$PROWLARR_KEY" ]; then
-    PH="X-Api-Key: $PROWLARR_KEY"
-    EXISTING_APPS=$(api GET "$PROWLARR_URL/api/v1/applications" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
-    MUSIC_CATS="3000,3010,3020,3030,3040,3050,3060"
-    [ -n "$LIDARR_KEY" ]  && add_prowlarr_app "Lidarr"  "Lidarr"  "$LIDARR_INTERNAL"  "$LIDARR_KEY"  "$MUSIC_CATS"
-  fi
-}

@@ -3,10 +3,8 @@
 
 # ─── Backup function ────────────────────────────────────────────
 # The archive holds ~/media/config plus the repo's .env and config.toml
-# (under repo-files/), which carry the Immich DB password and all
-# credentials — without them a restore on a new machine can't open the
-# Immich database. Containers are stopped while archiving so the SQLite
-# and Postgres files are consistent.
+# (under repo-files/), which carry all credentials. Containers are stopped
+# while archiving so the SQLite files are consistent.
 do_backup() {
   [ ! -d "$CONFIG_DIR" ] && err "Config directory not found: $CONFIG_DIR"
   mkdir -p "$BACKUP_DIR"
@@ -31,9 +29,9 @@ do_backup() {
     dc stop >/dev/null 2>&1
   fi
 
-  # Logs and Immich's ML model cache are large and re-created on start
+  # Logs are large and re-created on start
   if ! (umask 077 && tar czf "$backup_file" \
-      --exclude='config/*/logs' --exclude='config/jellyfin/log' --exclude='config/immich-ml' \
+      --exclude='config/*/logs' --exclude='config/jellyfin/log' \
       -C "$MEDIA_DIR" config -C "$staging" repo-files); then
     [ "$running" -gt 0 ] && dc start >/dev/null 2>&1
     rm -f "$backup_file"
@@ -110,8 +108,6 @@ do_restore() {
     done
   else
     warn "Backup predates .env/config.toml backups; keeping the current ones"
-    [ -f "$CONFIG_DIR/immich-postgres/immich_dump.sql" ] && \
-      warn "If Immich can't open its database, restore config/immich-postgres/immich_dump.sql manually"
   fi
   rm -rf "$extract"
 

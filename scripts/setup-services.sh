@@ -23,16 +23,6 @@ with open(dst, "w", encoding="utf-8") as f:
 PY
 }
 
-write_recyclarr_config_from_template() {
-  export SONARR_INTERNAL SONARR_KEY SONARR_PROFILE_ID SONARR_ANIME_INTERNAL ANIME_KEY SONARR_ANIME_PROFILE_ID RADARR_INTERNAL RADARR_KEY RADARR_PROFILE_ID
-  render_template "$SCRIPT_DIR/templates/recyclarr.yml.tpl" "$RECYCLARR_CONFIG"
-}
-
-write_janitorr_config_from_template() {
-  export SONARR_KEY RADARR_KEY JELLYFIN_API_KEY JELLYFIN_USER JELLYFIN_PASS JELLYSEERR_KEY
-  render_template "$SCRIPT_DIR/templates/janitorr.application.yml.tpl" "$JANITORR_CONFIG"
-}
-
 
 write_api_proxy_from_template() {
   export SONARR_KEY SONARR_ANIME_KEY RADARR_KEY JELLYFIN_API_KEY JELLYSEERR_KEY SABNZBD_KEY

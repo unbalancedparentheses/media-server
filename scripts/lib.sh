@@ -199,7 +199,7 @@ prompt_credentials() {
   local path="$1"
   info "Setting up credentials..."
   echo "  Jellyfin credentials are shared across most services"
-  echo "  (Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd, Navidrome, Immich)."
+  echo "  (Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd)."
   echo ""
 
   local jf_user jf_pass jf_pass2 qbit_user qbit_pass qbit_pass2
@@ -282,40 +282,19 @@ validate_required_config() {
   cfg_required_string '.quality.sonarr_anime_profile' 'quality.sonarr_anime_profile'
   cfg_required_string '.quality.radarr_profile' 'quality.radarr_profile'
 }
-# TRaSH Guides quality profiles that Recyclarr can create, by profile name.
-# Prints the trash_id; fails for names it doesn't know.
-trash_profile_id() {
-  case "$1:$2" in
-    sonarr:WEB-1080p)                    echo 72dae194fc92bf828f32cde7744e51a1 ;;
-    sonarr:"WEB-1080p (Alternative)")    echo 9d142234e45d6143785ac55f5a9e8dc9 ;;
-    sonarr:WEB-2160p)                    echo d1498e7d189fbe6c7110ceaabb7473e6 ;;
-    sonarr:"WEB-2160p (Alternative)")    echo dfa5eaae7894077ad6449169b6eb03e0 ;;
-    sonarr:"WEB-2160p (Combined)")       echo c4cadd6b35b95f62c3d47a408e53e2f7 ;;
-    sonarr:"Remux + WEB 1080p")          echo fe9470e577c300a5ad9a3274f6d1cdf2 ;;
-    sonarr:"Remux + WEB 2160p")          echo 76a5053bdb2d1e4a8f16a69a37d46c12 ;;
-    sonarr:"Remux 2160p (Alternative)")  echo 361717d531db5a6002e0f547ace46551 ;;
-    sonarr:"Remux 2160p (Combined)")     echo 911df0e05a395c19d8b3efc76a7467c1 ;;
-    sonarr-anime:"[Anime] Remux-1080p")  echo 20e0fc959f1f1704bed501f23bdae76f ;;
-    radarr:"HD Bluray + WEB")            echo d1d67249d3890e49bc12e275d989a7e9 ;;
-    radarr:"UHD Bluray + WEB")           echo 64fb5f9858489bdac2af690e27c8f42f ;;
-    radarr:"Remux + WEB 1080p")          echo 9ca12ea80aa55ef916e3751f4b874151 ;;
-    radarr:"Remux + WEB 2160p")          echo fd161a61e3ab826d3a22d53f935696dd ;;
-    radarr:"Remux 2160p (Alternative)")  echo dd3cd75deb9645bae838d1c5da6388d5 ;;
-    radarr:"Remux 2160p (Combined)")     echo d1d310673359205736b4b84acd5ea8c8 ;;
+# Quality profiles that ship with a fresh Sonarr/Radarr. Recyclarr used to
+# create the TRaSH profiles on top of these; without it, only the built-ins
+# exist, so a name outside this list would silently fall back to "Any".
+is_builtin_profile() {
+  case "$1" in
+    Any|SD|HD-720p|HD-1080p|Ultra-HD|"HD - 720p/1080p") return 0 ;;
     *) return 1 ;;
   esac
 }
-# The guide renamed "Remux-1080p - Anime" to "[Anime] Remux-1080p"
-normalize_profile_name() {
-  case "$1" in
-    "Remux-1080p - Anime") echo "[Anime] Remux-1080p" ;;
-    *) echo "$1" ;;
-  esac
-}
 validate_quality_profile() {
-  local app="$1" key="$2" name
-  name=$(normalize_profile_name "$(cfg ".quality.$key")")
-  trash_profile_id "$app" "$name" >/dev/null || \
+  local key="$1" name
+  name=$(cfg ".quality.$key")
+  is_builtin_profile "$name" || \
     err "quality.$key: unknown profile '$name' (see config.toml.example for supported names)"
 }
 TIMEZONE_PATH='(.timezone // .qbittorrent.timezone)'
@@ -347,9 +326,9 @@ validate_config_semantics() {
   is_non_negative_int "$seed_time" || err "downloads.seeding_time_minutes must be a non-negative integer"
   [ -n "$timezone" ] || err "timezone must be set"
 
-  validate_quality_profile sonarr sonarr_profile
-  validate_quality_profile sonarr-anime sonarr_anime_profile
-  validate_quality_profile radarr radarr_profile
+  validate_quality_profile sonarr_profile
+  validate_quality_profile sonarr_anime_profile
+  validate_quality_profile radarr_profile
 }
 
 get_api_key() {

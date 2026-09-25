@@ -35,28 +35,22 @@ providers = [
   "subf2m",            # Subscene successor (requires user-agent in Bazarr)
 ]
 
-# ─── Quality (Recyclarr TRaSH Guide profiles) ──────────────────
-# Recyclarr creates these profiles and Jellyseerr requests use them.
-# Sonarr: "WEB-1080p", "WEB-1080p (Alternative)", "WEB-2160p",
-#         "WEB-2160p (Alternative)", "WEB-2160p (Combined)",
-#         "Remux + WEB 1080p", "Remux + WEB 2160p",
-#         "Remux 2160p (Alternative)", "Remux 2160p (Combined)"
-# Sonarr anime: "[Anime] Remux-1080p"
-# Radarr: "HD Bluray + WEB", "UHD Bluray + WEB", "Remux + WEB 1080p",
-#         "Remux + WEB 2160p", "Remux 2160p (Alternative)",
-#         "Remux 2160p (Combined)"
+# ─── Quality ───────────────────────────────────────────────────
+# The profiles a fresh Sonarr/Radarr ships with; Jellyseerr requests use
+# them. Supported names: "Any", "SD", "HD-720p", "HD-1080p", "Ultra-HD",
+# "HD - 720p/1080p".
 
 [quality]
-sonarr_profile = "WEB-1080p"
-sonarr_anime_profile = "[Anime] Remux-1080p"
-radarr_profile = "HD Bluray + WEB"
+sonarr_profile = "HD-1080p"
+sonarr_anime_profile = "HD-1080p"
+radarr_profile = "HD-1080p"
 
 # ─── Network ────────────────────────────────────────────────────
 # admin_bind: address the admin UIs (Sonarr, Radarr, Prowlarr, Bazarr,
-#   qBittorrent, SABnzbd, Tdarr, Dozzle, ...) listen on. "0.0.0.0" = every
+#   qBittorrent, SABnzbd, Dozzle) listen on. "0.0.0.0" = every
 #   interface (LAN + Tailscale); "127.0.0.1" = this machine only; or your
-#   Tailscale IP to reach them only over Tailscale. Jellyfin, Jellyseerr,
-#   Navidrome, Immich and the dashboard on port 80 are always reachable.
+#   Tailscale IP to reach them only over Tailscale. Jellyfin, Jellyseerr
+#   and the dashboard on port 80 are always reachable.
 # docker_subnet: subnet for the containers. Change it only if it clashes
 #   with a network you already use.
 
@@ -154,13 +148,6 @@ type = "wireguard"             # "wireguard" or "openvpn"
 wireguard_private_key = ""     # Your WireGuard private key
 wireguard_addresses = ""       # Your WireGuard address (e.g., "10.x.x.x/32")
 server_countries = ""          # Preferred server country (e.g., "Switzerland")
-
-# ─── System Monitoring (Beszel) ────────────────────────────────
-# After starting Beszel hub (http://localhost:8090), create an account,
-# click "Add System", and paste the generated key below.
-
-[beszel]
-agent_key = ""
 
 # ─── Usenet Providers (SABnzbd) ────────────────────────────────
 # Fill in your provider details and set enable = true.

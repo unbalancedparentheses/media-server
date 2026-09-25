@@ -171,10 +171,7 @@ create_directories() {
   mkdir -p "$MEDIA_DIR"/downloads/torrents/{complete,incomplete}
   mkdir -p "$MEDIA_DIR"/downloads/usenet/{complete,incomplete}
   mkdir -p "$MEDIA_DIR"/backups
-  mkdir -p "$MEDIA_DIR"/{transcode_cache,leaving-soon}
-  mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,recyclarr,flaresolverr,nginx,lidarr,navidrome,unpackerr,gluetun,janitorr,beszel,immich-ml,scrutiny,uptime-kuma}/logs
-  mkdir -p "$MEDIA_DIR"/config/tdarr/{server,configs,logs}
-  mkdir -p "$MEDIA_DIR"/config/immich-postgres
+  mkdir -p "$MEDIA_DIR"/config/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,jellyseerr,flaresolverr,nginx,unpackerr,gluetun}/logs
 
   # Ensure api-proxy.conf exists as a file (Docker would create it as a directory)
   [ -f "$CONFIG_DIR/nginx/api-proxy.conf" ] || touch "$CONFIG_DIR/nginx/api-proxy.conf"
@@ -202,13 +199,6 @@ write_compose_env() {
 
   TZ_VALUE=$(cfg "$TIMEZONE_PATH // \"America/New_York\"")
 
-  # Generate a stable Immich DB password (reuse existing if present)
-  if [ -f "$SCRIPT_DIR/.env" ] && grep -q "^IMMICH_DB_PASSWORD=" "$SCRIPT_DIR/.env" 2>/dev/null; then
-    IMMICH_DB_PASS=$(sed -n 's/^IMMICH_DB_PASSWORD=//p' "$SCRIPT_DIR/.env" | tr -d '"')
-  else
-    IMMICH_DB_PASS=$(openssl rand -hex 16)
-  fi
-
   # VPN settings (optional)
   VPN_ENABLE=$(cfg '.vpn.enable // false')
   VPN_PROVIDER=$(cfg '.vpn.provider // "mullvad"')
@@ -234,13 +224,11 @@ print(net[10], list(net.subnets(prefixlen_diff=1))[1], sep="\t")' "$DOCKER_SUBNE
 PUID=$(id -u)
 PGID=$(id -g)
 TZ="$TZ_VALUE"
-IMMICH_DB_PASSWORD="$IMMICH_DB_PASS"
 VPN_SERVICE_PROVIDER="$VPN_PROVIDER"
 VPN_TYPE="$VPN_TYPE"
 WIREGUARD_PRIVATE_KEY="$VPN_WG_KEY"
 WIREGUARD_ADDRESSES="$VPN_WG_ADDR"
 VPN_SERVER_COUNTRIES="$VPN_COUNTRIES"
-BESZEL_AGENT_KEY="$(cfg '.beszel.agent_key // ""')"
 ADMIN_BIND="$ADMIN_BIND"
 DOCKER_SUBNET="$DOCKER_SUBNET"
 NGINX_IP="$NGINX_IP"
@@ -288,7 +276,7 @@ EOF
   write_htpasswd "$CONFIG_DIR/nginx/htpasswd" "$(cfg '.jellyfin.username')" "$(cfg '.jellyfin.password')"
 }
 
-# nginx basic auth for the UIs without a login (Tdarr, Dozzle, Scrutiny).
+# nginx basic auth for the UIs without a login (Dozzle).
 # Rewritten only when the credentials change, reusing the existing salt.
 write_htpasswd() {
   local file="$1" user="$2" pass="$3" salt="" line
@@ -301,7 +289,7 @@ write_htpasswd() {
     printf '%s\n' "$line" > "$file"
     chmod 644 "$file"
     docker exec media-nginx nginx -s reload >/dev/null 2>&1 || true
-    ok "nginx basic auth: $user (Tdarr, Dozzle, Scrutiny)"
+    ok "nginx basic auth: $user (Dozzle)"
   fi
 }
 
@@ -329,13 +317,12 @@ start_stack() {
   dc up -d
 
   ok "All containers started"
-  migrate_immich_vectors
 }
 
 update_hosts_file() {
   info "Checking /etc/hosts..."
 
-  DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local lidarr.media.local navidrome.media.local immich.media.local tdarr.media.local dozzle.media.local beszel.media.local scrutiny.media.local uptime-kuma.media.local"
+  DOMAINS="media.local jellyfin.media.local jellyseerr.media.local sonarr.media.local sonarr-anime.media.local radarr.media.local prowlarr.media.local bazarr.media.local sabnzbd.media.local qbittorrent.media.local dozzle.media.local"
 
   if grep -qE "^[[:space:]]*127\.0\.0\.1[[:space:]].*\bmedia\.local\b" /etc/hosts 2>/dev/null; then
     ok "Hosts entries already present"
@@ -372,12 +359,9 @@ read_setup_config() {
   SEED_TIME=$(cfg '.downloads.seeding_time_minutes')
   SUBTITLE_LANGS=$(cfg '[.subtitles.languages[]] | join(",")')
   SUBTITLE_PROVIDERS=$(cfg '[.subtitles.providers[]] | join(",")')
-  SONARR_PROFILE=$(normalize_profile_name "$(cfg '.quality.sonarr_profile')")
-  SONARR_ANIME_PROFILE=$(normalize_profile_name "$(cfg '.quality.sonarr_anime_profile')")
-  RADARR_PROFILE=$(normalize_profile_name "$(cfg '.quality.radarr_profile')")
-  SONARR_PROFILE_ID=$(trash_profile_id sonarr "$SONARR_PROFILE")
-  SONARR_ANIME_PROFILE_ID=$(trash_profile_id sonarr-anime "$SONARR_ANIME_PROFILE")
-  RADARR_PROFILE_ID=$(trash_profile_id radarr "$RADARR_PROFILE")
+  SONARR_PROFILE=$(cfg '.quality.sonarr_profile')
+  SONARR_ANIME_PROFILE=$(cfg '.quality.sonarr_anime_profile')
+  RADARR_PROFILE=$(cfg '.quality.radarr_profile')
 }
 
 wait_for_services() {
@@ -393,7 +377,6 @@ read_api_keys() {
   SONARR_KEY=$(get_api_key "sonarr")
   SONARR_ANIME_KEY=$(get_api_key "sonarr-anime")
   RADARR_KEY=$(get_api_key "radarr")
-  LIDARR_KEY=$(get_api_key "lidarr")
   PROWLARR_KEY=$(get_api_key "prowlarr")
   SABNZBD_KEY=""
   [ -f "$CONFIG_DIR/sabnzbd/sabnzbd.ini" ] && SABNZBD_KEY=$(sed -n 's/^api_key = *//p' "$CONFIG_DIR/sabnzbd/sabnzbd.ini" 2>/dev/null || echo "")
@@ -421,7 +404,6 @@ load_api_keys() {
   [ -n "$SONARR_KEY" ]       && ok "Sonarr:       $(mask "$SONARR_KEY")"       || err "Sonarr key not found"
   [ -n "$SONARR_ANIME_KEY" ] && ok "Sonarr Anime: $(mask "$SONARR_ANIME_KEY")" || err "Sonarr Anime key not found"
   [ -n "$RADARR_KEY" ]       && ok "Radarr:       $(mask "$RADARR_KEY")"       || err "Radarr key not found"
-  [ -n "$LIDARR_KEY" ]       && ok "Lidarr:       $(mask "$LIDARR_KEY")"       || err "Lidarr key not found"
   [ -n "$PROWLARR_KEY" ]     && ok "Prowlarr:     $(mask "$PROWLARR_KEY")"     || err "Prowlarr key not found"
   [ -n "$SABNZBD_KEY" ]      && ok "SABnzbd:      $(mask "$SABNZBD_KEY")"      || warn "SABnzbd key not found"
   [ -n "$JELLYSEERR_KEY" ]   && ok "Jellyseerr:   $(mask "$JELLYSEERR_KEY")"   || warn "Jellyseerr key not found (will read after setup)"

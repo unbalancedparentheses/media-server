@@ -100,13 +100,8 @@ run_setup() {
   configure_usenet_providers
   configure_bazarr
   configure_sabnzbd_auth
-  configure_recyclarr
   configure_jellyseerr
   configure_unpackerr
-  configure_lidarr
-  configure_navidrome
-  configure_immich
-  configure_janitorr
   write_api_proxy
 }
 

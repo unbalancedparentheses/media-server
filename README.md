@@ -15,12 +15,10 @@ You ──> Jellyseerr (request) ──> Sonarr / Radarr ──> Prowlarr ──
                               (through VPN tunnel)
                                         │
                                  download completes
-                                  ├── Bazarr (subtitles)
-                                  └── Tdarr (transcode to H.265)
+                                        │
+                                 Bazarr (subtitles)
                                         │
                                Jellyfin (stream it)
-                                        │
-                          Janitorr (clean up unwatched)
 ```
 
 1. Request a movie or show through **Jellyseerr** (Netflix-like browse and request UI)
@@ -28,8 +26,6 @@ You ──> Jellyseerr (request) ──> Sonarr / Radarr ──> Prowlarr ──
 3. Best match is sent to **qBittorrent** (through VPN) or **SABnzbd** (Usenet)
 4. File is downloaded, renamed, and added to your **Jellyfin** library
 5. **Bazarr** fetches subtitles automatically (English + Spanish by default)
-6. **Tdarr** transcodes to H.265 in the background to save ~40-50% storage
-7. **Janitorr** removes content nobody has watched after a grace period
 
 ## Quick start
 
@@ -104,26 +100,12 @@ Fully idempotent — safe to re-run at any time.
 | **[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)** | Bypasses Cloudflare on protected indexers |
 | **[Unpackerr](https://unpackerr.zip)** | Extracts compressed downloads so Sonarr/Radarr can import them |
 
-### Background automation
-
-| Service | What it does |
-|---------|-------------|
-| **[Recyclarr](https://recyclarr.dev)** | Syncs [TRaSH Guide](https://trash-guides.info/) quality profiles to Sonarr/Radarr weekly |
-| **[Janitorr](https://github.com/Schaka/Janitorr)** | Removes unwatched content after a configurable grace period (starts in dry-run mode) |
-| **[Tdarr](https://home.tdarr.io)** | Transcodes media to H.265/HEVC to save storage |
-
 ### Also included
 
 | Service | What it does |
 |---------|-------------|
-| **[Navidrome](https://www.navidrome.org)** | Music streaming (works with DSub, Symfonium, etc.) |
-| **[Lidarr](https://lidarr.audio)** | Music automation — monitors artists and downloads releases |
-| **[Immich](https://immich.app)** | Self-hosted Google Photos replacement with face/object recognition |
 | **[Nginx](https://nginx.org)** | Reverse proxy — `.media.local` domains + landing page with live widgets |
 | **[Dozzle](https://dozzle.dev)** | Live Docker log viewer (SSE streaming) |
-| **[Beszel](https://beszel.dev)** | System monitoring (CPU, RAM, disk, per-container) |
-| **[Scrutiny](https://github.com/AnalogJ/scrutiny)** | Hard drive S.M.A.R.T. health monitoring |
-| **[Uptime Kuma](https://uptime.kuma.pet)** | Service uptime monitoring with notifications |
 | **[Tailscale](https://tailscale.com)** | Mesh VPN for remote access (optional) |
 
 ## Configuration
@@ -142,18 +124,18 @@ username = "admin"
 password = "changeme"
 ```
 
-Setup prompts for real passwords on first run. With `--yes`, secure random passwords are generated automatically. Jellyfin credentials are shared across most services (Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd, Navidrome, Immich).
+Setup prompts for real passwords on first run. With `--yes`, secure random passwords are generated automatically. Jellyfin credentials are shared across most services (Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd).
 
 ### Quality profiles
 
 ```toml
 [quality]
-sonarr_profile = "WEB-1080p"
-sonarr_anime_profile = "[Anime] Remux-1080p"
-radarr_profile = "HD Bluray + WEB"
+sonarr_profile = "HD-1080p"
+sonarr_anime_profile = "HD-1080p"
+radarr_profile = "HD-1080p"
 ```
 
-[TRaSH Guide](https://trash-guides.info/) profiles. Recyclarr creates them in Sonarr/Radarr and keeps them synced weekly, and Jellyseerr sends requests with them. Defaults: 1080p web for TV, remux for anime, HD bluray for movies. `config.toml.example` lists the supported names.
+The quality profiles a fresh Sonarr/Radarr ships with; Jellyseerr sends requests with them. `config.toml.example` lists the supported names.
 
 ### Subtitles
 
@@ -231,10 +213,7 @@ All services are available at `http://<service>.media.local` after setup.
 | Bazarr | http://bazarr.media.local |
 | qBittorrent | http://qbittorrent.media.local |
 | SABnzbd | http://sabnzbd.media.local |
-| Lidarr | http://lidarr.media.local |
-| Navidrome | http://navidrome.media.local |
-| Immich | http://immich.media.local |
-| Tdarr | http://tdarr.media.local |
+| Dozzle | http://dozzle.media.local |
 
 The `.media.local` names are added to `/etc/hosts` on the server only. From other devices, use the dashboard at `http://<server-ip>` (its cards link to each service's port) or Tailscale.
 
@@ -242,19 +221,17 @@ For remote access, [Tailscale](https://tailscale.com) provides mesh VPN with aut
 
 ## Security
 
-- **Logins.** Every admin UI requires a login. The *arr apps, Bazarr, SABnzbd and Navidrome use the Jellyfin credentials; Tdarr, Dozzle and Scrutiny have no login of their own, so nginx serves them (on their usual ports) behind basic auth with the same credentials.
+- **Logins.** Every admin UI requires a login. The *arr apps, Bazarr and SABnzbd use the Jellyfin credentials; Dozzle has no login of its own, so nginx serves it (on its usual port) behind basic auth with the same credentials.
 - **Dashboard widgets.** The dashboard's widgets go through nginx, which adds the API keys. Only the read-only endpoints the widgets use are exposed, and only for `GET`, so the dashboard can't be used to change or delete anything.
 - **qBittorrent.** qBittorrent skips its login only for nginx's fixed container address; everything else, including the *arr apps, logs in.
-- **Admin ports.** They listen on every interface by default. To keep them off the LAN, set `admin_bind` in `[network]`: `"127.0.0.1"` for this machine only, or your Tailscale IP for Tailscale only. Jellyfin, Jellyseerr, Navidrome, Immich and the dashboard stay reachable either way.
+- **Admin ports.** They listen on every interface by default. To keep them off the LAN, set `admin_bind` in `[network]`: `"127.0.0.1"` for this machine only, or your Tailscale IP for Tailscale only. Jellyfin, Jellyseerr and the dashboard stay reachable either way.
 - **Backups.** They contain every password and API key (`chmod 600`). Keep a copy on another disk.
 
 ## Updates and backups
 
 Image versions are pinned in `docker-compose.yml` (Renovate opens PRs to bump them), so a stack doesn't change under you on a random restart. `./setup.sh --update` backs up, pulls this repo, pulls the pinned images and re-runs setup to apply any config changes.
 
-`./setup.sh --backup` briefly stops the containers so SQLite and Postgres files are consistent, then archives `~/media/config` together with `.env` and `config.toml`. The Immich database password lives in `.env`, so both are needed to restore on a new machine. `--restore` keeps the previous config as `config.pre-restore-<timestamp>`.
-
-Immich v3 dropped the pgvecto.rs database extension used by older installs of this stack. Setup detects an old database and migrates it to VectorChord by running Immich v2.7.5 once, after taking a database dump in `~/media/backups/`.
+`./setup.sh --backup` briefly stops the containers so SQLite files are consistent, then archives `~/media/config` together with `.env` and `config.toml`, which carry the credentials needed to restore on a new machine. `--restore` keeps the previous config as `config.pre-restore-<timestamp>`.
 
 ## Directory structure
 
@@ -263,14 +240,10 @@ Immich v3 dropped the pgvecto.rs database extension used by older installs of th
 ├── movies/              # Radarr
 ├── tv/                  # Sonarr
 ├── anime/               # Sonarr Anime
-├── music/               # Lidarr / Navidrome
-├── photos/              # Immich
 ├── downloads/
 │   ├── torrents/
 │   └── usenet/
 ├── config/              # Per-service config directories
-├── transcode_cache/     # Tdarr working directory
-├── leaving-soon/        # Janitorr staging area
 └── backups/             # Auto-pruned, keeps last 10
 ```
 
