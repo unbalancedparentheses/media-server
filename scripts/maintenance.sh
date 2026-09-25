@@ -109,6 +109,10 @@ do_restore() {
   else
     warn "Backup predates .env/config.toml backups; keeping the current ones"
   fi
+  # Directories left out of the backup (logs, caches); created here so
+  # Docker doesn't create them as root
+  create_directories >/dev/null
+
   rm -rf "$extract"
 
   info "Starting containers..."

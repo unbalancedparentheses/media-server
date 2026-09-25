@@ -108,7 +108,7 @@ run_setup() {
 print_summary() {
   local ts_cli ts_hostname=""
   ts_cli="$(detect_tailscale_cli)"
-  [ -n "$ts_cli" ] && ts_hostname=$("$ts_cli" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
+  [ -n "$ts_cli" ] && ts_hostname=$("$ts_cli" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)
 
   echo ""
   echo "  Setup Complete!"
@@ -184,6 +184,7 @@ if [ "$MODE" = "test" ]; then
   validate_required_config
   validate_config_semantics
   ADMIN_BIND=$(cfg '.network.admin_bind // "0.0.0.0"')
+  NGINX_IP=$(sed -n 's/^NGINX_IP="*\([^"]*\)"*$/\1/p' "$SCRIPT_DIR/.env" 2>/dev/null || true)
   init_service_registry
   JELLYFIN_USER=$(cfg '.jellyfin.username')
   JELLYFIN_PASS=$(cfg '.jellyfin.password')
@@ -196,5 +197,7 @@ if [ "$MODE" = "test" ]; then
 fi
 
 run_setup
-run_verification
+# Failed checks are reported, not fatal; the function also relies on errexit
+# being off inside it (as it is when called from a || list)
+run_verification || true
 print_summary
