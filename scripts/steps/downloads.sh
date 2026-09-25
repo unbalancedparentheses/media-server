@@ -15,19 +15,24 @@ configure_qbittorrent() {
   if [ -n "$QBIT_COOKIE" ]; then
     ok "Logged in"
 
-    # Set permanent password + preferences. Only nginx (fixed IP, used by
-    # the landing page widgets) may skip the login; the *arr apps log in.
+    # Set permanent password + preferences. Only nginx's own requests (the
+    # landing page widgets) may skip the login; the *arr apps log in.
+    # Reverse-proxy support makes qBittorrent judge requests that come
+    # through the qbittorrent.media.local vhost by the real client address
+    # (nginx sets X-Forwarded-For), so they still need a login.
     QBIT_PREFS=$(jq -nc \
       --arg user "$QBIT_USER" --arg pass "$QBIT_PASS" \
       --arg save "$DL_COMPLETE" --arg temp "$DL_INCOMPLETE" \
       --argjson ratio "$SEED_RATIO" --argjson seed_time "$SEED_TIME" \
-      --arg nginx_ip "$NGINX_IP/32" \
+      --arg nginx_net "$NGINX_IP/32" --arg nginx_ip "$NGINX_IP" \
       '{web_ui_username:$user, web_ui_password:$pass,
         save_path:$save, temp_path:$temp, temp_path_enabled:true,
         web_ui_port:8081, max_ratio:$ratio, max_seeding_time:$seed_time,
         up_limit:102400, web_ui_csrf_protection_enabled:true,
         bypass_auth_subnet_whitelist_enabled:true,
-        bypass_auth_subnet_whitelist:$nginx_ip}')
+        bypass_auth_subnet_whitelist:$nginx_net,
+        web_ui_reverse_proxy_enabled:true,
+        web_ui_reverse_proxies_list:$nginx_ip}')
     curl -sf -o /dev/null "$QBIT_URL/api/v2/app/setPreferences" \
       -b "SID=$QBIT_COOKIE" \
       --data-urlencode "json=$QBIT_PREFS" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"

@@ -38,7 +38,8 @@ run_verification() {
   done <<< "$SERVICE_HEALTH_ENDPOINTS"
 
   info "Download clients..."
-  QBIT_COOKIE_V=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" -d "username=$QBIT_USER&password=$QBIT_PASS" 2>/dev/null | extract_cookie SID)
+  QBIT_COOKIE_V=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
+    --data-urlencode "username=$QBIT_USER" --data-urlencode "password=$QBIT_PASS" 2>/dev/null | extract_cookie SID || true)
   check "qBittorrent login" "$([ -n "$QBIT_COOKIE_V" ] && echo true || echo false)"
 
   if [ -n "$QBIT_COOKIE_V" ]; then
@@ -101,12 +102,13 @@ run_verification() {
 
   info "Jellyfin..."
   JF_HEADER_V='X-Emby-Authorization: MediaBrowser Client="verify", Device="script", DeviceId="verify", Version="1.0"'
-  JF_AUTH_V=$(curl -sf -X POST "$JELLYFIN_URL/Users/AuthenticateByName" -H "$JF_HEADER_V" -H "Content-Type: application/json" -d "{\"Username\":\"$JELLYFIN_USER\",\"Pw\":\"$JELLYFIN_PASS\"}" 2>/dev/null)
+  JF_AUTH_V=$(curl -sf -X POST "$JELLYFIN_URL/Users/AuthenticateByName" -H "$JF_HEADER_V" -H "Content-Type: application/json" \
+    -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{Username:$u,Pw:$p}')" 2>/dev/null || true)
   JF_TOKEN_V=$(echo "$JF_AUTH_V" | jq -r '.AccessToken // empty' 2>/dev/null)
   check "Jellyfin → login" "$([ -n "$JF_TOKEN_V" ] && echo true || echo false)"
 
   if [ -n "$JF_TOKEN_V" ]; then
-    curl -sf "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JF_TOKEN_V" > "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null
+    curl -sf "$JELLYFIN_URL/Library/VirtualFolders" -H "X-Emby-Token: $JF_TOKEN_V" > "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null || echo "[]" > "$TMPDIR_SETUP/jf_verify.json"
     for lp in "Movies:/media/movies" "TV Shows:/media/tv" "Anime:/media/anime"; do
       ln="${lp%%:*}"; lpath="${lp#*:}"
       HAS=$(jq --arg n "$ln" --arg p "$lpath" '[.[] | select(.Name == $n) | .Locations[] | select(. == $p)] | length > 0' "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null)
@@ -183,7 +185,7 @@ run_verification() {
   [ -n "$LIDARR_KEY" ] && check_arr_auth "Lidarr" "$LIDARR_URL" "$LIDARR_KEY" "v1"
 
   if [ -n "${SABNZBD_KEY:-}" ]; then
-    SAB_AUTH_USER=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=misc&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.config.misc.username // empty' 2>/dev/null)
+    SAB_AUTH_USER=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=misc&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.config.misc.username // empty' 2>/dev/null || true)
     check "SABnzbd → auth configured" "$([ -n "$SAB_AUTH_USER" ] && echo true || echo false)"
   fi
 
@@ -236,6 +238,8 @@ run_verification() {
   check "Dozzle → requires login" "$([ "$(http_code "$DOZZLE_URL")" = "401" ] && echo true || echo false)"
   check "Scrutiny → requires login" "$([ "$(http_code "$SCRUTINY_URL")" = "401" ] && echo true || echo false)"
   check "qBittorrent → requires login" "$([ "$(http_code "$QBIT_URL/api/v2/app/version")" = "403" ] && echo true || echo false)"
+  check "qBittorrent vhost → requires login" \
+    "$([ "$(http_code -H 'Host: qbittorrent.media.local' -H "X-Forwarded-For: $NGINX_IP" http://localhost/api/v2/app/version)" = "403" ] && echo true || echo false)"
 
   info "Docker containers..."
   for container in $CONTAINER_LIST; do

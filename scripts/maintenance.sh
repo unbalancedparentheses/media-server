@@ -4,9 +4,10 @@
 # ─── Backup function ────────────────────────────────────────────
 # The archive holds ~/media/config plus the repo's .env and config.toml
 # (under repo-files/), which carry the Immich DB password and all
-# credentials — without them a restore on a new machine can't open the
-# Immich database. Containers are stopped while archiving so the SQLite
-# and Postgres files are consistent.
+# credentials. Immich's Postgres is saved as a pg_dumpall (db/), not as its
+# data directory, which is owned by the container user and unreadable on
+# Linux. Containers are stopped while archiving so SQLite files are
+# consistent.
 do_backup() {
   [ ! -d "$CONFIG_DIR" ] && err "Config directory not found: $CONFIG_DIR"
   mkdir -p "$BACKUP_DIR"
@@ -18,13 +19,20 @@ do_backup() {
 
   info "Backing up service configs..."
 
-  mkdir -p "$staging/repo-files"
+  mkdir -p "$staging/repo-files" "$staging/db"
   for f in .env config.toml; do
     [ -f "$SCRIPT_DIR/$f" ] && cp "$SCRIPT_DIR/$f" "$staging/repo-files/"
   done
 
   if has_cmd docker && docker info >/dev/null 2>&1 && has_docker_compose; then
     running=$(dc ps -q --status running 2>/dev/null | grep -c . || true)
+    if [ -n "$(docker ps -q --filter name='^immich-postgres$' 2>/dev/null)" ]; then
+      docker exec immich-postgres pg_dumpall --clean --if-exists -U postgres | gzip > "$staging/db/immich.sql.gz" || \
+        err "Could not dump the Immich database; backup aborted"
+      ok "Immich database dumped"
+    elif [ -d "$CONFIG_DIR/immich-postgres" ]; then
+      warn "immich-postgres is not running; the Immich database is not in this backup"
+    fi
   fi
   if [ "$running" -gt 0 ]; then
     info "Stopping containers for a consistent snapshot..."
@@ -34,7 +42,8 @@ do_backup() {
   # Logs and Immich's ML model cache are large and re-created on start
   if ! (umask 077 && tar czf "$backup_file" \
       --exclude='config/*/logs' --exclude='config/jellyfin/log' --exclude='config/immich-ml' \
-      -C "$MEDIA_DIR" config -C "$staging" repo-files); then
+      --exclude='config/immich-postgres' \
+      -C "$MEDIA_DIR" config -C "$staging" repo-files db); then
     [ "$running" -gt 0 ] && dc start >/dev/null 2>&1
     rm -f "$backup_file"
     err "Backup failed"
@@ -112,6 +121,20 @@ do_restore() {
     warn "Backup predates .env/config.toml backups; keeping the current ones"
     [ -f "$CONFIG_DIR/immich-postgres/immich_dump.sql" ] && \
       warn "If Immich can't open its database, restore config/immich-postgres/immich_dump.sql manually"
+  fi
+  # Directories left out of the backup (logs, caches, the Postgres data dir);
+  # created here so Docker doesn't create them as root
+  create_directories >/dev/null
+
+  if [ -f "$extract/db/immich.sql.gz" ]; then
+    info "Restoring Immich database..."
+    dc up -d --wait immich-postgres >/dev/null
+    # As in Immich's restore docs: pg_dumpall clears search_path, which
+    # breaks the vector types on restore
+    gunzip -c "$extract/db/immich.sql.gz" | \
+      sed "s/SELECT pg_catalog.set_config('search_path', '', false);/SELECT pg_catalog.set_config('search_path', 'public, pg_catalog', true);/g" | \
+      docker exec -i immich-postgres psql -q -U postgres -d postgres >/dev/null
+    ok "Immich database restored"
   fi
   rm -rf "$extract"
 

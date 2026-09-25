@@ -252,7 +252,7 @@ For remote access, [Tailscale](https://tailscale.com) provides mesh VPN with aut
 
 Image versions are pinned in `docker-compose.yml` (Renovate opens PRs to bump them), so a stack doesn't change under you on a random restart. `./setup.sh --update` backs up, pulls this repo, pulls the pinned images and re-runs setup to apply any config changes.
 
-`./setup.sh --backup` briefly stops the containers so SQLite and Postgres files are consistent, then archives `~/media/config` together with `.env` and `config.toml`. The Immich database password lives in `.env`, so both are needed to restore on a new machine. `--restore` keeps the previous config as `config.pre-restore-<timestamp>`.
+`./setup.sh --backup` dumps Immich's database, briefly stops the containers so the SQLite files are consistent, then archives `~/media/config` together with the dump, `.env` and `config.toml`. The Immich database password lives in `.env`, so both are needed to restore on a new machine. `--restore` keeps the previous config as `config.pre-restore-<timestamp>`.
 
 Immich v3 dropped the pgvecto.rs database extension used by older installs of this stack. Setup detects an old database and migrates it to VectorChord by running Immich v2.7.5 once, after taking a database dump in `~/media/backups/`.
 

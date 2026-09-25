@@ -75,49 +75,53 @@ write_api_proxy() {
 
 # Immich v3 no longer supports pgvecto.rs. A database created with the old
 # tensorchord/pgvecto-rs image still has the "vectors" extension; Immich
-# v2.7.5 (the last release that can) moves it to VectorChord and drops it.
-# Runs right after the stack starts, before anything waits on Immich.
+# v2.7.5 (the last release that can) creates VectorChord, reindexes, and
+# drops "vectors". Called from start_stack before the rest of the stack
+# starts. Re-running while a migration is still going just keeps waiting.
 IMMICH_MIGRATION_VERSION="v2.7.5"
+immich_has_pgvectors() {
+  [ "$(docker exec immich-postgres psql -U postgres -d immich -tAc \
+    "SELECT 1 FROM pg_extension WHERE extname = 'vectors'" 2>/dev/null || true)" = "1" ]
+}
 migrate_immich_vectors() {
-  local has_vectors dump override i=0
-  has_vectors=$(docker exec immich-postgres psql -U postgres -d immich -tAc \
-    "SELECT 1 FROM pg_extension WHERE extname = 'vectors'" 2>/dev/null || true)
-  [ "$has_vectors" = "1" ] || return 0
+  local dump override current i=0
+
+  # Only Postgres; on a fresh install this just initialises an empty database
+  dc up -d --wait immich-postgres >/dev/null
+  immich_has_pgvectors || return 0
 
   info "Migrating Immich database from pgvecto.rs to VectorChord..."
-  mkdir -p "$BACKUP_DIR"
-  dump="$BACKUP_DIR/immich-pre-vectorchord_$(date +%Y%m%d_%H%M%S).sql.gz"
-  docker exec immich-postgres pg_dumpall --clean --if-exists -U postgres | gzip > "$dump"
-  chmod 600 "$dump"
-  ok "Database dump: $dump"
+  current=$(docker inspect -f '{{.Config.Image}}' immich 2>/dev/null || true)
+  if [ "${current##*:}" != "$IMMICH_MIGRATION_VERSION" ]; then
+    mkdir -p "$BACKUP_DIR"
+    dump="$BACKUP_DIR/immich-pre-vectorchord_$(date +%Y%m%d_%H%M%S).sql.gz"
+    (umask 077 && docker exec immich-postgres pg_dumpall --clean --if-exists -U postgres | gzip > "$dump")
+    ok "Database dump: $dump"
 
-  override="$TMPDIR_SETUP/immich-migrate.yml"
-  cat > "$override" << YML
+    override="$TMPDIR_SETUP/immich-migrate.yml"
+    cat > "$override" << YML
 services:
   immich:
     image: ghcr.io/immich-app/immich-server:$IMMICH_MIGRATION_VERSION
   immich-machine-learning:
     image: ghcr.io/immich-app/immich-machine-learning:$IMMICH_MIGRATION_VERSION
 YML
-  local files=(-f "$COMPOSE_FILE")
-  [ -f "$OVERRIDE_FILE" ] && files+=(-f "$OVERRIDE_FILE")
-  docker compose "${files[@]}" -f "$override" up -d immich immich-machine-learning
-
-  printf "   Waiting for Immich %s to migrate (can take several minutes)..." "$IMMICH_MIGRATION_VERSION"
-  until curl -sf --connect-timeout 2 http://localhost:2283/api/server/ping >/dev/null 2>&1; do
-    i=$((i + 5))
-    [ "$i" -ge 1800 ] && break
-    sleep 5
-  done
-  echo ""
-
-  has_vectors=$(docker exec immich-postgres psql -U postgres -d immich -tAc \
-    "SELECT 1 FROM pg_extension WHERE extname = 'vectors'" 2>/dev/null || true)
-  if [ "$has_vectors" = "1" ]; then
-    err "Immich migration did not finish; check 'docker logs immich' and re-run setup (dump: $dump)"
+    local files=(-f "$COMPOSE_FILE")
+    [ -f "$OVERRIDE_FILE" ] && files+=(-f "$OVERRIDE_FILE")
+    docker compose "${files[@]}" -f "$override" up -d immich immich-machine-learning
+  else
+    ok "Immich $IMMICH_MIGRATION_VERSION is already running the migration"
   fi
-  ok "Immich database migrated to VectorChord"
 
-  dc up -d immich immich-machine-learning
-  ok "Immich back on $(docker inspect -f '{{.Config.Image}}' immich 2>/dev/null | sed 's/.*://')"
+  printf "   Waiting for the migration (can take a while on large libraries)..."
+  while immich_has_pgvectors; do
+    i=$((i + 10))
+    if [ "$i" -ge 1800 ]; then
+      echo ""
+      err "Immich is still migrating after 30 minutes (see 'docker logs -f immich'). Re-run setup to keep waiting; it won't interrupt the migration."
+    fi
+    sleep 10
+  done
+  echo " done"
+  ok "Immich database migrated to VectorChord (Immich $(docker inspect -f '{{.Config.Image}}' immich 2>/dev/null | sed 's/.*://') → v3 next)"
 }

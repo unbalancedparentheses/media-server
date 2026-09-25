@@ -309,13 +309,15 @@ write_htpasswd() {
 # A network created by an older version without it has to be recreated.
 ensure_compose_network() {
   local net current
-  net=$(dc config --format json 2>/dev/null | jq -r '.networks.default.name // empty')
+  net=$(dc config --format json 2>/dev/null | jq -r '.networks.default.name // empty' 2>/dev/null || true)
   [ -n "$net" ] || return 0
   current=$(docker network inspect "$net" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)
   if [ -n "$current" ] && [ "$current" != "$DOCKER_SUBNET" ]; then
     warn "Docker network $net uses $current; recreating it with $DOCKER_SUBNET"
     dc down --remove-orphans
-    docker network inspect "$net" >/dev/null 2>&1 && docker network rm "$net" >/dev/null
+    if docker network inspect "$net" >/dev/null 2>&1 && ! docker network rm "$net" >/dev/null 2>&1; then
+      err "Could not remove network $net; disconnect whatever still uses it ('docker network inspect $net') and re-run setup"
+    fi
     ok "Network recreated on next start"
   fi
   return 0
@@ -325,11 +327,12 @@ start_stack() {
   info "Starting containers..."
   smoke_check_generated_files
   ensure_compose_network
+  # Before Immich v3 starts, so it never sees an unmigrated database
+  migrate_immich_vectors
 
   dc up -d
 
   ok "All containers started"
-  migrate_immich_vectors
 }
 
 update_hosts_file() {
