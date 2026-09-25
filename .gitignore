@@ -1,13 +1,11 @@
-# Runtime data (lives in ~/media/, not in this repo)
-/media/
+# Runtime data lives in ~/media (config.toml, service configs, logs), not here
 *.log
+result
+result-*
 
 # macOS
 .DS_Store
 
-# Secrets — NEVER commit these
+# Leftovers from the Docker version; never commit secrets
 config.toml
 .env
-
-# Generated at runtime
-docker-compose.override.yml

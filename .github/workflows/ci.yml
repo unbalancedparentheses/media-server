@@ -6,11 +6,18 @@ on:
   pull_request:
 
 jobs:
-  shell-checks:
-    runs-on: ubuntu-latest
+  checks:
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      # Evaluates every package and app without building the services
+      - name: Flake Check
+        run: nix flake check --no-build
 
       - name: Bash Syntax
         run: |
@@ -19,37 +26,30 @@ jobs:
           done
 
       - name: ShellCheck
-        run: shellcheck -x -S warning setup.sh install.sh scripts/*.sh scripts/steps/*.sh
+        run: nix develop -c shellcheck -x -S warning setup.sh install.sh scripts/*.sh scripts/steps/*.sh
 
       # The example ships with password "changeme", which setup rejects on
-      # purpose, so validate a copy with real-looking passwords
+      # purpose, so validate a copy with real-looking passwords.
+      # MEDIA_SERVICES_JSON skips the re-exec through `nix run`.
       - name: Config Validation
         run: |
-          sed 's/"changeme"/"ci-not-a-real-password"/' config.toml.example > config.toml
-          ./setup.sh --check-config
-
-      - name: Preflight
-        run: ./setup.sh --preflight
-
-  compose-and-nginx:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Compose Config
-        run: |
-          docker compose -f docker-compose.yml config -q
-          docker compose -f docker-compose.yml --profile vpn config -q
+          export MEDIA_DIR="$RUNNER_TEMP/media" MEDIA_SERVICES_JSON=/dev/null
+          mkdir -p "$MEDIA_DIR"
+          sed 's/"changeme"/"ci-not-a-real-password"/' config.toml.example > "$MEDIA_DIR/config.toml"
+          nix develop -c bash setup.sh --check-config
 
       - name: Nginx Config
         run: |
-          mkdir -p /tmp/nginx
-          sed -e 's/{{[A-Z_]*}}/0123456789abcdef/g' templates/nginx.api-proxy.conf.tpl > /tmp/nginx/api-proxy.conf
-          echo 'ci:$apr1$abcdefgh$0000000000000000000000' > /tmp/nginx/htpasswd
-          image=$(sed -n 's/^ *image: \(nginx:.*\)/\1/p' docker-compose.yml)
-          docker run --rm \
-            -v "$PWD/nginx.conf:/etc/nginx/nginx.conf:ro" \
-            -v /tmp/nginx/api-proxy.conf:/etc/nginx/api-proxy.conf:ro \
-            -v /tmp/nginx/htpasswd:/etc/nginx/htpasswd:ro \
-            "$image" nginx -t
+          nix develop -c bash -c '
+            set -euo pipefail
+            dir="$RUNNER_TEMP/nginx"
+            mkdir -p "$dir/temp" "$dir/www"
+            export NGINX_MIME_TYPES="$(dirname "$(dirname "$(command -v nginx)")")/conf/mime.types"
+            export DASHBOARD_PORT=8080 ADMIN_HOST=127.0.0.1
+            for v in SONARR_KEY SONARR_ANIME_KEY RADARR_KEY JELLYFIN_API_KEY SEERR_KEY SABNZBD_KEY; do export "$v=0123456789abcdef"; done
+            SCRIPT_DIR=$PWD
+            source scripts/setup-services.sh
+            render_template templates/nginx.conf.tpl "$dir/nginx.conf"
+            render_template templates/nginx.api-proxy.conf.tpl "$dir/api-proxy.conf"
+            nginx -t -e stderr -p "$dir" -c "$dir/nginx.conf"
+          '

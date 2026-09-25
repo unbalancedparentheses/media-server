@@ -88,8 +88,7 @@
     var icons={
       Sonarr:'\uD83D\uDCFA','Sonarr Anime':'\uD83C\uDF1F',
       Radarr:'\uD83C\uDFA5',
-      Prowlarr:'\uD83D\uDD0D',Bazarr:'\uD83D\uDCAC',
-      Dozzle:'\uD83D\uDCDC'
+      Prowlarr:'\uD83D\uDD0D',Bazarr:'\uD83D\uDCAC'
     };
     var sections=[
       ["Library Management","cat-manage",[
@@ -98,9 +97,6 @@
         [7878,"Radarr","Movie automation"],
         [9696,"Prowlarr","Indexer management"],
         [6767,"Bazarr","Subtitle downloads"]
-      ]],
-      ["Infrastructure","cat-infra",[
-        [9999,"Dozzle","Live Docker logs"]
       ]]
     ];
 
@@ -111,13 +107,15 @@
       gridHtml+='<div class="section"><div class="section-title">'+sec[0]+'</div><div class="grid">';
       sec[2].forEach(function(s){
         var ico=icons[s[1]]||'\u25CF';
-        gridHtml+='<a href="http://'+h+':'+s[0]+'" class="card '+sec[1]+'" style="animation-delay:'+(cardIdx*0.05)+'s">'
+        // s = [port, name, description, optional path]
+        var url='http://'+h+':'+s[0]+(s[3]||'');
+        gridHtml+='<a href="'+url+'" class="card '+sec[1]+'" style="animation-delay:'+(cardIdx*0.05)+'s">'
           +'<div class="icon">'+ico+'</div>'
           +'<div class="card-info"><div class="card-name">'+s[1]+'</div>'
           +'<div class="card-desc">'+s[2]+'</div>'
           +'<div class="card-port">:'+s[0]+'</div></div>'
-          +'<div class="dot" id="d'+s[0]+'"></div></a>';
-        allServices.push(s[0]);
+          +'<div class="dot" id="d'+cardIdx+'"></div></a>';
+        allServices.push(url);
         cardIdx++;
       });
       gridHtml+='</div></div>';
@@ -125,10 +123,10 @@
     document.getElementById("app").innerHTML=gridHtml;
 
     function checkHealth(){
-      allServices.forEach(function(port){
-        var d=document.getElementById("d"+port);
+      allServices.forEach(function(url,i){
+        var d=document.getElementById("d"+i);
         if(!d)return;
-        fetch("http://"+h+":"+port,{mode:"no-cors",signal:AbortSignal.timeout(3000)})
+        fetch(url,{mode:"no-cors",signal:AbortSignal.timeout(3000)})
           .then(function(){d.className="dot up"})
           .catch(function(){d.className="dot down"});
       });

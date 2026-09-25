@@ -212,7 +212,7 @@
           <div class="w-list" id="recent-list"><div class="w-empty">Loading...</div></div>
         </div>
 
-        <!-- Jellyseerr Requests -->
+        <!-- Seerr Requests -->
         <div class="w-panel">
           <div class="w-header">
             <div class="w-header-title">Requests</div>
@@ -236,17 +236,17 @@
   <script>
     var h=location.hostname;
     var icons={
-      Jellyseerr:'\uD83C\uDFAC',Jellyfin:'\u25B6\uFE0F',
+      Moonfin:'\uD83C\uDF19',Seerr:'\uD83C\uDFAC',Jellyfin:'\u25B6\uFE0F',
       Sonarr:'\uD83D\uDCFA','Sonarr Anime':'\uD83C\uDF1F',
       Radarr:'\uD83C\uDFA5',
       Prowlarr:'\uD83D\uDD0D',Bazarr:'\uD83D\uDCAC',
-      qBittorrent:'\u2B07\uFE0F',SABnzbd:'\uD83D\uDCE5',
-      Dozzle:'\uD83D\uDCDC'
+      qBittorrent:'\u2B07\uFE0F',SABnzbd:'\uD83D\uDCE5'
     };
     var sections=[
       ["Watch & Request","cat-media",[
-        [5055,"Jellyseerr","Request movies & TV"],
-        [8096,"Jellyfin","Stream your library"]
+        [8096,"Moonfin","Watch and request",'/Moonfin/Web/'],
+        [5055,"Seerr","Request movies & TV"],
+        [8096,"Jellyfin","Library and settings"]
       ]],
       ["Downloads","cat-download",[
         [8081,"qBittorrent","Torrent client"],
@@ -262,13 +262,15 @@
       gridHtml+='<div class="section"><div class="section-title">'+sec[0]+'</div><div class="grid">';
       sec[2].forEach(function(s){
         var ico=icons[s[1]]||'\u25CF';
-        gridHtml+='<a href="http://'+h+':'+s[0]+'" class="card '+sec[1]+'" style="animation-delay:'+(cardIdx*0.05)+'s">'
+        // s = [port, name, description, optional path]
+        var url='http://'+h+':'+s[0]+(s[3]||'');
+        gridHtml+='<a href="'+url+'" class="card '+sec[1]+'" style="animation-delay:'+(cardIdx*0.05)+'s">'
           +'<div class="icon">'+ico+'</div>'
           +'<div class="card-info"><div class="card-name">'+s[1]+'</div>'
           +'<div class="card-desc">'+s[2]+'</div>'
           +'<div class="card-port">:'+s[0]+'</div></div>'
-          +'<div class="dot" id="d'+s[0]+'"></div></a>';
-        allServices.push(s[0]);
+          +'<div class="dot" id="d'+cardIdx+'"></div></a>';
+        allServices.push(url);
         cardIdx++;
       });
       gridHtml+='</div></div>';
@@ -277,10 +279,10 @@
 
     // Health checks — run on load and every 30s
     function checkHealth(){
-      allServices.forEach(function(port){
-        var d=document.getElementById("d"+port);
+      allServices.forEach(function(url,i){
+        var d=document.getElementById("d"+i);
         if(!d)return;
-        fetch("http://"+h+":"+port,{mode:"no-cors",signal:AbortSignal.timeout(3000)})
+        fetch(url,{mode:"no-cors",signal:AbortSignal.timeout(3000)})
           .then(function(){d.className="dot up"})
           .catch(function(){d.className="dot down"});
       });
@@ -500,9 +502,9 @@
     refreshRecent();
     setInterval(refreshRecent,120000);
 
-    // ── Jellyseerr Requests ──
+    // ── Seerr Requests ──
     function refreshRequests(){
-      fetch('/api/jellyseerr/request?take=10&sort=added&skip=0').then(function(r){return r.json()}).then(function(data){
+      fetch('/api/seerr/request?take=10&sort=added&skip=0').then(function(r){return r.json()}).then(function(data){
         var results=data.results||[];
         document.getElementById("req-sub").textContent=(data.pageInfo?data.pageInfo.results:results.length)+' total';
         var list=document.getElementById("req-list");
@@ -530,7 +532,7 @@
         });
         list.innerHTML=html;
       }).catch(function(){
-        document.getElementById("req-list").innerHTML='<div class="w-empty">Cannot connect to Jellyseerr</div>';
+        document.getElementById("req-list").innerHTML='<div class="w-empty">Cannot connect to Seerr</div>';
       });
     }
     refreshRequests();

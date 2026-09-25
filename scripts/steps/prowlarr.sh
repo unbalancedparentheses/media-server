@@ -22,14 +22,14 @@ configure_prowlarr() {
     [ -n "$SONARR_ANIME_KEY" ] && add_prowlarr_app "Sonarr Anime" "Sonarr" "$SONARR_ANIME_INTERNAL" "$SONARR_ANIME_KEY" "$SONARR_CATS" "$ANIME_TAG_ID"
     [ -n "$RADARR_KEY" ]       && add_prowlarr_app "Radarr"       "Radarr" "$RADARR_INTERNAL"       "$RADARR_KEY"       "$RADARR_CATS"
 
-    # FlareSolverr
+    # Byparr speaks the FlareSolverr API, so it's added as a FlareSolverr proxy
     EXISTING_PROXIES=$(api GET "$PROWLARR_URL/api/v1/indexerProxy" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
-    if ! echo "$EXISTING_PROXIES" | grep -q "FlareSolverr"; then
+    if ! echo "$EXISTING_PROXIES" | grep -q "Byparr"; then
       api POST "$PROWLARR_URL/api/v1/indexerProxy" -H "$PH" -d '{
-        "name":"FlareSolverr","implementation":"FlareSolverr","configContract":"FlareSolverrSettings",
-        "fields":[{"name":"host","value":"http://flaresolverr:8191"},{"name":"requestTimeout","value":60}]
-      }' >/dev/null 2>&1 && ok "FlareSolverr connected" || warn "Could not add FlareSolverr"
-    else ok "FlareSolverr connected"; fi
+        "name":"Byparr","implementation":"FlareSolverr","configContract":"FlareSolverrSettings",
+        "fields":[{"name":"host","value":"'"$BYPARR_URL"'"},{"name":"requestTimeout","value":60}]
+      }' >/dev/null 2>&1 && ok "Byparr connected" || warn "Could not add Byparr"
+    else ok "Byparr connected"; fi
 
     # qBittorrent in Prowlarr
     EXISTING_DLC=$(api GET "$PROWLARR_URL/api/v1/downloadclient" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
@@ -37,7 +37,7 @@ configure_prowlarr() {
       PROWL_QBIT_JSON=$(jq -nc --arg u "$QBIT_USER" --arg p "$QBIT_PASS" \
         '{name:"qBittorrent",implementation:"QBittorrent",configContract:"QBittorrentSettings",
           enable:true,protocol:"torrent",priority:1,
-          fields:[{name:"host",value:"qbittorrent"},{name:"port",value:8081},
+          fields:[{name:"host",value:"localhost"},{name:"port",value:8081},
             {name:"username",value:$u},{name:"password",value:$p},
             {name:"category",value:"prowlarr"}]}')
       api POST "$PROWLARR_URL/api/v1/downloadclient" -H "$PH" -d "$PROWL_QBIT_JSON" >/dev/null 2>&1 && \

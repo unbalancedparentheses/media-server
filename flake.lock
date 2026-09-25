@@ -1,0 +1,45 @@
+{
+  "nodes": {
+    "byparr": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787049953,
+        "narHash": "sha256-coyi6e0dEy31gaiX8Mx+0pPZAI0eDNq1f+zrUqu3bVk=",
+        "owner": "ThePhaseless",
+        "repo": "Byparr",
+        "rev": "cb2a862386e92f141e8aa3b58f8532ef2fc36ed0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ThePhaseless",
+        "ref": "v3.0.4",
+        "repo": "Byparr",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1790238896,
+        "narHash": "sha256-ym4BG18Pu2awiJIehla1Lo9xiB2QYRcCzW3SB74gEBY=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "34ca302a9572963c02e385c056be37c85ff51b77",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "byparr": "byparr",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

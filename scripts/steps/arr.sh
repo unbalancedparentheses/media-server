@@ -26,7 +26,7 @@ configure_arr() {
     QBIT_DL_JSON=$(jq -nc --arg u "$QBIT_USER" --arg p "$QBIT_PASS" --arg cf "$cat_field" --arg cn "$name" \
       '{name:"qBittorrent",implementation:"QBittorrent",configContract:"QBittorrentSettings",
         enable:true,protocol:"torrent",priority:1,
-        fields:[{name:"host",value:"qbittorrent"},{name:"port",value:8081},
+        fields:[{name:"host",value:"localhost"},{name:"port",value:8081},
           {name:"username",value:$u},{name:"password",value:$p},
           {name:$cf,value:$cn}]}')
     api POST "$url/api/$api_ver/downloadclient" -H "$H" -d "$QBIT_DL_JSON" >/dev/null 2>&1 && \
@@ -37,7 +37,7 @@ configure_arr() {
     api POST "$url/api/$api_ver/downloadclient" -H "$H" -d '{
       "name":"SABnzbd","implementation":"Sabnzbd","configContract":"SabnzbdSettings",
       "enable":true,"protocol":"usenet","priority":2,
-      "fields":[{"name":"host","value":"sabnzbd"},{"name":"port","value":8080},
+      "fields":[{"name":"host","value":"localhost"},{"name":"port","value":8080},
         {"name":"apiKey","value":"'"$SABNZBD_KEY"'"},{"name":"'"$cat_field"'","value":"'"$name"'"}]
     }' >/dev/null 2>&1 && ok "SABnzbd connected (category: $name)" || warn "Could not add SABnzbd"
   elif [ -n "$SABNZBD_KEY" ]; then ok "SABnzbd connected"; fi
@@ -49,7 +49,7 @@ configure_arr() {
       api POST "$url/api/$api_ver/notification" -H "$H" -d '{
         "name":"Jellyfin","implementation":"MediaBrowser","configContract":"MediaBrowserSettings",
         "enable":true,"onDownload":true,"onUpgrade":true,"onRename":true,
-        "fields":[{"name":"host","value":"jellyfin"},{"name":"port","value":8096},
+        "fields":[{"name":"host","value":"localhost"},{"name":"port","value":8096},
           {"name":"useSsl","value":false},{"name":"apiKey","value":"'"$JELLYFIN_API_KEY"'"},
           {"name":"updateLibrary","value":true}]
       }' >/dev/null 2>&1 && ok "Jellyfin notification connected" || warn "Could not add Jellyfin notification"
@@ -88,12 +88,62 @@ enable_unknown_quality() {
 }
 
 configure_arrs() {
-  [ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "/media/tv"    "tvCategory"
-  [ -n "$SONARR_ANIME_KEY" ] && configure_arr "sonarr-anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "/media/anime" "tvCategory"
-  [ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "/media/movies" "movieCategory"
+  [ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "$TV_DIR"    "tvCategory"
+  [ -n "$SONARR_ANIME_KEY" ] && configure_arr "sonarr-anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$ANIME_DIR" "tvCategory"
+  [ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "$MOVIES_DIR" "movieCategory"
 
   [ -n "$SONARR_KEY" ]       && enable_unknown_quality "$SONARR_URL"       "$SONARR_KEY"
   [ -n "$SONARR_ANIME_KEY" ] && enable_unknown_quality "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
   [ -n "$RADARR_KEY" ]       && enable_unknown_quality "$RADARR_URL"       "$RADARR_KEY"
 }
 
+
+# Junk-release filters: create the TRaSH custom formats in custom-formats/<app>
+# (updating ones that already exist) and score them -10000 in every quality
+# profile. Profiles require a score of at least 0, so matches are rejected.
+JUNK_SCORE=-10000
+apply_junk_filters() {
+  local label="$1" url="$2" key="$3" app="$4" H f payload name existing id ids="" profiles
+  H="X-Api-Key: $key"
+  existing=$(api GET "$url/api/v3/customformat" -H "$H" || echo "[]")
+  for f in "$SCRIPT_DIR/custom-formats/$app"/*.json; do
+    # TRaSH's file format → the API's (fields as a list of name/value pairs)
+    payload=$(jq -c '{name, includeCustomFormatWhenRenaming: false,
+      specifications: [.specifications[] | {name, implementation, negate, required,
+        fields: [.fields | to_entries[] | {name: .key, value: .value}]}]}' "$f")
+    name=$(jq -r '.name' <<< "$payload")
+    id=$(jq -r --arg n "$name" '.[] | select(.name == $n) | .id' <<< "$existing" | head -1)
+    if [ -n "$id" ]; then
+      api PUT "$url/api/v3/customformat/$id" -H "$H" -d "$(jq -c --argjson id "$id" '. + {id: $id}' <<< "$payload")" >/dev/null || \
+        { warn "$label: could not update custom format $name"; continue; }
+    else
+      id=$(api POST "$url/api/v3/customformat" -H "$H" -d "$payload" | jq -r '.id // empty') || true
+      [ -n "$id" ] || { warn "$label: could not create custom format $name"; continue; }
+    fi
+    ids="$ids $id"
+  done
+  [ -n "$ids" ] || return 0
+
+  profiles=$(api GET "$url/api/v3/qualityprofile" -H "$H" || echo "[]")
+  local profile updated
+  while IFS= read -r profile; do
+    [ -n "$profile" ] || continue
+    updated=$(jq -c --arg ids "$ids" --argjson score "$JUNK_SCORE" '
+      ($ids | split(" ") | map(select(. != "") | tonumber)) as $junk
+      | [.formatItems[].format] as $have
+      | .formatItems = ([.formatItems[] | if (.format as $f | $junk | index($f)) then .score = $score else . end]
+          + [$junk[] | select(. as $j | $have | index($j) | not) | {format: ., score: $score}])' <<< "$profile")
+    [ "$updated" = "$profile" ] && continue
+    api PUT "$url/api/v3/qualityprofile/$(jq -r '.id' <<< "$profile")" -H "$H" -d "$updated" >/dev/null || \
+      warn "$label: could not update profile $(jq -r '.name' <<< "$profile")"
+  done < <(jq -c '.[]' <<< "$profiles")
+  ok "$label: junk filters on (BR-DISK, LQ, Upscaled, Extras$([ "$app" = radarr ] && echo ", 3D"))"
+}
+
+configure_junk_filters() {
+  info "Blocking junk releases..."
+  [ -n "$SONARR_KEY" ]       && apply_junk_filters "Sonarr"       "$SONARR_URL"       "$SONARR_KEY"       sonarr
+  [ -n "$SONARR_ANIME_KEY" ] && apply_junk_filters "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" sonarr
+  [ -n "$RADARR_KEY" ]       && apply_junk_filters "Radarr"       "$RADARR_URL"       "$RADARR_KEY"       radarr
+  return 0
+}

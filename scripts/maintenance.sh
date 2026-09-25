@@ -1,46 +1,37 @@
 #!/usr/bin/env bash
-# Non-setup modes: backup, restore, update, preflight, config check.
+# Non-setup modes: backup, restore, update, uninstall, status, logs,
+# restart, preflight and config check.
 
-# ─── Backup function ────────────────────────────────────────────
-# The archive holds ~/media/config plus the repo's .env and config.toml
-# (under repo-files/), which carry all credentials. Containers are stopped
-# while archiving so the SQLite files are consistent.
+# ─── Backup ──────────────────────────────────────────────────────
+# Archives ~/media/config and ~/media/config.toml. Services are stopped while
+# archiving so their SQLite databases are consistent, then started again.
 do_backup() {
-  [ ! -d "$CONFIG_DIR" ] && err "Config directory not found: $CONFIG_DIR"
+  [ -d "$CONFIG_DIR" ] || err "Config directory not found: $CONFIG_DIR"
   mkdir -p "$BACKUP_DIR"
 
-  local timestamp backup_file backup_size backup_count staging running=0 f
-  timestamp=$(date +%Y%m%d_%H%M%S)
-  backup_file="$BACKUP_DIR/media-server_${timestamp}.tar.gz"
-  staging="$TMPDIR_SETUP/backup"
+  local backup_file backup_size backup_count f was_running=false
+  backup_file="$BACKUP_DIR/media-server_$(date +%Y%m%d_%H%M%S).tar.gz"
 
   info "Backing up service configs..."
-
-  mkdir -p "$staging/repo-files"
-  for f in .env config.toml; do
-    [ -f "$SCRIPT_DIR/$f" ] && cp "$SCRIPT_DIR/$f" "$staging/repo-files/"
-  done
-
-  if has_cmd docker && docker info >/dev/null 2>&1 && has_docker_compose; then
-    running=$(dc ps -q --status running 2>/dev/null | grep -c . || true)
-  fi
-  if [ "$running" -gt 0 ]; then
-    info "Stopping containers for a consistent snapshot..."
-    dc stop >/dev/null 2>&1
+  if svc_loaded jellyfin; then
+    was_running=true
+    info "Stopping services for a consistent snapshot..."
+    stop_services
   fi
 
-  # Logs are large and re-created on start
+  # Logs and caches are large and recreated on start
   if ! (umask 077 && tar czf "$backup_file" \
-      --exclude='config/*/logs' --exclude='config/jellyfin/log' \
-      -C "$MEDIA_DIR" config -C "$staging" repo-files); then
-    [ "$running" -gt 0 ] && dc start >/dev/null 2>&1
+      --exclude='config/*/logs' --exclude='config/jellyfin/log' --exclude='config/jellyfin/cache' \
+      --exclude='config/nginx/temp' \
+      -C "$MEDIA_DIR" config "$(basename "$CONFIG_FILE")"); then
+    [ "$was_running" = "true" ] && resume_services
     rm -f "$backup_file"
     err "Backup failed"
   fi
 
-  if [ "$running" -gt 0 ]; then
-    dc start >/dev/null 2>&1
-    ok "Containers restarted"
+  if [ "$was_running" = "true" ]; then
+    resume_services
+    ok "Services restarted"
   fi
 
   backup_size=$(du -sh "$backup_file" | cut -f1)
@@ -61,252 +52,218 @@ do_backup() {
   echo ""
   echo "  Backups in $BACKUP_DIR ($backup_count total, keeping last $MAX_BACKUPS)"
   echo "  Backups contain passwords and API keys; keep a copy on another disk."
-  echo "  Restore with: ./setup.sh --restore $backup_file"
+  echo "  Restore with: nix run .#restore -- $backup_file"
   echo ""
 }
 
-# ─── Restore function ───────────────────────────────────────────
-# The current config directory and repo files are kept alongside with a
+# ─── Restore ─────────────────────────────────────────────────────
+# The current config directory and config.toml are kept alongside with a
 # .pre-restore-<timestamp> suffix rather than overwritten.
 do_restore() {
-  [ -z "$RESTORE_FILE" ] && err "Usage: ./setup.sh --restore <backup-file>"
-  [ ! -f "$RESTORE_FILE" ] && err "Backup file not found: $RESTORE_FILE"
-  ensure_compose_ready
+  [ -n "$RESTORE_FILE" ] || err "Usage: nix run .#restore -- <backup-file>"
+  [ -f "$RESTORE_FILE" ] || err "Backup file not found: $RESTORE_FILE"
 
-  local timestamp extract f
+  local timestamp extract
   timestamp=$(date +%Y%m%d_%H%M%S)
   extract="$MEDIA_DIR/.restore-$timestamp"
 
   info "Restoring from $RESTORE_FILE..."
   echo "  Current configs move to $CONFIG_DIR.pre-restore-$timestamp"
-  if [ "$NON_INTERACTIVE" = "true" ]; then
-    ok "Non-interactive mode: restore confirmation auto-accepted"
-  else
-    echo ""
+  if [ "$NON_INTERACTIVE" != "true" ]; then
+    local confirm
     read -r -p "  Continue? [y/N] " confirm
-    [ "$confirm" != "y" ] && [ "$confirm" != "Y" ] && { echo "  Aborted."; exit 0; }
+    [ "$confirm" = "y" ] || [ "$confirm" = "Y" ] || { echo "  Aborted."; exit 0; }
   fi
 
-  info "Extracting backup..."
   mkdir -p "$extract"
   tar xzf "$RESTORE_FILE" -C "$extract"
   [ -d "$extract/config" ] || { rm -rf "$extract"; err "Not a media-server backup (no config/ inside)"; }
 
-  info "Stopping containers..."
-  dc down 2>/dev/null || true
+  info "Stopping services..."
+  stop_services
 
   [ -d "$CONFIG_DIR" ] && mv "$CONFIG_DIR" "$CONFIG_DIR.pre-restore-$timestamp"
   mv "$extract/config" "$CONFIG_DIR"
+  if [ -f "$extract/$(basename "$CONFIG_FILE")" ]; then
+    [ -f "$CONFIG_FILE" ] && mv "$CONFIG_FILE" "$CONFIG_FILE.pre-restore-$timestamp"
+    mv "$extract/$(basename "$CONFIG_FILE")" "$CONFIG_FILE"
+  fi
+  rm -rf "$extract"
   ok "Configs restored"
 
-  if [ -d "$extract/repo-files" ]; then
-    for f in .env config.toml; do
-      [ -f "$extract/repo-files/$f" ] || continue
-      [ -f "$SCRIPT_DIR/$f" ] && mv "$SCRIPT_DIR/$f" "$SCRIPT_DIR/$f.pre-restore-$timestamp"
-      mv "$extract/repo-files/$f" "$SCRIPT_DIR/$f"
-      ok "Restored $f"
-    done
-  else
-    warn "Backup predates .env/config.toml backups; keeping the current ones"
-  fi
-  # Directories left out of the backup (logs, caches); created here so
-  # Docker doesn't create them as root
-  create_directories >/dev/null
-
-  rm -rf "$extract"
-
-  info "Starting containers..."
-  dc up -d
-  ok "All containers started"
-
   echo ""
-  echo "  Restore complete. Run ./setup.sh to re-apply config, or ./setup.sh --test to verify."
+  echo "  Now run 'nix run .#install' to start the services with the restored configs."
   echo "  Previous configs: $CONFIG_DIR.pre-restore-$timestamp (delete once you're happy)"
   echo ""
 }
 
-# ─── Update function ────────────────────────────────────────────
-# Image versions are pinned in docker-compose.yml, so updating means pulling
-# this repo and re-running setup, which pulls the new images and applies any
-# config changes that came with them.
+# ─── Update ──────────────────────────────────────────────────────
+# Versions are pinned in flake.lock, so updating means pulling this repo and
+# re-running setup, which rewrites the agents to the new Nix store paths.
 do_update() {
-  [ ! -f "$COMPOSE_FILE" ] && err "docker-compose.yml not found"
-  ensure_compose_ready
+  local repo="${MEDIA_SERVER_REPO:-$PWD}"
+  [ -f "$repo/flake.nix" ] && git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || \
+    err "Run this from your media-server checkout (or set MEDIA_SERVER_REPO)"
 
-  info "Creating pre-update backup..."
-  do_backup
-
-  info "Updating media-server..."
-  if git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    if [ -n "$(git -C "$SCRIPT_DIR" status --porcelain --untracked-files=no)" ]; then
-      warn "Local changes in $SCRIPT_DIR; not pulling (commit or stash them to update)"
-    elif git -C "$SCRIPT_DIR" pull --ff-only; then
-      ok "Repository updated"
-    else
-      warn "git pull failed; continuing with the current version"
-    fi
-  else
-    warn "$SCRIPT_DIR is not a git checkout; skipping repository update"
+  if [ -d "$CONFIG_DIR" ]; then
+    info "Creating pre-update backup..."
+    do_backup
   fi
 
-  info "Pulling images..."
-  dc pull
+  info "Updating $repo..."
+  if [ -n "$(git -C "$repo" status --porcelain --untracked-files=no)" ]; then
+    warn "Local changes in $repo; not pulling (commit or stash them to update)"
+  else
+    git -C "$repo" pull --ff-only || warn "git pull failed; continuing with the current version"
+  fi
 
   info "Re-running setup..."
   local setup_args=()
   [ "$NON_INTERACTIVE" = "true" ] && setup_args+=(--yes)
-  "$SCRIPT_DIR/setup.sh" ${setup_args[@]+"${setup_args[@]}"}
-
-  local old_images
-  old_images=$(docker images --filter "dangling=true" -q 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$old_images" -gt 0 ]; then
-    info "Cleaning up $old_images old image(s)..."
-    docker image prune -f >/dev/null 2>&1
-    ok "Old images removed"
-  fi
+  exec nix run "path:$repo#install" -- ${setup_args[@]+"${setup_args[@]}"}
 }
 
-do_preflight() {
-  local failed=0
-  local config_json=""
-  local value=""
+# ─── Uninstall ───────────────────────────────────────────────────
+# Stops the services and removes their launchd agents and Nix GC root.
+# --purge also deletes configs, logs, state and config.toml. The library
+# (movies, tv, anime), downloads and backups are never deleted.
+do_uninstall() {
+  info "Stopping and removing services..."
+  local plist name
+  for plist in "$HOME/Library/LaunchAgents/$LABEL_PREFIX".*.plist; do
+    [ -e "$plist" ] || continue
+    name=$(basename "$plist" .plist)
+    name="${name#"$LABEL_PREFIX".}"
+    svc_stop "$name"
+    rm -f "$plist"
+    ok "$name removed"
+  done
+  rm -f "$STATE_DIR/gcroot"
 
+  remove_tailscale_serve
+
+  if [ "$PURGE" = "true" ]; then
+    echo ""
+    echo "  --purge deletes all service settings, accounts, watch history and API"
+    echo "  keys: $CONFIG_DIR, $CONFIG_FILE, $LOG_DIR, $STATE_DIR,"
+    echo "  and Byparr's browser in ~/Library/Caches/invisible-playwright."
+    if [ "$NON_INTERACTIVE" != "true" ]; then
+      local confirm
+      read -r -p "  Delete them? [y/N] " confirm
+      [ "$confirm" = "y" ] || [ "$confirm" = "Y" ] || { echo "  Kept configs."; PURGE=false; }
+    fi
+  fi
+  if [ "$PURGE" = "true" ]; then
+    rm -rf "$CONFIG_DIR" "$LOG_DIR" "$STATE_DIR" "$CONFIG_FILE" "$HOME/Library/Caches/invisible-playwright"
+    ok "Configs, logs and state deleted"
+  fi
+
+  echo ""
+  echo "  Uninstalled. Not touched:"
+  echo "    Library and downloads: $MOVIES_DIR, $TV_DIR, $ANIME_DIR, $DOWNLOADS_DIR"
+  echo "    Backups: $BACKUP_DIR"
+  [ "$PURGE" = "true" ] || echo "    Configs (reinstall picks them up): $CONFIG_DIR, $CONFIG_FILE"
+  echo "  Free the Nix store space with: nix-collect-garbage"
+  echo ""
+}
+
+# Undo the `tailscale serve` entries setup adds: only HTTPS ports whose
+# handler proxies to this stack (dashboard, Jellyfin, Seerr on 127.0.0.1)
+remove_tailscale_serve() {
+  local ts_cli port dash="${DASHBOARD_PORT:-80}"
+  ts_cli="$(detect_tailscale_cli)"
+  [ -n "$ts_cli" ] || return 0
+  [ -f "$CONFIG_FILE" ] && dash=$(load_config_json "$CONFIG_FILE" | jq -r '.network.dashboard_port // 80' 2>/dev/null || echo 80)
+  for port in $("$ts_cli" serve status --json 2>/dev/null | jq -r --arg dash "$dash" '
+      {"443": "http://127.0.0.1:\($dash)", "8096": "http://127.0.0.1:8096", "5055": "http://127.0.0.1:5055"} as $ours
+      | .Web // {} | to_entries[]
+      | (.key | split(":") | last) as $port
+      | select($ours[$port] != null and any(.value.Handlers[]?; .Proxy == $ours[$port]))
+      | $port' 2>/dev/null || true); do
+    run_timeout 10 "$ts_cli" serve --https="$port" off </dev/null >/dev/null 2>&1 && \
+      ok "Tailscale HTTPS :$port removed" || true
+  done
+  return 0
+}
+
+# ─── Status / logs / restart ─────────────────────────────────────
+do_status() {
+  local name state
+  info "Services"
+  for name in $SERVICE_NAMES; do
+    state=$(svc_state "$name")
+    case "$state" in
+      running*) ok "$(printf '%-13s %s' "$name" "$state")" ;;
+      *) warn "$(printf '%-13s %s' "$name" "$state")" ;;
+    esac
+  done
+  info "Health"
+  local svc_name svc_url code
+  while IFS='|' read -r svc_name svc_url; do
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 "$svc_url" 2>/dev/null || true)
+    case "$code" in
+      2*|3*) ok "$(printf '%-13s %s' "$svc_name" "$svc_url")" ;;
+      *) warn "$(printf '%-13s %s (HTTP %s)' "$svc_name" "$svc_url" "${code:-none}")" ;;
+    esac
+  done <<< "$SERVICE_HEALTH_ENDPOINTS"
+  echo ""
+  echo "  Logs: $LOG_DIR (nix run .#logs -- <service>)"
+}
+
+do_logs() {
+  local name="$1"
+  printf '%s\n' "$SERVICE_NAMES" | grep -qx "$name" || \
+    err "Unknown service '$name'. One of: $(printf '%s ' $SERVICE_NAMES)"
+  [ -f "$LOG_DIR/$name.log" ] || err "No log yet: $LOG_DIR/$name.log"
+  exec tail -n 100 -F "$LOG_DIR/$name.log"
+}
+
+do_restart() {
+  local name="$1" names
+  if [ -n "$name" ]; then
+    printf '%s\n' "$SERVICE_NAMES" | grep -qx "$name" || \
+      err "Unknown service '$name'. One of: $(printf '%s ' $SERVICE_NAMES)"
+    names="$name"
+  else
+    names="$SERVICE_NAMES"
+  fi
+  for name in $names; do
+    if svc_restart "$name"; then ok "$name restarted"; else warn "$name is not installed"; fi
+  done
+}
+
+# ─── Preflight / config check ────────────────────────────────────
+do_preflight() {
+  local failed=0 cmd
   pf_ok() { printf "\033[1;32m[OK]\033[0m %s\n" "$*"; }
   pf_fail() { printf "\033[1;31m[FAIL]\033[0m %s\n" "$*"; failed=1; }
-  pf_warn() { printf "\033[1;33m[WARN]\033[0m %s\n" "$*"; }
-
-  preflight_check_cmd() {
-    local name="$1"
-    if has_cmd "$name"; then
-      pf_ok "$name installed"
-    else
-      pf_fail "$name is missing"
-    fi
-  }
 
   echo "Preflight checks for media-server"
   echo ""
-
-  preflight_check_cmd bash
-  preflight_check_cmd curl
-  preflight_check_cmd jq
-  preflight_check_cmd python3
-
-  if has_cmd docker; then
-    pf_ok "docker installed"
-    if docker info >/dev/null 2>&1; then
-      pf_ok "docker daemon is running"
-      if has_docker_compose; then
-        pf_ok "docker compose plugin available"
-      else
-        pf_fail "docker compose plugin is missing"
-      fi
-    else
-      pf_fail "docker is installed but daemon is not running"
-    fi
-  else
-    pf_fail "docker is missing"
-  fi
-
+  [ "$(uname -s)" = "Darwin" ] && pf_ok "macOS" || pf_fail "macOS is required (services run as launchd agents)"
+  for cmd in curl jq python3 openssl launchctl; do
+    has_cmd "$cmd" && pf_ok "$cmd" || pf_fail "$cmd is missing"
+  done
+  [ -f "${MEDIA_SERVICES_JSON:-}" ] && pf_ok "Nix service manifest" || pf_fail "not running through Nix (use 'nix run .#install')"
   if [ -f "$CONFIG_FILE" ]; then
-    pf_ok "config.toml exists"
-    if has_cmd jq; then
-      if config_json=$(try_load_config_json "$CONFIG_FILE" 2>/dev/null); then
-        pf_ok "config.toml parses as valid TOML"
-        for path in \
-          ".jellyfin.username" \
-          ".jellyfin.password" \
-          ".qbittorrent.username" \
-          ".qbittorrent.password" \
-          ".downloads.complete" \
-          ".downloads.incomplete" \
-          ".quality.sonarr_profile" \
-          ".quality.sonarr_anime_profile" \
-          ".quality.radarr_profile"; do
-          value=$(echo "$config_json" | jq -r "$path // empty")
-          if [ -n "$value" ] && [ "$value" != "null" ]; then
-            pf_ok "required config present: $path"
-          else
-            pf_fail "required config missing: $path"
-          fi
-        done
-
-        value=$(echo "$config_json" | jq -r '.downloads.complete // empty')
-        [[ "$value" == /* ]] && pf_ok "downloads.complete is absolute" || pf_fail "downloads.complete must be an absolute path"
-        value=$(echo "$config_json" | jq -r '.downloads.incomplete // empty')
-        [[ "$value" == /* ]] && pf_ok "downloads.incomplete is absolute" || pf_fail "downloads.incomplete must be an absolute path"
-        value=$(echo "$config_json" | jq -r '.downloads.seeding_ratio // empty')
-        is_non_negative_number "$value" && pf_ok "downloads.seeding_ratio is valid" || pf_fail "downloads.seeding_ratio must be a non-negative number"
-        value=$(echo "$config_json" | jq -r '.downloads.seeding_time_minutes // empty')
-        is_non_negative_int "$value" && pf_ok "downloads.seeding_time_minutes is valid" || pf_fail "downloads.seeding_time_minutes must be a non-negative integer"
-        value=$(echo "$config_json" | jq -r "$TIMEZONE_PATH // empty")
-        [ -n "$value" ] && pf_ok "timezone is set" || pf_fail "timezone must be set"
-      else
-        pf_fail "config.toml is invalid TOML"
-      fi
+    if (CONFIG_JSON=$(load_config_json "$CONFIG_FILE") && validate_required_config && validate_config_semantics) >/dev/null 2>&1; then
+      pf_ok "$CONFIG_FILE is valid"
     else
-      pf_warn "skipping config content validation (jq unavailable)"
+      pf_fail "$CONFIG_FILE is invalid (run with --check-config for details)"
     fi
   else
-    pf_warn "config.toml is missing (copy config.toml.example first)"
-    failed=1
+    pf_ok "no $CONFIG_FILE yet (setup creates it)"
   fi
-
-  if [ -f "$COMPOSE_FILE" ]; then
-    pf_ok "docker-compose.yml exists"
-    if has_cmd docker && docker info >/dev/null 2>&1 && has_docker_compose; then
-      if [ -f "$OVERRIDE_FILE" ]; then
-        docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE_FILE" config -q >/dev/null 2>&1 && \
-          pf_ok "docker compose config is valid (base + override)" || pf_fail "docker compose config is invalid"
-      else
-        docker compose -f "$COMPOSE_FILE" config -q >/dev/null 2>&1 && \
-          pf_ok "docker compose config is valid" || pf_fail "docker compose config is invalid"
-      fi
-    else
-      pf_warn "skipping docker compose validation (docker/compose unavailable)"
-    fi
-  else
-    pf_fail "docker-compose.yml is missing"
-  fi
-
   echo ""
-  if [ "$failed" -eq 0 ]; then
-    pf_ok "preflight passed"
-  else
-    pf_fail "preflight failed"
-  fi
+  if [ "$failed" -eq 0 ]; then pf_ok "preflight passed"; else pf_fail "preflight failed"; fi
   return "$failed"
 }
+
 do_check_config() {
-  require_cmd jq
-  [ -f "$CONFIG_FILE" ] || err "config.toml not found"
+  [ -f "$CONFIG_FILE" ] || err "$CONFIG_FILE not found"
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
   validate_required_config
   validate_config_semantics
-
   info "Config validation passed"
-  ok "Credentials and required fields are present"
-  ok "Download paths and numeric values are valid"
-  ok "Timezone is set"
-}
-smoke_check_generated_files() {
-  local missing=0
-  local f
-
-  info "Running generated-file smoke checks..."
-  for f in "$SCRIPT_DIR/.env" "$SCRIPT_DIR/docker-compose.override.yml"; do
-    if [ -s "$f" ]; then
-      ok "Present: $f"
-    else
-      warn "Missing/empty: $f"
-      missing=1
-    fi
-  done
-
-  if [ "$missing" -ne 0 ]; then
-    err "Generated-file smoke checks failed"
-  fi
-
-  dc config -q >/dev/null 2>&1 || err "Docker Compose config validation failed"
-  ok "Docker Compose config validates"
+  ok "Credentials, quality profiles, network settings and timezone are valid"
 }

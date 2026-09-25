@@ -1,250 +1,139 @@
 # media-server
 
-One-command self-hosted media server. Request a movie or TV show and it's automatically downloaded, organized, subtitled, and ready to stream — like running your own Netflix.
+One-command self-hosted media server for macOS. Request a movie or TV show and it's automatically downloaded, organized, subtitled, and ready to stream in a Netflix-style app on every screen.
 
 ```
 bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)
 ```
+
+Everything runs natively from [Nix](https://nixos.org): no Docker, no VM. Each service is a launchd agent, and `nix run .#uninstall` removes them all.
 
 ## How it works
 
 ```
-You ──> Jellyseerr (request) ──> Sonarr / Radarr ──> Prowlarr ──> Indexers
-                                        │
-                            qBittorrent / SABnzbd
-                              (through VPN tunnel)
-                                        │
-                                 download completes
-                                        │
-                                 Bazarr (subtitles)
-                                        │
-                               Jellyfin (stream it)
+You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr ──> Indexers
+                                             │                (Byparr for Cloudflare)
+                                   qBittorrent / SABnzbd
+                                             │
+                                      download completes
+                                             │
+                                      Bazarr (subtitles)
+                                             │
+                                  Jellyfin ──> Moonfin (watch it)
 ```
 
-1. Request a movie or show through **Jellyseerr** (Netflix-like browse and request UI)
-2. **Sonarr** (TV/anime) or **Radarr** (movies) searches indexers via **Prowlarr**
-3. Best match is sent to **qBittorrent** (through VPN) or **SABnzbd** (Usenet)
-4. File is downloaded, renamed, and added to your **Jellyfin** library
-5. **Bazarr** fetches subtitles automatically (English + Spanish by default)
+1. Browse and request in **Moonfin** (or **Seerr** directly)
+2. **Sonarr** (TV/anime) or **Radarr** (movies) searches indexers via **Prowlarr**, skipping junk releases
+3. The best match goes to **qBittorrent** or **SABnzbd** (Usenet)
+4. The file is downloaded, renamed, and added to your **Jellyfin** library
+5. **Bazarr** fetches subtitles (English + Spanish by default)
 
 ## Quick start
 
-### One-liner
-
-```
-bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)
-```
-
-Clones to `~/media-server` and runs full setup non-interactively: passwords are generated, printed once, and saved in `config.toml`.
-
-### Manual
+Needs macOS and [Nix](https://determinate.systems/nix-installer/) (`curl -fsSL https://install.determinate.systems/nix | sh -s -- install`).
 
 ```bash
 git clone https://github.com/unbalancedparentheses/media-server.git
 cd media-server
-cp config.toml.example config.toml  # optional — setup creates one if missing
-./setup.sh
+nix run .#install        # or ./setup.sh
 ```
 
-### What setup.sh does
+The first run builds a few services that aren't prebuilt for macOS (Seerr, Sonarr) and downloads Byparr's browser, so it takes a while. Setup asks for a Jellyfin and a qBittorrent password (`--yes` generates them), then:
 
-Fully idempotent — safe to re-run at any time.
+1. Writes each service's config (ports, API keys, passwords) under `~/media/config`
+2. Starts every service as a launchd agent (`~/Library/LaunchAgents/org.media-server.*`)
+3. Wires them together: download clients, indexers, subtitles, Seerr, Jellyfin libraries
+4. Installs the Moonbase plugin so Jellyfin serves the Moonfin web app and connects it to Seerr
+5. Blocks junk releases in Sonarr/Radarr
+6. Runs the verification checks
 
-1. Installs Docker + dependencies
-2. Prompts for Jellyfin and qBittorrent credentials (or generates them with `--yes`)
-3. Creates `~/media/` directory structure (libraries, downloads, configs)
-4. Starts 25+ containers via Docker Compose
-5. Wires every service together (API keys, download clients, indexers, subtitles)
-6. Sets authentication on all services (Jellyfin credentials shared across the stack)
-7. Adds `.media.local` domains to `/etc/hosts`
-8. Runs 90+ verification checks
+Re-running is safe; it only changes what differs.
+
+### Commands
 
 ```bash
-./setup.sh                      # Full setup (interactive)
-./setup.sh --yes                # Full setup (non-interactive, generates passwords)
-./setup.sh --test               # Run verification checks only
-./setup.sh --update             # Backup, git pull, pull pinned images, re-run setup
-./setup.sh --backup             # Backup configs, .env and config.toml
-./setup.sh --restore <file>     # Restore from backup
-./setup.sh --preflight          # Check prerequisites + config
-./setup.sh --check-config       # Validate config.toml only
-./setup.sh --dry-run            # Preview actions without changing anything
+nix run .#install                 # Full setup (re-run any time)
+nix run .#status                  # Is everything running and healthy?
+nix run .#logs -- sonarr          # Follow a service's log (~/media/logs)
+nix run .#restart [-- sonarr]     # Restart one or all services
+nix run .#test                    # Run the verification checks
+nix run .#backup                  # Back up configs and config.toml
+nix run .#restore -- <file>       # Restore a backup
+nix run .#update                  # Back up, git pull, re-run setup
+nix run .#uninstall               # Stop and remove all services
+nix run .#uninstall -- --purge    # ...and delete configs, logs and state
 ```
+
+## Watching
+
+**[Moonfin](https://github.com/Moonfin-Client/Moonfin-Core)** is the app for everyone who watches: one Netflix-style interface with profiles, a featured banner, and requests built in (via Seerr).
+
+- **Browser:** `http://<mac-ip>:8096/Moonfin/Web/` (installable as an app)
+- **Phones, tablets, Apple TV, Android TV, Fire TV:** install Moonfin from the App Store, Google Play or Amazon, and point it at `http://<mac-ip>:8096`
+- **LG/Samsung TVs:** Moonfin can be sideloaded; Litefin is another option
+
+Log in with a Jellyfin user. Create one per family member in Jellyfin (Dashboard → Users); Moonfin shows them as profiles.
 
 ## Services
 
-### Core — streaming and requests
+| Service | Port | What it does |
+|---------|------|-------------|
+| **[Jellyfin](https://jellyfin.org)** + **[Moonbase](https://github.com/Moonfin-Client/Plugin)** | 8096 | Media server; Moonbase serves the Moonfin web app and links it to Seerr |
+| **[Seerr](https://github.com/seerr-team/seerr)** | 5055 | Browse and request movies and shows |
+| **[Sonarr](https://sonarr.tv)** | 8989 | Downloads and organizes TV shows |
+| **Sonarr Anime** | 8990 | Second Sonarr with anime indexers (Nyaa, SubsPlease, Mikan, Bangumi) |
+| **[Radarr](https://radarr.video)** | 7878 | Downloads and organizes movies |
+| **[Prowlarr](https://prowlarr.com)** | 9696 | Manages indexers, syncs them to Sonarr/Radarr |
+| **[Bazarr](https://www.bazarr.media)** | 6767 | Subtitles |
+| **[qBittorrent](https://www.qbittorrent.org)** | 8081 | Torrent client |
+| **[SABnzbd](https://sabnzbd.org)** | 8080 | Usenet client (optional; needs a paid provider) |
+| **[Byparr](https://github.com/ThePhaseless/Byparr)** | 8191 (local only) | Gets past Cloudflare on protected indexers |
+| **[Unpackerr](https://unpackerr.zip)** | — | Extracts archived downloads for import |
+| **[nginx](https://nginx.org)** | 80 | Dashboard with live download/calendar widgets |
 
-| Service | What it does |
-|---------|-------------|
-| **[Jellyfin](https://jellyfin.org)** | Stream your library — browser, iOS, Android, Apple TV, Fire TV, Roku, Chromecast |
-| **[Jellyseerr](https://github.com/Fallenbagel/jellyseerr)** | Request movies and shows — browse trending, search, track requests |
-
-### TV, anime, and movies
-
-| Service | What it does |
-|---------|-------------|
-| **[Sonarr](https://sonarr.tv)** | Automatically downloads and organizes TV shows |
-| **[Sonarr Anime](https://sonarr.tv)** | Dedicated instance with anime indexers (Nyaa, SubsPlease, Mikan, Bangumi) |
-| **[Radarr](https://radarr.video)** | Automatically downloads and organizes movies |
-| **[Bazarr](https://www.bazarr.media)** | Automatic subtitle downloads for everything |
-| **[Prowlarr](https://prowlarr.com)** | Manages all your indexers in one place, syncs to Sonarr/Radarr |
-
-### Downloads
-
-| Service | What it does |
-|---------|-------------|
-| **[qBittorrent](https://www.qbittorrent.org)** | Torrent client, routed through VPN |
-| **[SABnzbd](https://sabnzbd.org)** | Usenet client (optional — requires a paid provider) |
-| **[Gluetun](https://github.com/qdm12/gluetun)** | VPN tunnel for torrent traffic with kill switch (optional) |
-| **[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)** | Bypasses Cloudflare on protected indexers |
-| **[Unpackerr](https://unpackerr.zip)** | Extracts compressed downloads so Sonarr/Radarr can import them |
-
-### Also included
-
-| Service | What it does |
-|---------|-------------|
-| **[Nginx](https://nginx.org)** | Reverse proxy — `.media.local` domains + landing page with live widgets |
-| **[Dozzle](https://dozzle.dev)** | Live Docker log viewer (SSE streaming) |
-| **[Tailscale](https://tailscale.com)** | Mesh VPN for remote access (optional) |
+The dashboard at `http://localhost` (or `http://<mac-ip>`) links to everything; `admin.html` lists the admin UIs.
 
 ## Configuration
 
-Edit `config.toml` before running setup, or let setup prompt you interactively. See `config.toml.example` for all options.
+`~/media/config.toml` (created from `config.toml.example` on first run). Re-run `nix run .#install` after editing.
 
-### Credentials
+- **Credentials:** `[jellyfin]` and `[qbittorrent]`. The Jellyfin login is shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr and SABnzbd.
+- **Quality:** `[quality]` picks the Sonarr/Radarr profile Seerr requests use (built-in profiles: `HD-1080p`, `Ultra-HD`, …).
+- **Junk releases:** BR-DISK images, known-bad release groups, upscales, extras-only and 3D releases are scored -10000 in every profile, so they're never grabbed. The rules are TRaSH Guides' custom formats in [`custom-formats/`](custom-formats/README.md).
+- **Subtitles:** `[subtitles]` languages and providers; some providers need a free account set in Bazarr.
+- **Indexers:** `[[indexers]]` public torrent and anime indexers; `flaresolverr = true` routes one through Byparr, `anime = true` sends it only to Sonarr Anime.
+- **Usenet:** `[[usenet_providers]]` for SABnzbd.
+- **Network:** `[network] admin_bind` restricts where the admin UIs listen (`"127.0.0.1"` = this Mac only, or your Tailscale IP); `dashboard_port` moves the dashboard off port 80.
 
-```toml
-[jellyfin]
-username = "admin"
-password = "changeme"
+There's no built-in VPN. If you use one, run its Mac app; torrent traffic follows the system connection.
 
-[qbittorrent]
-username = "admin"
-password = "changeme"
-```
+## Access and security
 
-Setup prompts for real passwords on first run. With `--yes`, secure random passwords are generated automatically. Jellyfin credentials are shared across most services (Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd).
+- **Remote access:** if [Tailscale](https://tailscale.com) is installed and signed in, setup publishes Jellyfin/Moonfin (`:8096`), Seerr (`:5055`) and the dashboard over HTTPS on your tailnet. Invite family to the tailnet to watch away from home.
+- **Logins:** every admin UI requires a login.
+- **qBittorrent:** it skips its login only for requests from this Mac, which is how the dashboard reads it. Requests from the network log in.
+- **Dashboard widgets:** they go through nginx, which adds the API keys, but only for the read-only endpoints the widgets use, and only for `GET`.
+- **Byparr:** it has no login, so it only listens on `127.0.0.1`.
+- **Firewall prompts:** with the macOS firewall on, the first start may ask whether each service may accept incoming connections. Allow Jellyfin and Seerr at least.
+- **Sleep:** the Mac must be awake to serve. Enable System Settings → Energy → "Prevent automatic sleeping when the display is off".
 
-### Quality profiles
+## Updates, backups, uninstall
 
-```toml
-[quality]
-sonarr_profile = "HD-1080p"
-sonarr_anime_profile = "HD-1080p"
-radarr_profile = "HD-1080p"
-```
-
-The quality profiles a fresh Sonarr/Radarr ships with; Jellyseerr sends requests with them. `config.toml.example` lists the supported names.
-
-### Subtitles
-
-```toml
-[subtitles]
-languages = ["en", "es"]
-providers = ["opensubtitlescom", "podnapisi", "yifysubtitles"]
-```
-
-English always downloaded, additional languages when available. Nine providers pre-configured — some need free accounts (OpenSubtitles, Addic7ed), configurable in the Bazarr UI after setup.
-
-### Indexers
-
-Pre-configured with public torrent indexers and anime indexers:
-
-```toml
-[[indexers]]
-name = "1337x"
-definitionName = "1337x"
-enable = true
-flaresolverr = true      # needs FlareSolverr for Cloudflare bypass
-
-[[indexers]]
-name = "Nyaa.si"
-definitionName = "nyaasi"
-enable = true
-anime = true             # routes to Sonarr Anime only
-```
-
-Included by default: 1337x, EZTV, The Pirate Bay, YTS, Knaben, LimeTorrents, BitSearch, MegaPeer, Nyaa.si, SubsPlease, Mikan, Bangumi Moe. Add private trackers or usenet indexers as needed.
-
-### VPN
-
-```toml
-[vpn]
-enable = false
-provider = "mullvad"
-type = "wireguard"
-wireguard_private_key = ""
-wireguard_addresses = ""
-server_countries = "Switzerland"
-```
-
-Routes torrent traffic through [Gluetun](https://github.com/qdm12/gluetun). 30+ providers supported (Mullvad, ProtonVPN, NordVPN, Surfshark, etc.). Kill switch built in. Optional — disabled by default.
-
-### Usenet
-
-```toml
-[[usenet_providers]]
-name = "usenet"
-enable = false
-host = ""
-port = 563
-ssl = true
-username = ""
-password = ""
-connections = 20
-```
-
-Optional. Faster and more private than torrents, but requires a paid Usenet provider (Newshosting, Eweka, Frugal Usenet, etc.).
-
-## Access
-
-All services are available at `http://<service>.media.local` after setup.
-
-| Service | URL |
-|---------|-----|
-| Landing page | http://media.local |
-| Jellyfin | http://jellyfin.media.local |
-| Jellyseerr | http://jellyseerr.media.local |
-| Sonarr | http://sonarr.media.local |
-| Sonarr Anime | http://sonarr-anime.media.local |
-| Radarr | http://radarr.media.local |
-| Prowlarr | http://prowlarr.media.local |
-| Bazarr | http://bazarr.media.local |
-| qBittorrent | http://qbittorrent.media.local |
-| SABnzbd | http://sabnzbd.media.local |
-| Dozzle | http://dozzle.media.local |
-
-The `.media.local` names are added to `/etc/hosts` on the server only. From other devices, use the dashboard at `http://<server-ip>` (its cards link to each service's port) or Tailscale.
-
-For remote access, [Tailscale](https://tailscale.com) provides mesh VPN with automatic HTTPS. Share with family/friends by inviting them to your tailnet.
-
-## Security
-
-- **Logins.** Every admin UI requires a login. The *arr apps, Bazarr and SABnzbd use the Jellyfin credentials; Dozzle has no login of its own, so nginx serves it (on its usual port) behind basic auth with the same credentials.
-- **Dashboard widgets.** The dashboard's widgets go through nginx, which adds the API keys. Only the read-only endpoints the widgets use are exposed, and only for `GET`, so the dashboard can't be used to change or delete anything.
-- **qBittorrent.** qBittorrent skips its login only for nginx's fixed container address; everything else, including the *arr apps, logs in.
-- **Admin ports.** They listen on every interface by default. To keep them off the LAN, set `admin_bind` in `[network]`: `"127.0.0.1"` for this machine only, or your Tailscale IP for Tailscale only. Jellyfin, Jellyseerr and the dashboard stay reachable either way.
-- **Backups.** They contain every password and API key (`chmod 600`). Keep a copy on another disk.
-
-## Updates and backups
-
-Image versions are pinned in `docker-compose.yml` (Renovate opens PRs to bump them), so a stack doesn't change under you on a random restart. `./setup.sh --update` backs up, pulls this repo, pulls the pinned images and re-runs setup to apply any config changes.
-
-`./setup.sh --backup` briefly stops the containers so SQLite files are consistent, then archives `~/media/config` together with `.env` and `config.toml`, which carry the credentials needed to restore on a new machine. `--restore` keeps the previous config as `config.pre-restore-<timestamp>`.
+- **Updates:** versions are pinned in `flake.lock`; Renovate opens a weekly PR to refresh it. `nix run .#update` backs up, pulls this repo and re-runs setup, which points the services at the new versions.
+- **Backups:** `nix run .#backup` stops the services for a consistent snapshot of `~/media/config` and `config.toml`, then starts them again. It keeps the last 10 in `~/media/backups`. Backups contain passwords and API keys, so keep a copy on another disk.
+- **Uninstall:** `nix run .#uninstall` stops the services and removes their launchd agents, the Tailscale HTTPS entries setup added, and the Nix GC root. `--purge` also deletes configs, logs and state (including Byparr's browser in `~/Library/Caches/invisible-playwright`). Your library, downloads and backups are never deleted. Run `nix-collect-garbage` afterwards to free the Nix store.
 
 ## Directory structure
 
 ```
 ~/media/
-├── movies/              # Radarr
-├── tv/                  # Sonarr
-├── anime/               # Sonarr Anime
-├── downloads/
-│   ├── torrents/
-│   └── usenet/
-├── config/              # Per-service config directories
-└── backups/             # Auto-pruned, keeps last 10
+├── config.toml          # Your settings
+├── movies/  tv/  anime/ # Library
+├── downloads/           # torrents/ and usenet/
+├── config/              # Per-service configs and databases
+├── logs/                # One log per service
+├── backups/             # Keeps the last 10
+└── .state/              # Byparr's venv, Nix GC root
 ```
 
 ## Extending
@@ -252,8 +141,5 @@ Image versions are pinned in `docker-compose.yml` (Renovate opens PRs to bump th
 Some things you could add alongside this stack:
 
 - **[Kavita](https://www.kavitareader.com)** — ebooks, comics, manga
-- **[Readarr](https://readarr.com)** — book/audiobook automation
 - **[Audiobookshelf](https://www.audiobookshelf.org)** — audiobook and podcast server
-- **[Mylar3](https://github.com/mylar3/mylar3)** — comic book automation
-- **[TubeArchivist](https://www.tubearchivist.com)** — YouTube archive
 - **[Autobrr](https://autobrr.com)** — IRC/RSS automation for private trackers

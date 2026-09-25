@@ -14,8 +14,6 @@ username = "admin"
 password = "changeme"
 
 [downloads]
-complete = "/downloads/torrents/complete"
-incomplete = "/downloads/torrents/incomplete"
 seeding_ratio = 2
 seeding_time_minutes = 10080
 
@@ -36,9 +34,10 @@ providers = [
 ]
 
 # ─── Quality ───────────────────────────────────────────────────
-# The profiles a fresh Sonarr/Radarr ships with; Jellyseerr requests use
-# them. Supported names: "Any", "SD", "HD-720p", "HD-1080p", "Ultra-HD",
-# "HD - 720p/1080p".
+# The profiles a fresh Sonarr/Radarr ships with; Seerr requests use them.
+# Supported names: "Any", "SD", "HD-720p", "HD-1080p", "Ultra-HD",
+# "HD - 720p/1080p". Junk releases (BR-DISK, LQ, upscaled, extras, 3D) are
+# blocked in every profile; see custom-formats/README.md.
 
 [quality]
 sonarr_profile = "HD-1080p"
@@ -47,16 +46,18 @@ radarr_profile = "HD-1080p"
 
 # ─── Network ────────────────────────────────────────────────────
 # admin_bind: address the admin UIs (Sonarr, Radarr, Prowlarr, Bazarr,
-#   qBittorrent, SABnzbd, Dozzle) listen on. "0.0.0.0" = every
-#   interface (LAN + Tailscale); "127.0.0.1" = this machine only; or your
-#   Tailscale IP to reach them only over Tailscale. Jellyfin, Jellyseerr
-#   and the dashboard on port 80 are always reachable.
-# docker_subnet: subnet for the containers. Change it only if it clashes
-#   with a network you already use.
+#   qBittorrent, SABnzbd) listen on. "0.0.0.0" = every interface (LAN +
+#   Tailscale); "127.0.0.1" = this Mac only; or your Tailscale IP to reach
+#   them only over Tailscale. Jellyfin/Moonfin, Seerr and the dashboard are
+#   always reachable.
+# dashboard_port: port of the dashboard (http://localhost by default).
+# tailscale_https: if Tailscale is signed in, publish Jellyfin/Moonfin,
+#   Seerr and the dashboard over HTTPS on your tailnet.
 
 [network]
 admin_bind = "0.0.0.0"
-docker_subnet = "172.29.84.0/24"
+dashboard_port = 80
+tailscale_https = true
 
 # ─── Indexers (Prowlarr) ───────────────────────────────────────
 
@@ -64,7 +65,7 @@ docker_subnet = "172.29.84.0/24"
 name = "1337x"
 definitionName = "1337x"
 enable = true
-flaresolverr = true
+flaresolverr = true   # needs Byparr to get past Cloudflare
 
 [[indexers]]
 name = "EZTV"
@@ -94,11 +95,6 @@ enable = true
 [[indexers]]
 name = "Torrent Downloads"
 definitionName = "torrentdownloads"
-enable = true
-
-[[indexers]]
-name = "BitSearch"
-definitionName = "bitsearch"
 enable = true
 
 [[indexers]]
@@ -136,18 +132,6 @@ name = "NZBgeek"
 definitionName = "NZBgeek"
 enable = false
 fields = { apiKey = "your-nzbgeek-api-key" }
-
-# ─── VPN (Gluetun — routes torrent traffic through VPN) ───────
-# Supports 30+ providers: Mullvad, ProtonVPN, NordVPN, Surfshark, etc.
-# See https://github.com/qdm12/gluetun-wiki for provider-specific config
-
-[vpn]
-enable = false
-provider = "mullvad"           # VPN provider name
-type = "wireguard"             # "wireguard" or "openvpn"
-wireguard_private_key = ""     # Your WireGuard private key
-wireguard_addresses = ""       # Your WireGuard address (e.g., "10.x.x.x/32")
-server_countries = ""          # Preferred server country (e.g., "Switzerland")
 
 # ─── Usenet Providers (SABnzbd) ────────────────────────────────
 # Fill in your provider details and set enable = true.

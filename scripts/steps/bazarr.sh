@@ -12,7 +12,7 @@ configure_bazarr() {
     ok "Config: $BAZARR_CONFIG"
 
     # Use python3 to do targeted updates (preserves all existing config)
-    if python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" "$SUBTITLE_LANGS" << 'PYEOF'
+    if python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" "$SUBTITLE_LANGS" "${ADMIN_BIND:-0.0.0.0}" << 'PYEOF'
 import sys
 import json
 
@@ -21,6 +21,7 @@ sonarr_key = sys.argv[2]
 radarr_key = sys.argv[3]
 subtitle_providers = sys.argv[4] if len(sys.argv) > 4 else ''
 subtitle_langs = sys.argv[5] if len(sys.argv) > 5 else ''
+bind_address = sys.argv[6] if len(sys.argv) > 6 else '0.0.0.0'
 
 with open(config_path, 'r') as f:
     lines = f.readlines()
@@ -65,7 +66,7 @@ def set_value(section, key, value):
         sections[section][key] = last_idx + 1
 
 if sonarr_key:
-    set_value('sonarr', 'ip', 'sonarr')
+    set_value('sonarr', 'ip', 'localhost')
     set_value('sonarr', 'port', 8989)
     set_value('sonarr', 'base_url', '/')
     set_value('sonarr', 'apikey', sonarr_key)
@@ -73,7 +74,7 @@ if sonarr_key:
     set_value('general', 'use_sonarr', True)
 
 if radarr_key:
-    set_value('radarr', 'ip', 'radarr')
+    set_value('radarr', 'ip', 'localhost')
     set_value('radarr', 'port', 7878)
     set_value('radarr', 'base_url', '/')
     set_value('radarr', 'apikey', radarr_key)
@@ -102,6 +103,9 @@ set_value('general', 'days_to_upgrade_subs', 7)
 # Prefer embedded subs (always correctly labeled)
 set_value('general', 'use_embedded_subs', True)
 
+# Listen where the other admin UIs do (network.admin_bind)
+set_value('general', 'ip', bind_address)
+
 with open(config_path, 'w') as f:
     f.writelines(lines)
 
@@ -109,7 +113,7 @@ print("OK")
 PYEOF
     then
       ok "Sonarr + Radarr configured"
-      docker restart bazarr >/dev/null 2>&1 && ok "Bazarr restarted" || true
+      svc_restart bazarr >/dev/null 2>&1 && ok "Bazarr restarted" || true
       wait_for "Bazarr" "$BAZARR_URL"
     else
       warn "Could not update Bazarr config"
@@ -201,7 +205,7 @@ print("OK")
 PYEOF
       then
         ok "Bazarr auth set: $JELLYFIN_USER"
-        docker restart bazarr >/dev/null 2>&1 || true
+        svc_restart bazarr >/dev/null 2>&1 || true
         wait_for "Bazarr" "$BAZARR_URL"
       else
         warn "Could not set Bazarr auth"

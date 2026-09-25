@@ -1,26 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    ":dependencyDashboard"
-  ],
-  "enabledManagers": [
-    "docker-compose",
-    "github-actions"
-  ],
-  "major": {
-    "dependencyDashboardApproval": true
+  "extends": ["config:recommended", ":dependencyDashboard"],
+  "enabledManagers": ["nix", "github-actions"],
+  "nix": {
+    "enabled": true
   },
-  "packageRules": [
-    {
-      "description": "linuxserver.io tags: <app version>[_<libtorrent>]-ls<build>",
-      "matchDatasources": [
-        "docker"
-      ],
-      "matchPackageNames": [
-        "lscr.io/linuxserver/**"
-      ],
-      "versioning": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(?:\\.(?<build>\\d+))?(?:_v[\\d.]+)?-ls(?<revision>\\d+)$"
-    }
-  ]
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"]
+  }
 }

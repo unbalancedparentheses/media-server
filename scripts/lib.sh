@@ -32,29 +32,6 @@ as_root() {
     err "Need root privileges to run: $*"
   fi
 }
-require_docker_running() {
-  require_cmd docker
-  docker info >/dev/null 2>&1 || err "Docker is not running"
-}
-has_docker_compose() { docker compose version >/dev/null 2>&1; }
-require_docker_compose() {
-  has_docker_compose || err "Docker Compose v2 plugin is required (docker compose)"
-}
-install_package() {
-  local pkg="$1"
-  if has_cmd brew; then
-    brew install "$pkg"
-  elif has_cmd apt-get; then
-    as_root apt-get update
-    as_root apt-get install -y "$pkg"
-  elif has_cmd dnf; then
-    as_root dnf install -y "$pkg"
-  elif has_cmd pacman; then
-    as_root pacman -Sy --noconfirm "$pkg"
-  else
-    return 1
-  fi
-}
 # Show only the start of a secret in output
 mask() { printf '%s…' "${1:0:6}"; }
 generate_secret() { openssl rand -base64 24 | tr -d '/+=' | cut -c1-24; }
@@ -68,7 +45,7 @@ detect_tailscale_cli() {
   fi
 }
 
-urlencode() { jq -sRr @uri <<< "$1"; }
+urlencode() { printf '%s' "$1" | jq -sRr @uri; }
 
 detect_timeout_cmd() {
   if has_cmd timeout; then
@@ -92,7 +69,13 @@ run_timeout() {
 
 extract_cookie() {
   local cookie_name="$1"
-  awk -v name="$cookie_name" 'BEGIN{FS="\t"} $0 !~ /^#/ && $6 == name { print $7 }'
+  awk -v name="$cookie_name" 'BEGIN{FS="\t"} ($0 !~ /^#/ || $0 ~ /^#HttpOnly_/) && $6 == name { print $7 }'
+}
+
+# qBittorrent's session cookie as "name=value": SID up to 4.x, QBT_SID_<port>
+# since 5.0. Reads a curl cookie jar (-c -) on stdin.
+extract_qbit_cookie() {
+  awk 'BEGIN{FS="\t"} ($0 !~ /^#/ || $0 ~ /^#HttpOnly_/) && ($6 == "SID" || $6 ~ /^QBT_SID_/) { print $6 "=" $7 }'
 }
 
 sed_inplace() {
@@ -199,7 +182,7 @@ prompt_credentials() {
   local path="$1"
   info "Setting up credentials..."
   echo "  Jellyfin credentials are shared across most services"
-  echo "  (Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd)."
+  echo "  (Seerr, Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd)."
   echo ""
 
   local jf_user jf_pass jf_pass2 qbit_user qbit_pass qbit_pass2
@@ -230,24 +213,21 @@ prompt_credentials() {
   write_credentials_to_config "$path" "$jf_user" "$jf_pass" "$qbit_user" "$qbit_pass"
   ok "Credentials saved to config.toml"
 }
-ensure_compose_ready() {
-  require_docker_running
-  require_docker_compose
-}
+
+# Jellyfin 12 only accepts the Authorization header (no X-Emby-Token)
+jf_auth() { printf 'Authorization: MediaBrowser Token="%s"' "$1"; }
 
 api() {
   local method="$1" url="$2"; shift 2
   curl -sf -X "$method" "$url" -H "Content-Type: application/json" "$@" 2>/dev/null
 }
 
-# wait_for <name> <url> [auth] — "auth" sends the nginx basic-auth credentials
+# wait_for <name> <url>; gives up after $WAIT_MAX seconds (default 120)
 wait_for() {
-  local name="$1" url="$2" auth="${3:-}" max=90 i=0 code
-  local curl_auth=()
-  [ "$auth" = "auth" ] && curl_auth=(-u "$JELLYFIN_USER:$JELLYFIN_PASS")
+  local name="$1" url="$2" max="${WAIT_MAX:-120}" i=0 code
   printf "   Waiting for %-15s" "$name..."
   while true; do
-    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 ${curl_auth[@]+"${curl_auth[@]}"} "$url" 2>/dev/null || echo "000")
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 "$url" 2>/dev/null || echo "000")
     { [ "${code:0:1}" = "2" ] || [ "${code:0:1}" = "3" ]; } && break
     i=$((i + 1))
     [ "$i" -ge "$max" ] && echo " timeout!" && return 1
@@ -276,8 +256,6 @@ validate_required_config() {
   cfg_required_string '.jellyfin.password' 'jellyfin.password'
   cfg_required_string '.qbittorrent.username' 'qbittorrent.username'
   cfg_required_string '.qbittorrent.password' 'qbittorrent.password'
-  cfg_required_string '.downloads.complete' 'downloads.complete'
-  cfg_required_string '.downloads.incomplete' 'downloads.incomplete'
   cfg_required_string '.quality.sonarr_profile' 'quality.sonarr_profile'
   cfg_required_string '.quality.sonarr_anime_profile' 'quality.sonarr_anime_profile'
   cfg_required_string '.quality.radarr_profile' 'quality.radarr_profile'
@@ -301,10 +279,8 @@ TIMEZONE_PATH='(.timezone // .qbittorrent.timezone)'
 is_non_negative_number() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
 is_non_negative_int() { [[ "$1" =~ ^[0-9]+$ ]]; }
 validate_config_semantics() {
-  local dl_complete dl_incomplete seed_ratio seed_time timezone
+  local seed_ratio seed_time timezone admin_bind dashboard_port
 
-  dl_complete=$(cfg '.downloads.complete')
-  dl_incomplete=$(cfg '.downloads.incomplete')
   seed_ratio=$(cfg '.downloads.seeding_ratio')
   seed_time=$(cfg '.downloads.seeding_time_minutes')
   timezone=$(cfg "$TIMEZONE_PATH // empty")
@@ -320,11 +296,13 @@ validate_config_semantics() {
   [ "$jf_pass" = "changeme" ] && err "jellyfin.password is still the default 'changeme' — set a real password in config.toml"
   [ "$qbit_pass" = "changeme" ] && err "qbittorrent.password is still the default 'changeme' — set a real password in config.toml"
 
-  [[ "$dl_complete" == /* ]] || err "downloads.complete must be an absolute path"
-  [[ "$dl_incomplete" == /* ]] || err "downloads.incomplete must be an absolute path"
   is_non_negative_number "$seed_ratio" || err "downloads.seeding_ratio must be a non-negative number"
   is_non_negative_int "$seed_time" || err "downloads.seeding_time_minutes must be a non-negative integer"
   [ -n "$timezone" ] || err "timezone must be set"
+  admin_bind=$(cfg '.network.admin_bind // "0.0.0.0"')
+  [[ "$admin_bind" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || err "network.admin_bind must be an IPv4 address (e.g. 0.0.0.0 or 127.0.0.1)"
+  dashboard_port=$(cfg '.network.dashboard_port // 80')
+  is_non_negative_int "$dashboard_port" || err "network.dashboard_port must be a port number"
 
   validate_quality_profile sonarr_profile
   validate_quality_profile sonarr_anime_profile
@@ -336,20 +314,4 @@ get_api_key() {
   [ -f "$f" ] && sed -n 's/.*<ApiKey>\(.*\)<\/ApiKey>.*/\1/p' "$f" 2>/dev/null || echo ""
 }
 
-# Helper: docker compose with both base and override files
-dc() {
-  if [ "$DRY_RUN" = "true" ]; then
-    if [ -f "$OVERRIDE_FILE" ]; then
-      log_dry_run "docker compose -f $COMPOSE_FILE -f $OVERRIDE_FILE $*"
-    else
-      log_dry_run "docker compose -f $COMPOSE_FILE $*"
-    fi
-    return 0
-  fi
-  if [ -f "$OVERRIDE_FILE" ]; then
-    docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE_FILE" "$@"
-  else
-    docker compose -f "$COMPOSE_FILE" "$@"
-  fi
-}
 

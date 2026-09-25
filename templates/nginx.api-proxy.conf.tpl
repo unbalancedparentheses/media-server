@@ -8,32 +8,33 @@
 # Upstreams are variables so nginx starts even if a service is down.
 # When proxy_pass contains variables and a URI, nginx sends that URI as-is,
 # so each location spells out the full upstream URL including $args.
+# {{ADMIN_HOST}} is where the admin UIs listen (network.admin_bind).
 
-# qBittorrent (no key — nginx's fixed IP is on qBittorrent's auth whitelist)
+# qBittorrent (no key — it skips its login for requests from this machine)
 location = /api/qbt/torrents/info {
     limit_except GET { deny all; }
     limit_req zone=api burst=50 nodelay;
-    set $upstream_api_qbt http://qbittorrent:8081/api/v2/torrents/info$is_args$args;
+    set $upstream_api_qbt http://{{ADMIN_HOST}}:8081/api/v2/torrents/info$is_args$args;
     proxy_pass $upstream_api_qbt;
-    proxy_set_header Host qbittorrent:8081;
-    proxy_set_header Referer http://qbittorrent:8081;
-    proxy_set_header Origin http://qbittorrent:8081;
+    proxy_set_header Host {{ADMIN_HOST}}:8081;
+    proxy_set_header Referer http://{{ADMIN_HOST}}:8081;
+    proxy_set_header Origin http://{{ADMIN_HOST}}:8081;
 }
 location = /api/qbt/sync/maindata {
     limit_except GET { deny all; }
     limit_req zone=api burst=50 nodelay;
-    set $upstream_api_qbt http://qbittorrent:8081/api/v2/sync/maindata$is_args$args;
+    set $upstream_api_qbt http://{{ADMIN_HOST}}:8081/api/v2/sync/maindata$is_args$args;
     proxy_pass $upstream_api_qbt;
-    proxy_set_header Host qbittorrent:8081;
-    proxy_set_header Referer http://qbittorrent:8081;
-    proxy_set_header Origin http://qbittorrent:8081;
+    proxy_set_header Host {{ADMIN_HOST}}:8081;
+    proxy_set_header Referer http://{{ADMIN_HOST}}:8081;
+    proxy_set_header Origin http://{{ADMIN_HOST}}:8081;
 }
 
 # Sonarr
 location = /api/sonarr/calendar {
     limit_except GET { deny all; }
     limit_req zone=api burst=50 nodelay;
-    set $upstream_api_sonarr http://sonarr:8989/api/v3/calendar$is_args$args;
+    set $upstream_api_sonarr http://{{ADMIN_HOST}}:8989/api/v3/calendar$is_args$args;
     proxy_pass $upstream_api_sonarr;
     proxy_set_header X-Api-Key "{{SONARR_KEY}}";
 }
@@ -42,7 +43,7 @@ location = /api/sonarr/calendar {
 location = /api/sonarr-anime/calendar {
     limit_except GET { deny all; }
     limit_req zone=api burst=50 nodelay;
-    set $upstream_api_sonarr_anime http://sonarr-anime:8989/api/v3/calendar$is_args$args;
+    set $upstream_api_sonarr_anime http://{{ADMIN_HOST}}:8990/api/v3/calendar$is_args$args;
     proxy_pass $upstream_api_sonarr_anime;
     proxy_set_header X-Api-Key "{{SONARR_ANIME_KEY}}";
 }
@@ -51,7 +52,7 @@ location = /api/sonarr-anime/calendar {
 location = /api/radarr/calendar {
     limit_except GET { deny all; }
     limit_req zone=api burst=50 nodelay;
-    set $upstream_api_radarr http://radarr:7878/api/v3/calendar$is_args$args;
+    set $upstream_api_radarr http://{{ADMIN_HOST}}:7878/api/v3/calendar$is_args$args;
     proxy_pass $upstream_api_radarr;
     proxy_set_header X-Api-Key "{{RADARR_KEY}}";
 }
@@ -60,18 +61,18 @@ location = /api/radarr/calendar {
 location = /api/jellyfin/Items {
     limit_except GET { deny all; }
     limit_req zone=api burst=50 nodelay;
-    set $upstream_api_jellyfin http://jellyfin:8096/Items$is_args$args;
+    set $upstream_api_jellyfin http://127.0.0.1:8096/Items$is_args$args;
     proxy_pass $upstream_api_jellyfin;
-    proxy_set_header X-Emby-Token "{{JELLYFIN_API_KEY}}";
+    proxy_set_header Authorization 'MediaBrowser Token="{{JELLYFIN_API_KEY}}"';
 }
 
-# Jellyseerr
-location = /api/jellyseerr/request {
+# Seerr
+location = /api/seerr/request {
     limit_except GET { deny all; }
     limit_req zone=api burst=50 nodelay;
-    set $upstream_api_jellyseerr http://jellyseerr:5055/api/v1/request$is_args$args;
-    proxy_pass $upstream_api_jellyseerr;
-    proxy_set_header X-Api-Key "{{JELLYSEERR_KEY}}";
+    set $upstream_api_seerr http://127.0.0.1:5055/api/v1/request$is_args$args;
+    proxy_pass $upstream_api_seerr;
+    proxy_set_header X-Api-Key "{{SEERR_KEY}}";
 }
 
 # SABnzbd — its API is one URL with a mode parameter, so only the queue and
@@ -86,6 +87,6 @@ location = /api/sabnzbd/ {
     if ($arg_limit !~ ^[0-9]*$) {
         return 400;
     }
-    set $upstream_api_sabnzbd "http://sabnzbd:8080/api?apikey={{SABNZBD_KEY}}&output=json&mode=$arg_mode&limit=$arg_limit";
+    set $upstream_api_sabnzbd "http://{{ADMIN_HOST}}:8080/api?apikey={{SABNZBD_KEY}}&output=json&mode=$arg_mode&limit=$arg_limit";
     proxy_pass $upstream_api_sabnzbd;
 }

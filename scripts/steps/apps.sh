@@ -1,23 +1,18 @@
 #!/usr/bin/env bash
-# Landing-page API proxy.
+# Dashboard API proxy.
 
 write_api_proxy() {
-  info "Generating API proxy config for landing page..."
+  info "Generating API proxy config for the dashboard..."
 
-  # Re-read Jellyseerr key (may have been created during Jellyseerr setup above)
-  [ -z "$JELLYSEERR_KEY" ] && [ -f "$CONFIG_DIR/jellyseerr/settings.json" ] && \
-    JELLYSEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/jellyseerr/settings.json" 2>/dev/null)
+  # Re-read the Seerr key (created during Seerr setup above)
+  [ -z "$SEERR_KEY" ] && [ -f "$CONFIG_DIR/seerr/settings.json" ] && \
+    SEERR_KEY=$(jq -r '.main.apiKey // empty' "$CONFIG_DIR/seerr/settings.json" 2>/dev/null)
 
   API_PROXY="$CONFIG_DIR/nginx/api-proxy.conf"
+  ADMIN_HOST=$(admin_host)
   write_api_proxy_from_template
-
+  chmod 600 "$API_PROXY"
   ok "api-proxy.conf written"
 
-  # Reload nginx to pick up the new proxy config
-  if docker exec media-nginx nginx -t >/dev/null 2>&1; then
-    docker exec media-nginx nginx -s reload >/dev/null 2>&1 && \
-      ok "nginx reloaded" || warn "Could not reload nginx (will apply on next restart)"
-  else
-    warn "nginx config test failed — skipping reload"
-  fi
+  svc_restart nginx && ok "nginx reloaded" || warn "Could not restart nginx"
 }
