@@ -143,6 +143,12 @@ run_verification() {
     JS_RADARR_SEARCH=$(echo "$JS_RADARR_V" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)
     check "Seerr → Radarr enableSearch" "$JS_RADARR_SEARCH"
 
+    # Requests fail unless each connection's folder is a real root folder there
+    check "Seerr → Sonarr folders ($TV_DIR, $ANIME_DIR)" "$(jq --arg tv "$TV_DIR" --arg anime "$ANIME_DIR" \
+      'length > 0 and all(.[]; .activeDirectory == $tv or .activeDirectory == $anime)' <<< "$JS_SONARR_V" 2>/dev/null || echo false)"
+    check "Seerr → Radarr folder ($MOVIES_DIR)" "$(jq --arg d "$MOVIES_DIR" \
+      'length > 0 and all(.[]; .activeDirectory == $d)' <<< "$JS_RADARR_V" 2>/dev/null || echo false)"
+
     JS_JELLYFIN_V=$(api GET "$SEERR_URL/api/v1/settings/jellyfin" -H "$JH" || echo "{}")
     JS_LIB_ENABLED=$(echo "$JS_JELLYFIN_V" | jq '[.libraries[] | select(.enabled == true)] | length' 2>/dev/null || echo "0")
     JS_LIB_TOTAL=$(echo "$JS_JELLYFIN_V" | jq '.libraries | length' 2>/dev/null || echo "0")

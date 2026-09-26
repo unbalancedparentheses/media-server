@@ -82,9 +82,9 @@ configure_seerr() {
         PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
         PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
         JS_RADARR_JSON=$(jq -nc \
-          --arg key "$RADARR_KEY" --argjson pid "$PID" --arg pname "$PNAME" \
+          --arg key "$RADARR_KEY" --argjson pid "$PID" --arg pname "$PNAME" --arg dir "$MOVIES_DIR" \
           '{name:"Radarr", hostname:"localhost", port:7878, useSsl:false, apiKey:$key,
-            baseUrl:"", activeProfileId:$pid, activeProfileName:$pname, activeDirectory:"$MOVIES_DIR",
+            baseUrl:"", activeProfileId:$pid, activeProfileName:$pname, activeDirectory:$dir,
             is4k:false, isDefault:true, externalUrl:"http://localhost:7878", minimumAvailability:"released",
             enableSearch:true}')
         api POST "$SEERR_URL/api/v1/settings/radarr" "${JA[@]}" -d "$JS_RADARR_JSON" >/dev/null 2>&1 && \
@@ -96,9 +96,9 @@ configure_seerr() {
 
     # Keep existing connections in line with config.toml: search enabled and
     # the configured quality profile (older setups picked the first profile)
-    sync_js_connections sonarr "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE"
-    sync_js_connections sonarr "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$SONARR_ANIME_PROFILE"
-    sync_js_connections radarr "Radarr" "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE"
+    sync_js_connections sonarr "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE" "$TV_DIR"
+    sync_js_connections sonarr "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$SONARR_ANIME_PROFILE" "$ANIME_DIR"
+    sync_js_connections radarr "Radarr" "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE" "$MOVIES_DIR"
 
     api POST "$SEERR_URL/api/v1/settings/initialize" "${JA[@]}" >/dev/null 2>&1 || true
     ok "Setup finalized"
@@ -114,22 +114,24 @@ arr_profile() {
     jq -c --arg n "$name" '(map(select(.name == $n)) + .)[0] | {id, name}' 2>/dev/null || echo "{}"
 }
 
-# Set enableSearch and the configured profile on an existing Seerr
+# Set enableSearch, the root folder and the configured profile on an existing Seerr
 # connection (kind: sonarr|radarr, matched by connection name)
 sync_js_connections() {
-  local kind="$1" name="$2" url="$3" key="$4" profile_name="$5" conn id updated profile
+  local kind="$1" name="$2" url="$3" key="$4" profile_name="$5" dir="$6" conn id updated profile
   [ -n "$key" ] || return 0
   conn=$(api GET "$SEERR_URL/api/v1/settings/$kind" "${JA[@]}" 2>/dev/null | \
     jq -c --arg n "$name" 'map(select(.name == $n))[0] // empty' 2>/dev/null || echo "")
   [ -n "$conn" ] || return 0
   profile=$(arr_profile "$url" "$key" "$profile_name")
-  updated=$(echo "$conn" | jq -c --argjson p "$profile" --arg want "$profile_name" '
+  updated=$(echo "$conn" | jq -c --argjson p "$profile" --arg want "$profile_name" --arg dir "$dir" '
     .enableSearch = true
+    | .activeDirectory = $dir
     | if $p.name == $want then .activeProfileId = $p.id | .activeProfileName = $p.name else . end')
   if [ "$updated" != "$conn" ]; then
     id=$(echo "$conn" | jq -r '.id')
-    api PUT "$SEERR_URL/api/v1/settings/$kind/$id" "${JA[@]}" -d "$updated" >/dev/null 2>&1 && \
-      ok "$name: search on, profile $(echo "$updated" | jq -r '.activeProfileName')" || warn "Could not update $name connection"
+    # id is read-only in the request body
+    api PUT "$SEERR_URL/api/v1/settings/$kind/$id" "${JA[@]}" -d "$(jq -c 'del(.id)' <<< "$updated")" >/dev/null 2>&1 && \
+      ok "$name: search on, profile $(echo "$updated" | jq -r '.activeProfileName'), folder $dir" || warn "Could not update $name connection"
   fi
   return 0
 }

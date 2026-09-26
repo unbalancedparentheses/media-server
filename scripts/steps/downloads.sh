@@ -11,6 +11,8 @@ configure_qbittorrent() {
   if [ -n "$QBIT_COOKIE" ]; then
     ok "Logged in"
 
+    # auto_tmm_enabled: save each download in its category folder
+    # (complete/radarr, …) instead of the default folder.
     # Requests from this machine skip the login: that's how the dashboard
     # widgets (nginx) read the queue. Everything else, including the *arr
     # apps and other devices on the network, logs in.
@@ -24,6 +26,7 @@ configure_qbittorrent() {
       '{web_ui_username:$user, web_ui_password:$pass,
         save_path:$save, temp_path:$temp, temp_path_enabled:true,
         web_ui_port:8081, max_ratio:$ratio, max_seeding_time:$seed_time,
+        auto_tmm_enabled:true,
         up_limit:102400, web_ui_csrf_protection_enabled:true,
         bypass_local_auth:true,
         bypass_auth_subnet_whitelist_enabled:($admin_net != ""),
