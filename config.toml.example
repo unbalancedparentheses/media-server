@@ -16,9 +16,13 @@ password = "changeme"
 [downloads]
 seeding_ratio = 2
 seeding_time_minutes = 10080
+upload_limit_kib = 100   # qBittorrent upload cap in KiB/s (0 = no limit)
 
 [subtitles]
 languages = ["en", "es"]
+# "first": get the first language found, in the order above (English, or
+#          Spanish when there's no English); "all": get every language
+want = "first"
 providers = [
   # No account needed
   "yifysubtitles",     # Great for movies

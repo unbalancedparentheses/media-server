@@ -26,7 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # services and tools (jq, python3, …) and sets MEDIA_SERVICES_JSON
 if [ -z "${MEDIA_SERVICES_JSON:-}" ]; then
   command -v nix >/dev/null 2>&1 || { echo "Nix is required: https://determinate.systems/nix-installer/" >&2; exit 1; }
-  exec nix run "path:$SCRIPT_DIR#install" -- "$@"
+  exec nix --extra-experimental-features "nix-command flakes" run "path:$SCRIPT_DIR#install" -- "$@"
 fi
 
 MEDIA_DIR="${MEDIA_DIR:-$HOME/media}"
@@ -112,7 +112,7 @@ run_setup() {
   write_service_configs
   start_stack
   read_setup_config
-  load_applied_credentials
+  creds_load
   wait_for_services
   load_api_keys
   configure_qbittorrent
@@ -129,9 +129,6 @@ run_setup() {
   configure_unpackerr
   configure_cleanuparr
   write_api_proxy
-  # Only once Jellyfin accepted the configured login; otherwise keep the old
-  # record so the next run can still log in with it
-  [ -n "${JELLYFIN_TOKEN:-}" ] && save_applied_credentials
 }
 
 print_summary() {

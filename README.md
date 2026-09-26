@@ -99,13 +99,14 @@ The dashboard at `http://localhost` (or `http://<mac-ip>`) links to everything; 
 
 `~/media/config.toml` (created from `config.toml.example` on first run). Re-run `nix run .#install` after editing.
 
-- **Credentials:** `[jellyfin]` and `[qbittorrent]`. The Jellyfin login is shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd and Cleanuparr. To change a password, edit it here and re-run install: setup remembers the last applied one (in `~/media/.state/credentials.json`) and changes it everywhere, Jellyfin included. Renaming the Jellyfin user has to be done in Jellyfin itself.
+- **Credentials:** `[jellyfin]` and `[qbittorrent]`. The Jellyfin login is shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd and Cleanuparr. To change a password, edit it here and re-run install: every service gets it, Jellyfin included. Short passwords work everywhere (Cleanuparr and qBittorrent refuse them through their APIs, so setup writes them directly). Setup records each service's login in `~/media/.state/credentials.json` only after logging in with it, so a change that fails part-way is retried on the next run. Renaming the Jellyfin user has to be done in Jellyfin itself.
 - **Quality:** `[quality]` picks the Sonarr/Radarr profiles Seerr requests use (built-in profiles: `HD-1080p`, `Ultra-HD`, …). Anime requests use `sonarr_anime_profile` and go to `~/media/anime`, so they show up in Jellyfin's Anime library.
 - **Release filters:** BR-DISK images, known-bad release groups, upscales, extras-only, 3D, and releases tagged with non-English subtitles (VOSTFR, BIG5, CHS, …; common with anime) are scored -10000 in every profile, so they're never grabbed. See [`custom-formats/`](custom-formats/README.md). HEVC (x265) releases get +100, so the smaller file wins when several are acceptable (`prefer_h265 = false` to turn off).
-- **Subtitles:** `[subtitles]` languages and providers. The defaults need no account (including SubtitulamosTV and Subtis for Spanish); OpenSubtitles.com, SubDL, Jimaku and AnimeTosho (anime), SubX (Spanish) and Addic7ed are listed commented out, to enable after adding their login or API key in Bazarr. Most anime releases already carry English subtitles in the file, which the `embeddedsubtitles` provider recognizes.
+- **Subtitles:** `[subtitles]` languages and providers. With `want = "first"` (default) a title gets the first language found in list order (English, or Spanish when there's no English); `want = "all"` gets every language. The defaults need no account (including SubtitulamosTV and Subtis for Spanish); OpenSubtitles.com, SubDL, Jimaku and AnimeTosho (anime), SubX (Spanish) and Addic7ed are listed commented out, to enable after adding their login or API key in Bazarr. Most anime releases already carry English subtitles in the file, which the `embeddedsubtitles` provider recognizes.
 - **Indexers:** `[[indexers]]` public torrent and anime indexers (Nyaa, SubsPlease, Mikan, Bangumi); `flaresolverr = true` routes one through Byparr. All of them sync to Sonarr and Radarr.
 - **Usenet:** public torrent sites are often thin (few or no seeders). Usenet is faster and more reliable, but needs two paid accounts: a **provider** (e.g. Newshosting, Eweka, Frugal Usenet) under `[[usenet_providers]]`, and an **indexer** (e.g. NZBgeek, DrunkenSlug, NZBFinder) under `[[indexers]]` with its API key (see the NZBgeek example in `config.toml.example`). Set `enable = true` on both and re-run install; Sonarr and Radarr then use SABnzbd automatically.
 - **Stuck downloads:** `[cleanuparr]` Cleanuparr checks the queue every 5 minutes. A public torrent with no progress for `stalled_strikes` checks (default 6, about 30 minutes), one that never gets metadata, or one that fails to import 3 times is removed, blocklisted, and searched for again. `enabled = false` turns it off.
+- **Uploads:** `[downloads] upload_limit_kib` caps qBittorrent's upload speed (default 100 KiB/s; 0 = no limit).
 - **Disk space:** `[disk] warn_free_gb` (default 50) shows a macOS notification when the media disk runs low; below `min_free_gb` (default 10) Sonarr and Radarr stop importing so the disk never fills completely. `nix run .#status` shows free space.
 - **Network:** `[network] admin_bind` restricts where the admin UIs listen (`"0.0.0.0"` = every interface, `"127.0.0.1"` = this Mac only); `dashboard_port` moves the dashboard off port 80.
 
@@ -118,25 +119,27 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 - **qBittorrent:** it skips its login only for requests from this Mac, which is how the dashboard reads it. Requests from the network log in.
 - **Dashboard widgets:** they go through nginx, which adds the API keys, but only for the read-only endpoints the widgets use, and only for `GET`.
 - **Byparr:** it has no login, so it only listens on `127.0.0.1`.
-- **Cleanuparr:** requires passwords of 8+ characters. With `admin_bind = "127.0.0.1"` it skips its login (only this Mac can reach it), so a shorter shared password is fine; on `0.0.0.0` it uses the Jellyfin login.
 - **Firewall prompts:** with the macOS firewall on, the first start may ask whether each service may accept incoming connections. Allow Jellyfin and Seerr at least.
 - **Sleep and login:** the Mac must be awake to serve. Enable System Settings → Energy → "Prevent automatic sleeping when the display is off". The services are launchd *user* agents, so after a reboot they start when you log in. A locked screen is fine, but for unattended recovery after power loss, turn on automatic login (System Settings → Users & Groups).
 
 ## Testing
 
-`nix run .#test` checks every service, connection, folder, profile, login and filter (about 90 checks). Setup runs it at the end and exits non-zero if any check fails.
+`nix run .#test` checks every service, connection, folder, profile, login and filter (about 100 checks, including logging in to each admin UI with the `config.toml` password). Setup runs it at the end and exits non-zero if any check fails.
 
 `nix run .#e2e` proves the automatic path end to end, with no manual step and no public indexers:
 
 1. **Movie:** requests Blender's Creative Commons film *Tears of Steel* in Seerr. Radarr gets a correctly named release, qBittorrent completes it, Radarr imports it, Jellyfin adds it, Bazarr downloads English subtitles, and Seerr marks it available.
 2. **TV:** gives Sonarr an episode of the free series *Pioneer One*, which is imported and appears in Jellyfin.
 
-The film (372 MB) is downloaded once from download.blender.org into `~/media/.state/e2e`. The test builds its own torrents with the data already in place, so they complete instantly. Radarr's automatic indexer search is paused for the minute the test runs, so a public release can't race it. Everything it adds is removed afterwards (`--keep` leaves it for inspection). Results are logged to `~/media/logs/e2e-*.log`.
+The film (372 MB) is downloaded once from download.blender.org into `~/media/.state/e2e`. The test builds its own torrents with the data already in place, so they complete instantly. Radarr's automatic indexer search is paused for the minute the test runs, so a public release can't race it. Everything it adds is removed afterwards (`--keep` leaves it for inspection). Results are logged to `~/media/logs/e2e-*.log`. The test records what it created in `~/media/.state/e2e/owned.json` and only ever removes that; it refuses to run if the test titles are already in your library, and if a service doesn't answer during cleanup it keeps the record and retries next time.
+
+`nix run .#unit` runs the failure-path tests, which need no services: password changes that fail or are interrupted part-way, restoring backups made before and after setup's records were included, and e2e cleanup when a service doesn't answer.
 
 ## Updates, backups, uninstall
 
 - **Updates:** versions are pinned in `flake.lock`; Renovate opens a weekly PR to refresh it. `nix run .#update` backs up, pulls this repo and re-runs setup, which points the services at the new versions.
-- **Backups:** `nix run .#backup` stops the running services for a consistent snapshot of `~/media/config` and `config.toml`, then starts exactly those again, also if the backup fails or is interrupted. It keeps the last 10 in `~/media/backups`. Backups contain passwords and API keys, so keep a copy on another disk.
+- **Backups:** `nix run .#backup` stops the running services for a consistent snapshot of `~/media/config`, `config.toml` and setup's records in `~/media/.state` (applied logins, migration marker), then starts exactly those again, also if the backup fails or is interrupted. It keeps the last 10 in `~/media/backups`. Backups contain passwords and API keys, so keep a copy on another disk.
+- **Restore:** `nix run .#restore -- <file>` keeps the current configs alongside (`*.pre-restore-<time>`). A backup from before setup's records were included sets the current records aside, so the next install re-checks every login against the restored databases.
 - **Uninstall:** `nix run .#uninstall` stops the services and removes their launchd agents, the Tailscale HTTPS entries setup added, and the Nix GC root. `--purge` also deletes configs, logs and state (including Byparr's browser in `~/Library/Caches/invisible-playwright`). Your library, downloads and backups are never deleted. Run `nix-collect-garbage` afterwards to free the Nix store.
 
 ## Directory structure

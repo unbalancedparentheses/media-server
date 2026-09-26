@@ -3,7 +3,6 @@
 configure_jellyfin() {
   info "Configuring Jellyfin..."
 
-
   JELLYFIN_STARTUP=$(curl -sf "$JELLYFIN_URL/Startup/Configuration" 2>/dev/null || echo "")
   if echo "$JELLYFIN_STARTUP" | grep -q "UICulture"; then
     api POST "$JELLYFIN_URL/Startup/Configuration" -H "$JF_HEADER" \
@@ -22,31 +21,36 @@ configure_jellyfin() {
   fi
 
   jellyfin_login
-  # config.toml's password changed since it was last applied: log in with
-  # the previous one and change it (Jellyfin requires the current password)
-  if [ -z "$JELLYFIN_TOKEN" ] && [ -n "${APPLIED_JF_PASS:-}" ] && [ "$APPLIED_JF_PASS" != "$JELLYFIN_PASS" ]; then
+  # config.toml's login changed since it was last applied: log in with the
+  # recorded one and change the password (Jellyfin requires the current one)
+  local old_user old_pass
+  old_user=$(creds_get jellyfin username) old_pass=$(creds_get jellyfin password)
+  if [ -z "$JELLYFIN_TOKEN" ] && [ -n "$old_pass" ] && [ "$old_pass" != "$JELLYFIN_PASS" ]; then
     local new_user="$JELLYFIN_USER" new_pass="$JELLYFIN_PASS" uid
-    JELLYFIN_USER="${APPLIED_JF_USER:-$new_user}" JELLYFIN_PASS="$APPLIED_JF_PASS"
+    JELLYFIN_USER="${old_user:-$new_user}" JELLYFIN_PASS="$old_pass"
     jellyfin_login
     JELLYFIN_USER="$new_user" JELLYFIN_PASS="$new_pass"
     if [ -n "$JELLYFIN_TOKEN" ]; then
       uid=$(api GET "$JELLYFIN_URL/Users/Me" -H "$(jf_auth "$JELLYFIN_TOKEN")" | jq -r '.Id // empty')
       if [ -n "$uid" ] && api POST "$JELLYFIN_URL/Users/$uid/Password" -H "$(jf_auth "$JELLYFIN_TOKEN")" \
-          -d "$(jq -nc --arg c "$APPLIED_JF_PASS" --arg n "$JELLYFIN_PASS" '{CurrentPw:$c, NewPw:$n}')" >/dev/null; then
+          -d "$(jq -nc --arg c "$old_pass" --arg n "$JELLYFIN_PASS" '{CurrentPw:$c, NewPw:$n}')" >/dev/null; then
         ok "Jellyfin password changed to the one in config.toml"
       else
-        warn "Could not change the Jellyfin password"
+        warn "Could not change the Jellyfin password (retried next run)"
       fi
-      [ "${APPLIED_JF_USER:-$JELLYFIN_USER}" != "$JELLYFIN_USER" ] && \
-        warn "Renaming the Jellyfin user isn't automatic: rename '${APPLIED_JF_USER}' to '$JELLYFIN_USER' in Jellyfin (Dashboard → Users)"
+      [ -n "$old_user" ] && [ "$old_user" != "$JELLYFIN_USER" ] && \
+        warn "Renaming the Jellyfin user isn't automatic: rename '$old_user' to '$JELLYFIN_USER' in Jellyfin (Dashboard → Users)"
       jellyfin_login
     fi
   fi
+  # Only a login that works is recorded; otherwise the old one is kept
+  [ -n "$JELLYFIN_TOKEN" ] && creds_set jellyfin "$JELLYFIN_USER" "$JELLYFIN_PASS"
 
   JELLYFIN_API_KEY=""
   if [ -n "$JELLYFIN_TOKEN" ]; then
     ok "Authenticated"
 
+    local libs_changed=false
     EXISTING_LIBS=$(api GET "$JELLYFIN_URL/Library/VirtualFolders" \
       -H "$(jf_auth "$JELLYFIN_TOKEN")" | jq -r '.[].Name' 2>/dev/null || echo "")
 
@@ -57,7 +61,7 @@ configure_jellyfin() {
         api POST "$JELLYFIN_URL/Library/VirtualFolders?name=${encoded}&collectionType=$lib_type&refreshLibrary=false" \
           -H "$(jf_auth "$JELLYFIN_TOKEN")" \
           -d '{"LibraryOptions":{}}' && \
-          ok "Created library: $lib_name" || warn "Could not create: $lib_name"
+          { ok "Created library: $lib_name"; libs_changed=true; } || warn "Could not create: $lib_name"
       fi
 
       # Ensure the path is attached (creating the library doesn't always set it)
@@ -66,18 +70,21 @@ configure_jellyfin() {
       if [ -z "$HAS_PATH" ]; then
         api POST "$JELLYFIN_URL/Library/VirtualFolders/Paths?refreshLibrary=true" \
           -H "$(jf_auth "$JELLYFIN_TOKEN")" \
-          -d "{\"Name\":\"$lib_name\",\"PathInfo\":{\"Path\":\"$lib_path\"}}" && \
-          ok "Library '$lib_name' → $lib_path" || warn "Could not add path to $lib_name"
+          -d "$(jq -nc --arg n "$lib_name" --arg p "$lib_path" '{Name:$n, PathInfo:{Path:$p}}')" && \
+          { ok "Library '$lib_name' → $lib_path"; libs_changed=true; } || warn "Could not add path to $lib_name"
       else
         ok "Library '$lib_name' → $lib_path"
       fi
     done
 
-    EXISTING_KEYS=$(api GET "$JELLYFIN_URL/Auth/Keys" -H "$(jf_auth "$JELLYFIN_TOKEN")" 2>/dev/null | jq '.Items | length' 2>/dev/null || echo "0")
-    if [ "$EXISTING_KEYS" = "0" ] || [ -z "$EXISTING_KEYS" ]; then
+    # Setup's own key (named MediaServer), not whichever key happens to be listed last
+    JELLYFIN_API_KEY=$(api GET "$JELLYFIN_URL/Auth/Keys" -H "$(jf_auth "$JELLYFIN_TOKEN")" | \
+      jq -r '[.Items[]? | select(.AppName == "MediaServer")][0].AccessToken // empty' 2>/dev/null || true)
+    if [ -z "$JELLYFIN_API_KEY" ]; then
       api POST "$JELLYFIN_URL/Auth/Keys?app=MediaServer" -H "$(jf_auth "$JELLYFIN_TOKEN")" >/dev/null 2>&1 || true
+      JELLYFIN_API_KEY=$(api GET "$JELLYFIN_URL/Auth/Keys" -H "$(jf_auth "$JELLYFIN_TOKEN")" | \
+        jq -r '[.Items[]? | select(.AppName == "MediaServer")][0].AccessToken // empty' 2>/dev/null || true)
     fi
-    JELLYFIN_API_KEY=$(api GET "$JELLYFIN_URL/Auth/Keys" -H "$(jf_auth "$JELLYFIN_TOKEN")" 2>/dev/null | jq -r '.Items[-1].AccessToken // empty' 2>/dev/null || echo "")
     [ -n "$JELLYFIN_API_KEY" ] && ok "API key: $(mask "$JELLYFIN_API_KEY")"
 
     # Enable real-time monitoring and daily scans on all libraries
@@ -106,9 +113,12 @@ configure_jellyfin() {
     fi
 
     # Jellyfin only starts watching a library for new files after it has
-    # been scanned once; libraries are created above without a scan
-    api POST "$JELLYFIN_URL/Library/Refresh" -H "$(jf_auth "$JELLYFIN_TOKEN")" >/dev/null && \
-      ok "Library scan started (enables real-time monitoring)" || warn "Could not start a library scan"
+    # been scanned once: scan when a library or folder was just added (the
+    # daily scan and real-time monitoring cover the rest)
+    if [ "$libs_changed" = true ]; then
+      api POST "$JELLYFIN_URL/Library/Refresh" -H "$(jf_auth "$JELLYFIN_TOKEN")" >/dev/null && \
+        ok "Library scan started (enables real-time monitoring)" || warn "Could not start a library scan"
+    fi
   else
     warn "Could not authenticate"
   fi

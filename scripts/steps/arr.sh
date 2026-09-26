@@ -60,8 +60,9 @@ configure_arr() {
 
   # Add Jellyfin notification connection (triggers library scan on import/upgrade)
   if [ -n "$JELLYFIN_API_KEY" ]; then
-    EXISTING_NOTIF=$(api GET "$url/api/$api_ver/notification" -H "$H" | jq -r '.[].name' 2>/dev/null || echo "")
-    if ! echo "$EXISTING_NOTIF" | grep -q "^Jellyfin$"; then
+    local notif_id
+    notif_id=$(api GET "$url/api/$api_ver/notification" -H "$H" | jq -r '[.[] | select(.implementation == "MediaBrowser") | .id][0] // empty' 2>/dev/null || true)
+    if [ -z "$notif_id" ]; then
       api POST "$url/api/$api_ver/notification" -H "$H" -d '{
         "name":"Jellyfin","implementation":"MediaBrowser","configContract":"MediaBrowserSettings",
         "enable":true,"onDownload":true,"onUpgrade":true,"onRename":true,
@@ -69,10 +70,15 @@ configure_arr() {
           {"name":"useSsl","value":false},{"name":"apiKey","value":"'"$JELLYFIN_API_KEY"'"},
           {"name":"updateLibrary","value":true}]
       }' >/dev/null 2>&1 && ok "Jellyfin notification connected" || warn "Could not add Jellyfin notification"
-    else ok "Jellyfin notification connected"; fi
+    else
+      # Setup's own Jellyfin key (older versions could store another app's)
+      sync_resource_fields "$name Jellyfin notification" "$url/api/$api_ver/notification" "$notif_id" \
+        "$(jq -nc --arg k "$JELLYFIN_API_KEY" '{apiKey:$k}')" "$key"
+      ok "Jellyfin notification connected"
+    fi
   fi
 
-  set_arr_login "$name" "$url" "$key" "$api_ver"
+  set_arr_login "$name" "$url" "$key" "$api_ver" "$name"
 }
 
 enable_unknown_quality() {
@@ -100,28 +106,33 @@ set_min_free_space() {
 }
 
 # Older versions ran a second Sonarr for anime. Add its series to Sonarr
-# (as anime, keeping their folders, no search) and rescan so the existing
-# episode files are picked up. Its data folder is left in place.
+# (as anime, keeping their folders, no search), copy its series, season and
+# episode monitoring exactly, and rescan so the existing files are picked
+# up. Its data folder is left in place.
 migrate_anime_sonarr() {
   local db="$CONFIG_DIR/sonarr-anime/sonarr.db" marker="$STATE_DIR/sonarr-anime-migrated"
-  local H="X-Api-Key: $SONARR_KEY" rows row tvdb path monitored have profile_id lookup failed=0 added=0
+  local H="X-Api-Key: $SONARR_KEY" rows row old_id tvdb path have profile_id lookup new failed=0 added=0
   [ -f "$db" ] && [ ! -f "$marker" ] || return 0
   info "Moving the old anime Sonarr's series into Sonarr..."
-  rows=$(sqlite3 -json "file:$db?mode=ro" 'SELECT TvdbId, Path, Monitored FROM Series' 2>/dev/null) || {
+  rows=$(sqlite3 -json "file:$db?mode=ro" 'SELECT Id, TvdbId, Path, Monitored, Seasons FROM Series' 2>/dev/null) || {
     warn "Could not read $db; its series were not moved (setup retries next run)"; return 0; }
   have=$(api GET "$SONARR_URL/api/v3/series" -H "$H" | jq -c '[.[].tvdbId]') || { warn "Could not list Sonarr series"; return 0; }
   profile_id=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "$H" | \
     jq -r --arg n "$SONARR_ANIME_PROFILE" '([.[] | select(.name == $n) | .id][0]) // .[0].id')
   while IFS= read -r row; do
     [ -n "$row" ] || continue
-    tvdb=$(jq -r .TvdbId <<< "$row"); path=$(jq -r .Path <<< "$row"); monitored=$(jq -r '.Monitored == 1' <<< "$row")
+    old_id=$(jq -r .Id <<< "$row"); tvdb=$(jq -r .TvdbId <<< "$row"); path=$(jq -r .Path <<< "$row")
     jq -e --argjson t "$tvdb" 'index($t)' <<< "$have" >/dev/null && continue
     lookup=$(api GET "$SONARR_URL/api/v3/series/lookup?term=tvdb:$tvdb" -H "$H" | jq -c '.[0] // empty') || lookup=""
-    if [ -n "$lookup" ] && api POST "$SONARR_URL/api/v3/series" -H "$H" -d "$(jq -c \
-        --arg path "$path" --argjson pid "$profile_id" --argjson mon "$monitored" \
-        '. + {path:$path, qualityProfileId:$pid, monitored:$mon, seriesType:"anime", seasonFolder:true,
-              addOptions:{searchForMissingEpisodes:false, monitor:(if $mon then "all" else "none" end)}}' <<< "$lookup")" >/dev/null; then
-      ok "Moved: $(jq -r .title <<< "$lookup")"
+    # Added unmonitored with "skip" (Sonarr leaves episode monitoring alone);
+    # the old choices are applied below
+    new=""
+    [ -n "$lookup" ] && new=$(api POST "$SONARR_URL/api/v3/series" -H "$H" -d "$(jq -c \
+        --arg path "$path" --argjson pid "$profile_id" \
+        '. + {path:$path, qualityProfileId:$pid, monitored:false, seriesType:"anime", seasonFolder:true,
+              addOptions:{searchForMissingEpisodes:false, monitor:"skip"}}' <<< "$lookup")") || new=""
+    if [ -n "$new" ] && migrate_monitoring "$db" "$old_id" "$(jq -r .id <<< "$new")" "$row"; then
+      ok "Moved: $(jq -r .title <<< "$new")"
       added=$((added + 1))
     else
       warn "Could not move the series at $path (TVDB $tvdb)"
@@ -133,6 +144,43 @@ migrate_anime_sonarr() {
     touch "$marker"
     ok "Old anime Sonarr's series are in Sonarr; you can delete $CONFIG_DIR/sonarr-anime"
   fi
+}
+
+# Copy one series' monitoring from the old database: episodes, seasons and
+# the series flag, once Sonarr has finished adding it (its refresh and scan
+# would otherwise overwrite them), then check it took
+migrate_monitoring() {  # db old-series-id new-series-id old-row
+  local db="$1" old_id="$2" new_id="$3" row="$4" H="X-Api-Key: $SONARR_KEY" start=$SECONDS eps old_eps ids series want
+  while :; do
+    eps=$(api GET "$SONARR_URL/api/v3/episode?seriesId=$new_id" -H "$H" || echo "[]")
+    if [ "$(jq 'length' <<< "$eps")" -gt 0 ] && \
+       ! api GET "$SONARR_URL/api/v3/command" -H "$H" | jq -e 'any(.[]; (.name == "RefreshSeries" or .name == "RescanSeries") and (.status == "queued" or .status == "started"))' >/dev/null; then
+      break
+    fi
+    [ $((SECONDS - start)) -ge 180 ] && { warn "Sonarr is still adding series $new_id"; return 1; }
+    sleep 2
+  done
+  old_eps=$(sqlite3 -json "file:$db?mode=ro" "SELECT SeasonNumber AS s, EpisodeNumber AS e, Monitored AS m FROM Episodes WHERE SeriesId = $old_id" 2>/dev/null) || return 1
+  old_eps="${old_eps:-[]}"
+  for want in true false; do
+    ids=$(jq -c --argjson old "$old_eps" --argjson want "$want" '
+      ($old | map(select((.m == 1) == $want) | "\(.s)x\(.e)")) as $keys
+      | [.[] | select(("\(.seasonNumber)x\(.episodeNumber)") as $k | $keys | index($k)) | .id]' <<< "$eps")
+    [ "$ids" = "[]" ] && continue
+    api PUT "$SONARR_URL/api/v3/episode/monitor" -H "$H" -d "$(jq -nc --argjson ids "$ids" --argjson m "$want" '{episodeIds:$ids, monitored:$m}')" >/dev/null || return 1
+  done
+  series=$(api GET "$SONARR_URL/api/v3/series/$new_id" -H "$H") || return 1
+  api PUT "$SONARR_URL/api/v3/series/$new_id" -H "$H" -d "$(jq -c --argjson row "$row" '
+    ($row.Seasons | fromjson | map({key: (.seasonNumber | tostring), value: .monitored}) | from_entries) as $old
+    | .monitored = ($row.Monitored == 1)
+    | .seasons |= map(if $old[(.seasonNumber | tostring)] != null then .monitored = $old[(.seasonNumber | tostring)] else . end)' <<< "$series")" >/dev/null || return 1
+
+  # Every episode both databases know must now match
+  eps=$(api GET "$SONARR_URL/api/v3/episode?seriesId=$new_id" -H "$H") || return 1
+  jq -e --argjson old "$old_eps" '
+    ($old | map({key: "\(.s)x\(.e)", value: (.m == 1)}) | from_entries) as $want
+    | all(.[]; $want["\(.seasonNumber)x\(.episodeNumber)"] as $w | $w == null or .monitored == $w)' <<< "$eps" >/dev/null || \
+    { warn "Episode monitoring of series $new_id didn't match the old Sonarr's"; return 1; }
 }
 
 configure_arrs() {

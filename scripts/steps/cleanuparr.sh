@@ -13,46 +13,28 @@ cleanuparr_api() {  # method path [json]
   api "$method" "$CLEANUPARR_URL/api/$path" -H "X-Api-Key: $CLEANUPARR_KEY" "$@"
 }
 
+CLEANUPARR_LOCAL_URL="http://127.0.0.1:11011"
+
 configure_cleanuparr() {
   info "Configuring Cleanuparr..."
   local status
 
   # The first account can be created by anyone until setup completes, so
-  # create it now (with the Jellyfin login, like the other admin UIs)
+  # create it right away. Its API wants 8+ characters; a shorter shared
+  # password is set directly below.
   status=$(api GET "$CLEANUPARR_URL/api/auth/status") || { warn "Cleanuparr is not responding"; return 0; }
   if [ "$(jq -r .setupCompleted <<< "$status")" != "true" ]; then
     local account_pass="$JELLYFIN_PASS"
-    # Cleanuparr wants 8+ characters; with a shorter password the account
-    # gets a random one (login is skipped on this Mac when admin_bind is
-    # 127.0.0.1, see below)
     [ "${#account_pass}" -ge 8 ] || account_pass=$(openssl rand -hex 16)
-    if [ "${#JELLYFIN_USER}" -lt 3 ]; then
-      warn "Cleanuparr needs a username of 3+ characters; set it up at $CLEANUPARR_URL"
-      return 0
-    fi
     api POST "$CLEANUPARR_URL/api/auth/setup/account" \
       -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$account_pass" '{username:$u, password:$p}')" >/dev/null 2>&1 || true
     api POST "$CLEANUPARR_URL/api/auth/setup/complete" >/dev/null 2>&1 || true
   fi
   CLEANUPARR_KEY=$(cleanuparr_key)
   [ -n "$CLEANUPARR_KEY" ] || { warn "Could not read Cleanuparr's API key"; return 0; }
-  sync_cleanuparr_login
-
-  # Listening on 127.0.0.1 only this Mac can reach it, so skip the login.
-  # (Its "local addresses" include the LAN, so not when on 0.0.0.0.)
-  local general want_bypass=false
-  [ "${ADMIN_BIND:-0.0.0.0}" = "127.0.0.1" ] && want_bypass=true
-  general=$(cleanuparr_api GET configuration/general || echo "{}")
-  if [ "$(jq -r '.auth.disableAuthForLocalAddresses' <<< "$general")" != "$want_bypass" ]; then
-    cleanuparr_api PUT configuration/general \
-      -d "$(jq -c --argjson b "$want_bypass" '.auth.disableAuthForLocalAddresses = $b' <<< "$general")" >/dev/null || \
-      warn "Cleanuparr: could not update its login settings"
-  fi
-  if [ "$want_bypass" = true ]; then
-    ok "Cleanuparr: no login needed (listens on this Mac only)"
-  else
-    ok "Cleanuparr login: $JELLYFIN_USER"
-  fi
+  # Always require the login (older versions skipped it on this Mac)
+  cleanuparr_require_login
+  set_cleanuparr_login
 
   local app url key existing id
   for app in sonarr radarr; do
@@ -86,13 +68,19 @@ configure_cleanuparr() {
   # 30 minutes without progress; any progress resets the count
   local stall_strikes
   stall_strikes=$(cfg '.cleanuparr.stalled_strikes // 6')
-  if ! cleanuparr_api GET queue-rules/stall | jq -e 'any(.[]; .name == "Stalled")' >/dev/null 2>&1; then
+  local rule
+  rule=$(cleanuparr_api GET queue-rules/stall | jq -c '[.[] | select(.name == "Stalled")][0] // empty' 2>/dev/null || true)
+  if [ -z "$rule" ]; then
     cleanuparr_api POST queue-rules/stall -d "$(jq -nc --argjson s "$stall_strikes" \
       '{name:"Stalled", enabled:true, maxStrikes:$s, privacyType:"Public", minCompletionPercentage:0,
         maxCompletionPercentage:100, resetStrikesOnProgress:true}')" >/dev/null && \
       ok "Rule: remove public torrents stalled for $stall_strikes checks" || warn "Cleanuparr: could not add the stall rule"
+  elif [ "$(jq -r '.maxStrikes' <<< "$rule")" != "$stall_strikes" ] || [ "$(jq -r '.enabled' <<< "$rule")" != true ]; then
+    cleanuparr_api PUT "queue-rules/stall/$(jq -r .id <<< "$rule")" \
+      -d "$(jq -c --argjson s "$stall_strikes" '.maxStrikes = $s | .enabled = true' <<< "$rule")" >/dev/null && \
+      ok "Rule: stalled for $stall_strikes checks (updated)" || warn "Cleanuparr: could not update the stall rule"
   else
-    ok "Rule: stalled downloads"
+    ok "Rule: stalled for $stall_strikes checks"
   fi
 
   local enabled want qc
@@ -112,24 +100,61 @@ configure_cleanuparr() {
   if [ "$enabled" = true ]; then ok "Queue cleaner on (every 5 minutes)"; else ok "Queue cleaner off (cleanuparr.enabled = false)"; fi
 }
 
-# Follow a password change in config.toml, like the other admin UIs
-sync_cleanuparr_login() {
-  [ "${CREDS_CHANGED:-false}" = true ] && [ -n "${APPLIED_JF_PASS:-}" ] || return 0
-  local current="$APPLIED_JF_PASS"
-  if [ "$current" != "$JELLYFIN_PASS" ] && [ "${#JELLYFIN_PASS}" -lt 8 ]; then
-    [ "${ADMIN_BIND:-0.0.0.0}" = "127.0.0.1" ] || \
-      warn "Cleanuparr needs a password of 8+ characters; it keeps its old one"
+# Cleanuparr's login API: tokens come back when the login works
+cleanuparr_login_works() {
+  api POST "$CLEANUPARR_URL/api/auth/login" -d "$(jq -nc --arg u "$1" --arg p "$2" '{username:$u, password:$p}')" | \
+    jq -e '.tokens.accessToken // empty' >/dev/null 2>&1
+}
+
+# Give Cleanuparr the shared login. Its API needs the current password and
+# 8+ characters, so the login is written to its user database (BCrypt, as
+# Cleanuparr stores it) while it's stopped, then checked by logging in.
+set_cleanuparr_login() {
+  if creds_match cleanuparr "$JELLYFIN_USER" "$JELLYFIN_PASS" && cleanuparr_login_works "$JELLYFIN_USER" "$JELLYFIN_PASS"; then
+    ok "Cleanuparr login: $JELLYFIN_USER"
     return 0
   fi
-  if [ "$current" != "$JELLYFIN_PASS" ]; then
-    cleanuparr_api PUT account/password \
-      -d "$(jq -nc --arg c "$current" --arg n "$JELLYFIN_PASS" '{currentPassword:$c, newPassword:$n}')" >/dev/null && \
-      current="$JELLYFIN_PASS" || { warn "Cleanuparr: could not change its password (change it in Settings → Account)"; return 0; }
+  svc_stop cleanuparr || { warn "Cleanuparr didn't stop; its login wasn't changed (retried next run)"; return 0; }
+  python3 - "$CONFIG_DIR/cleanuparr/users.db" "$JELLYFIN_USER" "$JELLYFIN_PASS" << 'PY' || warn "Could not write Cleanuparr's login"
+import bcrypt, sqlite3, sys
+from datetime import datetime, timezone
+path, user, password = sys.argv[1:]
+# $2a$ like BCrypt.Net; same algorithm as bcrypt's $2b$
+digest = bcrypt.hashpw(password.encode(), bcrypt.gensalt(12)).decode().replace("$2b$", "$2a$", 1)
+db = sqlite3.connect(path)
+db.execute("UPDATE users SET username = ?, password_hash = ?, failed_login_attempts = 0, lockout_end = NULL, updated_at = ?",
+           (user, digest, datetime.now(timezone.utc).isoformat()))
+db.execute("DELETE FROM refresh_tokens")  # sign out existing sessions
+db.commit()
+PY
+  launchctl bootstrap "$LAUNCHD_DOMAIN" "$(svc_plist cleanuparr)"
+  wait_for "Cleanuparr" "$CLEANUPARR_URL/health" || true
+  if cleanuparr_login_works "$JELLYFIN_USER" "$JELLYFIN_PASS"; then
+    creds_set cleanuparr "$JELLYFIN_USER" "$JELLYFIN_PASS"
+    ok "Cleanuparr login set: $JELLYFIN_USER"
+  else
+    warn "Cleanuparr's new login doesn't work (retried next run)"
   fi
-  if [ "${APPLIED_JF_USER:-$JELLYFIN_USER}" != "$JELLYFIN_USER" ]; then
-    cleanuparr_api PUT account/username \
-      -d "$(jq -nc --arg c "$current" --arg n "$JELLYFIN_USER" '{currentPassword:$c, newUsername:$n}')" >/dev/null || \
-      warn "Cleanuparr: could not change its username"
+}
+
+# Turn off "no login for local addresses" (which also covers the LAN).
+# Runs before the services start, so Cleanuparr never listens on a wider
+# address with it on; again during configuration for new installs.
+cleanuparr_require_login() {
+  local db="$CONFIG_DIR/cleanuparr/cleanuparr.db" key general
+  [ -f "$db" ] || return 0
+  if svc_loaded cleanuparr; then
+    key=$(cleanuparr_key)
+    general=$(api GET "$CLEANUPARR_LOCAL_URL/api/configuration/general" -H "X-Api-Key: $key" || true)
+    if [ -n "$general" ]; then
+      [ "$(jq -r '.auth.disableAuthForLocalAddresses' <<< "$general")" = "false" ] && return 0
+      api PUT "$CLEANUPARR_LOCAL_URL/api/configuration/general" -H "X-Api-Key: $key" \
+        -d "$(jq -c '.auth.disableAuthForLocalAddresses = false' <<< "$general")" >/dev/null && \
+        { ok "Cleanuparr: login required again"; return 0; }
+    fi
+    # Not answering: stop it and change the setting on disk
+    svc_stop cleanuparr || { warn "Cleanuparr didn't stop; check that its login is required"; return 0; }
   fi
-  ok "Cleanuparr login updated"
+  sqlite3 "$db" 'UPDATE general_configs SET auth_disable_auth_for_local_addresses = 0 WHERE auth_disable_auth_for_local_addresses = 1' 2>/dev/null || \
+    warn "Could not turn on Cleanuparr's login requirement"
 }

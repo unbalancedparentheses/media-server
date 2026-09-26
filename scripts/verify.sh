@@ -31,6 +31,12 @@ run_verification() {
       sleep 5
       HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
     fi
+    # Byparr is only needed by indexers with flaresolverr = true
+    if [ "$name" = "Byparr" ] && ! [[ "$HTTP_CODE" =~ ^[23] ]] && \
+       [ "$(cfg '[.indexers[]? | select(.enable == true and .flaresolverr == true)] | length')" = "0" ]; then
+      skip "Byparr responds ($HTTP_CODE; no enabled indexer needs it)"
+      continue
+    fi
     # Only 2xx/3xx count: a 404 or 500 means the service is up but broken
     check "$name responds ($HTTP_CODE)" "$(case "$HTTP_CODE" in 2??|3??) echo true ;; *) echo false ;; esac)"
   done <<< "$SERVICE_HEALTH_ENDPOINTS"
@@ -46,7 +52,9 @@ run_verification() {
   info "Download clients..."
   QBIT_COOKIE_V=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
     --data-urlencode "username=$QBIT_USER" --data-urlencode "password=$QBIT_PASS" 2>/dev/null | extract_qbit_cookie || true)
-  check "qBittorrent login" "$([ -n "$QBIT_COOKIE_V" ] && echo true || echo false)"
+  check "qBittorrent API reachable" "$([ -n "$QBIT_COOKIE_V" ] && echo true || echo false)"
+  # Requests from this Mac skip the password, so check the stored hash
+  check "qBittorrent → password is config.toml's" "$(qbit_password_is "$QBIT_PASS" && echo true || echo false)"
 
   if [ -n "$QBIT_COOKIE_V" ]; then
     QBIT_CATS=$(curl -sf "$QBIT_URL/api/v2/torrents/categories" -b "$QBIT_COOKIE_V" 2>/dev/null || echo "{}")
@@ -169,21 +177,20 @@ run_verification() {
   [ -n "$RADARR_KEY" ] && check_unknown_quality "Radarr" "$RADARR_URL" "$RADARR_KEY"
 
   info "Authentication..."
+  # Log in with config.toml's password, not just check a username is set
   check_arr_auth() {
-    local name="$1" url="$2" key="$3" api_ver="${4:-v3}"
-    local HOST AUTH_USER
-    HOST=$(api GET "$url/api/$api_ver/config/host" -H "X-Api-Key: $key" 2>/dev/null || echo "")
-    [ -z "$HOST" ] && { skip "$name → auth"; return; }
-    AUTH_USER=$(echo "$HOST" | jq -r '.username // empty' 2>/dev/null)
-    check "$name → auth configured" "$([ -n "$AUTH_USER" ] && echo true || echo false)"
+    local name="$1" url="$2" key="$3" api_ver="${4:-v3}" host
+    host=$(api GET "$url/api/$api_ver/config/host" -H "X-Api-Key: $key" 2>/dev/null || echo "")
+    [ -z "$host" ] && { skip "$name → auth"; return; }
+    check "$name → login required" "$(jq '.authenticationMethod == "forms" and .authenticationRequired == "enabled"' <<< "$host" 2>/dev/null || echo false)"
+    check "$name → config.toml login works" "$(arr_login_works "$url" "$JELLYFIN_USER" "$JELLYFIN_PASS" && echo true || echo false)"
   }
   [ -n "$SONARR_KEY" ] && check_arr_auth "Sonarr" "$SONARR_URL" "$SONARR_KEY"
   [ -n "$RADARR_KEY" ] && check_arr_auth "Radarr" "$RADARR_URL" "$RADARR_KEY"
   [ -n "$PROWLARR_KEY" ] && check_arr_auth "Prowlarr" "$PROWLARR_URL" "$PROWLARR_KEY" "v1"
 
   if [ -n "${SABNZBD_KEY:-}" ]; then
-    SAB_AUTH_USER=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=misc&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.config.misc.username // empty' 2>/dev/null || true)
-    check "SABnzbd → auth configured" "$([ -n "$SAB_AUTH_USER" ] && echo true || echo false)"
+    check "SABnzbd → config.toml login works" "$(sab_login_works "$JELLYFIN_USER" "$JELLYFIN_PASS" && echo true || echo false)"
   fi
 
   BAZARR_CONFIG_FILE=""
@@ -195,6 +202,7 @@ run_verification() {
     BAZARR_AUTH_TYPE=$(sed -n '/^auth:/,/^[^ ]/{s/^  type: *//p;}' "$BAZARR_CONFIG_FILE" 2>/dev/null | head -1 | tr -d "'" || echo "")
     # type null means no login at all, even with a username set
     check "Bazarr → login required ($BAZARR_AUTH_TYPE)" "$([ -n "$BAZARR_AUTH_USER" ] && [ "$BAZARR_AUTH_USER" != "''" ] && { [ "$BAZARR_AUTH_TYPE" = form ] || [ "$BAZARR_AUTH_TYPE" = basic ]; } && echo true || echo false)"
+    check "Bazarr → config.toml login works" "$(bazarr_login_works "$JELLYFIN_USER" "$JELLYFIN_PASS" && echo true || echo false)"
     BAZARR_APIKEY=$(sed -n '/^auth:/,/^[^ ]/{s/^  apikey: *//p;}' "$BAZARR_CONFIG_FILE" 2>/dev/null | head -1 | tr -d "'" || echo "")
     BAZARR_PROVIDERS=$(api GET "$BAZARR_URL/api/system/settings" -H "X-API-KEY: $BAZARR_APIKEY" | jq '.general.enabled_providers | length' 2>/dev/null || echo 0)
     check "Bazarr → subtitle providers enabled ($BAZARR_PROVIDERS)" "$([ "$BAZARR_PROVIDERS" -gt 0 ] 2>/dev/null && echo true || echo false)"
@@ -204,11 +212,8 @@ run_verification() {
   local cu_key cu_status
   cu_key=$(cleanuparr_key)
   cu_status=$(api GET "$CLEANUPARR_URL/api/auth/status" || echo "{}")
-  if [ "${ADMIN_BIND:-0.0.0.0}" = "127.0.0.1" ]; then
-    check "Cleanuparr → account set up (login skipped: this Mac only)" "$(jq '.setupCompleted == true' <<< "$cu_status" 2>/dev/null || echo false)"
-  else
-    check "Cleanuparr → login required" "$(jq '.setupCompleted == true and .authBypassActive == false' <<< "$cu_status" 2>/dev/null || echo false)"
-  fi
+  check "Cleanuparr → login required" "$(jq '.setupCompleted == true and .authBypassActive == false' <<< "$cu_status" 2>/dev/null || echo false)"
+  check "Cleanuparr → config.toml login works" "$(cleanuparr_login_works "$JELLYFIN_USER" "$JELLYFIN_PASS" && echo true || echo false)"
   if [ -n "$cu_key" ]; then
     local cu_arr cu_app
     for cu_app in sonarr radarr; do
@@ -218,7 +223,8 @@ run_verification() {
     check "Cleanuparr → qBittorrent connected" "$(api GET "$CLEANUPARR_URL/api/configuration/download_client" -H "X-Api-Key: $cu_key" | jq 'any(.clients[]?; .typeName == "qBittorrent" and .enabled)' 2>/dev/null || echo false)"
     if [ "$(cfg_bool .cleanuparr.enabled true)" = true ]; then
       check "Cleanuparr → queue cleaner on" "$(api GET "$CLEANUPARR_URL/api/configuration/queue_cleaner" -H "X-Api-Key: $cu_key" | jq '.enabled' 2>/dev/null || echo false)"
-      check "Cleanuparr → stalled-download rule" "$(api GET "$CLEANUPARR_URL/api/queue-rules/stall" -H "X-Api-Key: $cu_key" | jq 'any(.[]; .enabled)' 2>/dev/null || echo false)"
+      check "Cleanuparr → stalled-download rule ($(cfg '.cleanuparr.stalled_strikes // 6') strikes)" "$(api GET "$CLEANUPARR_URL/api/queue-rules/stall" -H "X-Api-Key: $cu_key" | \
+        jq --argjson s "$(cfg '.cleanuparr.stalled_strikes // 6')" 'any(.[]; .name == "Stalled" and .enabled and .maxStrikes == $s)' 2>/dev/null || echo false)"
     fi
   else
     check "Cleanuparr → API key readable" false

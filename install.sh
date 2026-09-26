@@ -16,7 +16,18 @@ if ! command -v nix >/dev/null 2>&1; then
   [ -x /nix/var/nix/profiles/default/bin/nix ] && export PATH="/nix/var/nix/profiles/default/bin:$PATH"
 fi
 command -v nix >/dev/null 2>&1 || err "Nix is required. Install it with: curl -fsSL https://install.determinate.systems/nix | sh -s -- install"
-command -v git >/dev/null 2>&1 || err "git is required (xcode-select --install)"
+# Flakes may not be enabled (e.g. Nix from the official installer)
+NIX=(nix --extra-experimental-features "nix-command flakes")
+
+# /usr/bin/git is only a stub until Apple's command-line tools are
+# installed; without them, use git from Nix
+git() {
+  if xcode-select -p >/dev/null 2>&1; then
+    command git "$@"
+  else
+    "${NIX[@]}" shell nixpkgs#git -c git "$@"
+  fi
+}
 
 if [ -d "$DEST/.git" ]; then
   info "Updating existing checkout..."
@@ -30,4 +41,4 @@ fi
 
 info "Running setup (asks for your passwords)..."
 cd "$DEST"
-exec nix run .#install
+exec "${NIX[@]}" run .#install

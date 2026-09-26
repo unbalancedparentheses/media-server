@@ -132,21 +132,30 @@ e2e_cleanup() {
 
   # Queued downloads for the test's own movie/series (including anything
   # Radarr/Sonarr grabbed for them on their own)
+  # Only a 404 means "already gone"; any other failure keeps the record so
+  # the next run retries
+  e2e_remove() {  # label get-url delete-url api-key-header
+    case "$(api_status GET "$2" -H "$4")" in
+      200) api DELETE "$3" -H "$4" >/dev/null || failed=1 ;;
+      404) ;;
+      *) warn "Couldn't check the test's $1 (service not answering)"; failed=1 ;;
+    esac
+  }
+  local queue
   if [ -n "$movie_id" ]; then
-    for qid in $(api GET "$RADARR_URL/api/v3/queue?movieIds=$movie_id" -H "$H_RADARR" | jq -r '.records[]?.id'); do
+    queue=$(api GET "$RADARR_URL/api/v3/queue?movieIds=$movie_id" -H "$H_RADARR") || { queue='{}'; failed=1; }
+    for qid in $(jq -r '.records[]?.id' <<< "$queue"); do
       api DELETE "$RADARR_URL/api/v3/queue/$qid?removeFromClient=true&blocklist=false" -H "$H_RADARR" >/dev/null || failed=1
     done
-    if api GET "$RADARR_URL/api/v3/movie/$movie_id" -H "$H_RADARR" >/dev/null; then
-      api DELETE "$RADARR_URL/api/v3/movie/$movie_id?deleteFiles=true&addImportExclusion=false" -H "$H_RADARR" >/dev/null || failed=1
-    fi
+    e2e_remove movie "$RADARR_URL/api/v3/movie/$movie_id" \
+      "$RADARR_URL/api/v3/movie/$movie_id?deleteFiles=true&addImportExclusion=false" "$H_RADARR"
   fi
   if [ -n "$series_id" ]; then
-    for qid in $(api GET "$SONARR_URL/api/v3/queue?seriesIds=$series_id" -H "$H_SONARR" | jq -r '.records[]?.id'); do
+    queue=$(api GET "$SONARR_URL/api/v3/queue?seriesIds=$series_id" -H "$H_SONARR") || { queue='{}'; failed=1; }
+    for qid in $(jq -r '.records[]?.id' <<< "$queue"); do
       api DELETE "$SONARR_URL/api/v3/queue/$qid?removeFromClient=true&blocklist=false" -H "$H_SONARR" >/dev/null || failed=1
     done
-    if api GET "$SONARR_URL/api/v3/series/$series_id" -H "$H_SONARR" >/dev/null; then
-      api DELETE "$SONARR_URL/api/v3/series/$series_id?deleteFiles=true" -H "$H_SONARR" >/dev/null || failed=1
-    fi
+    e2e_remove series "$SONARR_URL/api/v3/series/$series_id" "$SONARR_URL/api/v3/series/$series_id?deleteFiles=true" "$H_SONARR"
   fi
 
   if [ -n "$hashes" ]; then
@@ -175,8 +184,16 @@ e2e_cleanup() {
     }
     wait_until 120 jellyfin_clean || { warn "Jellyfin still lists a test item"; failed=1; }
   fi
-  if [ -n "$media_id" ]; then
-    api DELETE "$SEERR_URL/api/v1/media/$media_id" -H "$H_SEERR" >/dev/null || failed=1
+  # Deleting the media also deletes its requests; a request recorded
+  # without media (Seerr answered but never added it) is deleted directly
+  local request_id
+  request_id=$(jq -r '.seerr_request_id // empty' "$f")
+  local seerr_url="" code
+  if [ -n "$media_id" ]; then seerr_url="$SEERR_URL/api/v1/media/$media_id"
+  elif [ -n "$request_id" ]; then seerr_url="$SEERR_URL/api/v1/request/$request_id"; fi
+  if [ -n "$seerr_url" ]; then
+    code=$(api_status DELETE "$seerr_url" -H "$H_SEERR")
+    case "$code" in 2??|404) ;; *) warn "Couldn't remove the test's Seerr entry (HTTP $code)"; failed=1 ;; esac
   fi
 
   if [ "$failed" -eq 0 ]; then
@@ -191,13 +208,14 @@ e2e_cleanup() {
 # Refuse to run if the test titles already exist and aren't the test's own:
 # the test would change them and its cleanup would delete them
 e2e_require_clean_slate() {
-  local H_RADARR="X-Api-Key: $RADARR_KEY" H_SONARR="X-Api-Key: $SONARR_KEY" H_SEERR="X-Api-Key: $SEERR_KEY" found=""
-  api GET "$RADARR_URL/api/v3/movie?tmdbId=$E2E_MOVIE_TMDB" -H "$H_RADARR" | jq -e 'length > 0' >/dev/null 2>&1 && \
-    found="$found Tears of Steel is in Radarr;"
-  api GET "$SONARR_URL/api/v3/series" -H "$H_SONARR" | jq -e --argjson t "$E2E_SERIES_TVDB" 'any(.[]; .tvdbId == $t)' >/dev/null 2>&1 && \
-    found="$found Pioneer One is in Sonarr;"
-  [ -n "$(api GET "$SEERR_URL/api/v1/movie/$E2E_MOVIE_TMDB" -H "$H_SEERR" | jq -r '.mediaInfo.id // empty')" ] && \
-    found="$found Tears of Steel is in Seerr;"
+  local H_RADARR="X-Api-Key: $RADARR_KEY" H_SONARR="X-Api-Key: $SONARR_KEY" H_SEERR="X-Api-Key: $SEERR_KEY" found="" movies series seerr
+  # A failed check must not read as "not there"
+  movies=$(api GET "$RADARR_URL/api/v3/movie?tmdbId=$E2E_MOVIE_TMDB" -H "$H_RADARR") || err "Couldn't reach Radarr to check the test titles aren't in your library"
+  series=$(api GET "$SONARR_URL/api/v3/series" -H "$H_SONARR") || err "Couldn't reach Sonarr to check the test titles aren't in your library"
+  seerr=$(api GET "$SEERR_URL/api/v1/movie/$E2E_MOVIE_TMDB" -H "$H_SEERR") || err "Couldn't reach Seerr to check the test titles aren't in your library"
+  jq -e 'length > 0' <<< "$movies" >/dev/null 2>&1 && found="$found Tears of Steel is in Radarr;"
+  jq -e --argjson t "$E2E_SERIES_TVDB" 'any(.[]; .tvdbId == $t)' <<< "$series" >/dev/null 2>&1 && found="$found Pioneer One is in Sonarr;"
+  [ -n "$(jq -r '.mediaInfo.id // empty' <<< "$seerr")" ] && found="$found Tears of Steel is in Seerr;"
   [ -z "$found" ] || err "The test uses Tears of Steel and Pioneer One, and they're already in your library:$found it won't touch them. Remove them first to run the test."
 }
 
@@ -217,7 +235,7 @@ do_e2e() {
   mkdir -p "$torrents"
   if [ "$(stat -f %z "$src" 2>/dev/null || echo 0)" != "$E2E_SOURCE_SIZE" ]; then
     e2e_step "Downloading Tears of Steel (CC BY, 372 MB) from download.blender.org..."
-    curl -fL --progress-bar -o "$src" "$E2E_SOURCE_URL" || err "Download failed"
+    curl -fL --progress-bar --max-time 3600 -o "$src" "$E2E_SOURCE_URL" || err "Download failed"
   fi
 
   local H_RADARR="X-Api-Key: $RADARR_KEY" H_SONARR="X-Api-Key: $SONARR_KEY" H_SEERR="X-Api-Key: $SEERR_KEY"
@@ -261,7 +279,11 @@ do_e2e() {
   # on exit, whatever happens.
   e2e_pause_radarr_indexers
   e2e_step "Requesting it in Seerr"
-  if api POST "$SEERR_URL/api/v1/request" -H "$H_SEERR" -d "{\"mediaType\":\"movie\",\"mediaId\":$E2E_MOVIE_TMDB}" >/dev/null; then
+  local request
+  if request=$(api POST "$SEERR_URL/api/v1/request" -H "$H_SEERR" -d "{\"mediaType\":\"movie\",\"mediaId\":$E2E_MOVIE_TMDB}"); then
+    # Recorded right away, so cleanup finds it even if Radarr never gets the movie
+    e2e_own seerr_request_id "$(jq -r '.id // empty' <<< "$request")"
+    e2e_own seerr_media_id "$(jq -r '.media.id // empty' <<< "$request")"
     e2e_pass "Seerr accepted the request"
   else
     e2e_fail "Seerr rejected the request (already in the library? run with a clean state)"
@@ -270,7 +292,6 @@ do_e2e() {
   if wait_until 90 radarr_movie_id; then
     movie_id=$(radarr_movie_id)
     e2e_own movie_id "$movie_id"
-    e2e_own seerr_media_id "$(api GET "$SEERR_URL/api/v1/movie/$E2E_MOVIE_TMDB" -H "$H_SEERR" | jq -r '.mediaInfo.id // empty')"
     e2e_pass "Seerr → Radarr: movie added ($(api GET "$RADARR_URL/api/v3/movie/$movie_id" -H "$H_RADARR" | jq -r '.rootFolderPath'))"
   else
     e2e_fail "Seerr → Radarr: movie never appeared in Radarr"

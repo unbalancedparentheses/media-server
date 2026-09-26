@@ -3,8 +3,11 @@
 # restart, preflight and config check.
 
 # ─── Backup ──────────────────────────────────────────────────────
-# Archives ~/media/config and ~/media/config.toml. Services are stopped while
-# archiving so their SQLite databases are consistent, then started again.
+# Archives ~/media/config, ~/media/config.toml and setup's own records in
+# ~/media/.state (applied logins, migration marker, e2e test ownership),
+# which describe these databases and must travel with them. Services are
+# stopped while archiving so their SQLite databases are consistent.
+STATE_RECORDS=".state/credentials.json .state/sonarr-anime-migrated .state/e2e/owned.json"
 do_backup() {
   [ -d "$CONFIG_DIR" ] || err "Config directory not found: $CONFIG_DIR"
   mkdir -p "$BACKUP_DIR"
@@ -28,11 +31,13 @@ do_backup() {
     done
   fi
 
+  local records=() record
+  for record in $STATE_RECORDS; do [ -e "$MEDIA_DIR/$record" ] && records+=("$record"); done
   # Logs and caches are large and recreated on start
   if ! (umask 077 && tar czf "$backup_file" \
       --exclude='config/*/logs' --exclude='config/jellyfin/log' --exclude='config/jellyfin/cache' \
       --exclude='config/nginx/temp' \
-      -C "$MEDIA_DIR" config "$(basename "$CONFIG_FILE")"); then
+      -C "$MEDIA_DIR" config "$(basename "$CONFIG_FILE")" ${records[@]+"${records[@]}"}); then
     restart_backed_up_services
     rm -f "$backup_file"
     err "Backup failed"
@@ -106,6 +111,7 @@ do_restore() {
     [ -f "$CONFIG_FILE" ] && mv "$CONFIG_FILE" "$CONFIG_FILE.pre-restore-$timestamp"
     mv "$extract/$(basename "$CONFIG_FILE")" "$CONFIG_FILE"
   fi
+  restore_state_records "$extract" "$timestamp"
   rm -rf "$extract"
   ok "Configs restored"
 
@@ -113,6 +119,29 @@ do_restore() {
   echo "  Now run 'nix run .#install' to start the services with the restored configs."
   echo "  Previous configs: $CONFIG_DIR.pre-restore-$timestamp (delete once you're happy)"
   echo ""
+}
+
+# Setup's records must match the restored databases: take the backup's, or,
+# for a backup made before they were included, set the current ones aside
+# (they describe the newer databases). Setup then re-checks every login,
+# re-runs the anime migration if needed (it skips series already there),
+# and the e2e test forgets items that aren't in the restored databases.
+restore_state_records() {  # extract-dir timestamp
+  local extract="$1" aside="$STATE_DIR/pre-restore-$2" record moved=false
+  for record in $STATE_RECORDS; do
+    if [ -e "$MEDIA_DIR/$record" ]; then
+      mkdir -p "$aside/$(dirname "${record#.state/}")"
+      mv "$MEDIA_DIR/$record" "$aside/${record#.state/}"
+      moved=true
+    fi
+    if [ -e "$extract/$record" ]; then
+      mkdir -p "$MEDIA_DIR/$(dirname "$record")"
+      mv "$extract/$record" "$MEDIA_DIR/$record"
+    fi
+  done
+  [ "$moved" = true ] && ok "Setup's previous records set aside in $aside"
+  [ -e "$extract/.state" ] || warn "This backup predates setup's records; the next install re-checks every login and migration"
+  return 0
 }
 
 # ─── Update ──────────────────────────────────────────────────────
@@ -138,7 +167,7 @@ do_update() {
   info "Re-running setup..."
   local setup_args=()
   [ "$NON_INTERACTIVE" = "true" ] && setup_args+=(--yes)
-  exec nix run "path:$repo#install" -- ${setup_args[@]+"${setup_args[@]}"}
+  exec nix --extra-experimental-features "nix-command flakes" run "path:$repo#install" -- ${setup_args[@]+"${setup_args[@]}"}
 }
 
 # ─── Uninstall ───────────────────────────────────────────────────

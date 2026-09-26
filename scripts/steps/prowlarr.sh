@@ -68,7 +68,7 @@ configure_prowlarr() {
     # Add indexers from config.json
     INDEXER_COUNT=$(cfg '.indexers | length' 2>/dev/null || echo "0")
     [[ "$INDEXER_COUNT" =~ ^[0-9]+$ ]] || INDEXER_COUNT=0
-    EXISTING_INDEXERS=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
+    ALL_INDEXERS=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" || echo "[]")
     SCHEMAS=""
 
     if [ "$INDEXER_COUNT" -gt 0 ]; then
@@ -76,33 +76,34 @@ configure_prowlarr() {
       for i in $(seq 0 $((INDEXER_COUNT - 1))); do
         IDX_ENABLED=$(cfg ".indexers[$i].enable")
         IDX_NAME=$(cfg ".indexers[$i].name")
-        if [ "$IDX_ENABLED" != "true" ]; then
-          # Switched off in config.toml: disable it in Prowlarr too (kept, not deleted)
-          local off_idx
-          off_idx=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" | jq -c --arg n "$IDX_NAME" '.[] | select(.name == $n and .enable)' 2>/dev/null || true)
-          [ -n "$off_idx" ] && api PUT "$PROWLARR_URL/api/v1/indexer/$(jq -r .id <<< "$off_idx")?forceSave=true" -H "$PH" \
-            -d "$(jq -c '.enable = false' <<< "$off_idx")" >/dev/null && ok "$IDX_NAME disabled"
-          continue
-        fi
-
         IDX_DEF=$(cfg ".indexers[$i].definitionName")
         IDX_FLARE=$(cfg ".indexers[$i].flaresolverr // false")
+        USER_FIELDS=$(cfg ".indexers[$i].fields // {}")
+        local existing_idx
+        existing_idx=$(jq -c --arg n "$IDX_NAME" '[.[] | select(.name == $n)][0] // empty' <<< "$ALL_INDEXERS")
 
-        if echo "$EXISTING_INDEXERS" | grep -q "^${IDX_NAME}$"; then
-          # Route an existing indexer through Byparr if config now asks for it
-          if [ "$IDX_FLARE" = "true" ] && [ -n "$FLARESOLVERR_TAG_ID" ]; then
-            local existing_idx
-            existing_idx=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" | jq -c --arg n "$IDX_NAME" '.[] | select(.name == $n)')
-            if ! jq -e --argjson t "$FLARESOLVERR_TAG_ID" '.tags | index($t)' <<< "$existing_idx" >/dev/null; then
-              api PUT "$PROWLARR_URL/api/v1/indexer/$(jq -r .id <<< "$existing_idx")?forceSave=true" -H "$PH" \
-                -d "$(jq -c --argjson t "$FLARESOLVERR_TAG_ID" '.tags += [$t]' <<< "$existing_idx")" >/dev/null && \
-                ok "$IDX_NAME: now routed through Byparr" || warn "$IDX_NAME: could not route through Byparr"
-              continue
-            fi
+        if [ -n "$existing_idx" ]; then
+          # Keep an existing indexer in line with config.toml: enabled or
+          # not, its fields, and whether it goes through Byparr
+          local updated_idx
+          updated_idx=$(jq -c --argjson on "$([ "$IDX_ENABLED" = true ] && echo true || echo false)" \
+            --argjson flare "$([ "$IDX_FLARE" = true ] && echo true || echo false)" \
+            --argjson tag "${FLARESOLVERR_TAG_ID:-null}" --argjson uf "$USER_FIELDS" '
+            .enable = $on
+            | .fields = [.fields[] | if $uf[.name] != null then .value = $uf[.name] else . end]
+            | if $tag == null then .
+              elif $flare then .tags = ((.tags // []) + [$tag] | unique)
+              else .tags = ((.tags // []) - [$tag]) end' <<< "$existing_idx")
+          if [ "$updated_idx" = "$existing_idx" ]; then
+            [ "$IDX_ENABLED" = true ] && ok "$IDX_NAME already added"
+          elif api PUT "$PROWLARR_URL/api/v1/indexer/$(jq -r .id <<< "$existing_idx")?forceSave=true" -H "$PH" -d "$updated_idx" >/dev/null; then
+            ok "$IDX_NAME updated ($([ "$IDX_ENABLED" = true ] && echo enabled || echo disabled)$([ "$IDX_FLARE" = true ] && echo ", through Byparr"))"
+          else
+            warn "$IDX_NAME: could not update"
           fi
-          ok "$IDX_NAME already added"
           continue
         fi
+        [ "$IDX_ENABLED" = true ] || continue
 
         # Fetch schemas once (cached)
         if [ -z "$SCHEMAS" ]; then
@@ -118,8 +119,7 @@ configure_prowlarr() {
         fi
 
         # Merge user-provided fields into the schema
-        USER_FIELDS=$(cfg ".indexers[$i].fields")
-        if [ "$USER_FIELDS" != "null" ] && [ "$USER_FIELDS" != "{}" ]; then
+        if [ "$USER_FIELDS" != "{}" ]; then
           SCHEMA=$(echo "$SCHEMA" | jq -c --argjson uf "$USER_FIELDS" '
             .fields = [.fields[] | if $uf[.name] then .value = $uf[.name] else . end]
           ' 2>/dev/null)
@@ -139,7 +139,7 @@ configure_prowlarr() {
       rm -f "$TMPDIR_SETUP/prowlarr_indexer.json"
     fi
 
-    set_arr_login "Prowlarr" "$PROWLARR_URL" "$PROWLARR_KEY" v1
+    set_arr_login "Prowlarr" "$PROWLARR_URL" "$PROWLARR_KEY" v1 prowlarr
   fi
 }
 

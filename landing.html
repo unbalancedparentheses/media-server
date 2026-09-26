@@ -53,6 +53,7 @@
 
   /* Cards with stagger animation */
   @keyframes cardIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+  .card-off{opacity:0.45;cursor:default}
   .card{display:flex;align-items:center;gap:1rem;padding:1.1rem 1.3rem;background:var(--surface);border:1px solid var(--border);border-radius:12px;color:var(--text);text-decoration:none;transition:all 0.25s ease;position:relative;overflow:hidden;animation:cardIn 0.4s ease both}
   .card::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--border-hover),transparent);transition:background 0.25s ease}
   .card:hover{background:var(--surface2);border-color:var(--border-hover);transform:translateY(-2px);box-shadow:0 8px 25px -5px rgba(0,0,0,0.4)}
@@ -233,8 +234,11 @@
       </div>
     </div>
   </div>
+  <script src="/settings.js"></script>
   <script>
     var h=location.hostname;
+    // settings.js (written by setup) says whether the admin UIs listen on this Mac only
+    var adminOffHere=!!(window.MEDIA_SETTINGS&&window.MEDIA_SETTINGS.adminLocalOnly)&&!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(h);
     var icons={
       Moonfin:'\uD83C\uDF19',Seerr:'\uD83C\uDFAC',Jellyfin:'\u25B6\uFE0F',
       Sonarr:'\uD83D\uDCFA',
@@ -264,13 +268,16 @@
         var ico=icons[s[1]]||'\u25CF';
         // s = [port, name, description, optional path]
         var url='http://'+h+':'+s[0]+(s[3]||'');
-        gridHtml+='<a href="'+url+'" class="card '+sec[1]+'" style="animation-delay:'+(cardIdx*0.05)+'s">'
+        // Admin UIs listening on the Mac only can't be opened from here
+        var off=adminOffHere&&s[0]!==8096&&s[0]!==5055;
+        var tag=off?'div':'a';
+        gridHtml+='<'+tag+(off?'':' href="'+url+'"')+' class="card '+sec[1]+(off?' card-off':'')+'" style="animation-delay:'+(cardIdx*0.05)+'s">'
           +'<div class="icon">'+ico+'</div>'
           +'<div class="card-info"><div class="card-name">'+s[1]+'</div>'
-          +'<div class="card-desc">'+s[2]+'</div>'
+          +'<div class="card-desc">'+(off?'Only on the Mac running the server':s[2])+'</div>'
           +'<div class="card-port">:'+s[0]+'</div></div>'
-          +'<div class="dot" id="d'+cardIdx+'"></div></a>';
-        allServices.push(url);
+          +'<div class="dot" id="d'+cardIdx+'"></div></'+tag+'>';
+        allServices.push(off?null:url);
         cardIdx++;
       });
       gridHtml+='</div></div>';
@@ -281,7 +288,7 @@
     function checkHealth(){
       allServices.forEach(function(url,i){
         var d=document.getElementById("d"+i);
-        if(!d)return;
+        if(!d||!url)return;
         fetch(url,{mode:"no-cors",signal:AbortSignal.timeout(3000)})
           .then(function(){d.className="dot up"})
           .catch(function(){d.className="dot down"});

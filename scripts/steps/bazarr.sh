@@ -13,17 +13,20 @@ configure_bazarr() {
 
     # Edit with a YAML parser: line-based edits corrupted the file when a
     # value's shape changed (e.g. a one-line list becoming a block list)
-    if python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" "$SUBTITLE_LANGS" "${ADMIN_BIND:-0.0.0.0}" << 'PYEOF'
-import sys, yaml
+    local bazarr_result
+    if bazarr_result=$(python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" "$SUBTITLE_LANGS" "${ADMIN_BIND:-0.0.0.0}" << 'PYEOF'
+import copy, sys, yaml
 
 path, sonarr_key, radarr_key, providers, langs, bind = sys.argv[1:7]
 with open(path) as f:
     cfg = yaml.safe_load(f) or {}
+before = copy.deepcopy(cfg)
 general = cfg.setdefault("general", {})
 
 for app, key, port in (("sonarr", sonarr_key, 8989), ("radarr", radarr_key, 7878)):
     if key:
-        cfg.setdefault(app, {}).update(ip="localhost", port=port, base_url="/", apikey=key, ssl=False)
+        # base_url "": Bazarr rewrites "/" to it, which would count as a change every run
+        cfg.setdefault(app, {}).update(ip="localhost", port=port, base_url="", apikey=key, ssl=False)
         general[f"use_{app}"] = True
 
 if providers:
@@ -43,14 +46,20 @@ general.update(
     ip=bind,
 )
 
-with open(path, "w") as f:
-    yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
-print("OK")
+# Only rewrite (and restart Bazarr) when something changed
+if cfg == before:
+    print("unchanged")
+else:
+    with open(path, "w") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+    print("changed")
 PYEOF
-    then
+); then
       ok "Sonarr + Radarr configured"
-      svc_restart bazarr >/dev/null 2>&1 && ok "Bazarr restarted" || true
-      wait_for "Bazarr" "$BAZARR_URL"
+      if [ "$bazarr_result" = changed ]; then
+        svc_restart bazarr >/dev/null 2>&1 && ok "Bazarr restarted with the new settings" || true
+        wait_for "Bazarr" "$BAZARR_URL"
+      fi
     else
       warn "Could not update Bazarr config"
     fi
@@ -69,17 +78,24 @@ PYEOF
       # update it when the list changed. Other profiles are kept as they are.
       local want_langs profiles_json
       want_langs=$(jq -Rc 'split(",") | map(select(. != ""))' <<< "$SUBTITLE_LANGS")
-      profiles_json=$(jq -c --argjson langs "$want_langs" '
-        ($langs | to_entries | map({id: .key, language: .value, hi: false, forced: false, audio_exclude: "False", audio_only_include: "False"})) as $items
+      # subtitles.want = "first": done once any listed language is there
+      # (cutoff 65535 = "any"), searched in list order; "all": every language
+      local cutoff=null
+      [ "$(cfg '.subtitles.want // "first"')" = first ] && cutoff=65535
+      profiles_json=$(jq -c --argjson langs "$want_langs" --argjson cutoff "$cutoff" '
+        ($langs | to_entries | map({id: .key, language: .value, hi: "False", forced: "False", audio_exclude: "False", audio_only_include: "False"})) as $items
+        # Bazarr compares these flags as the strings "True"/"False"; booleans
+        # (written by older versions of this script) never match the cutoff
         | if any(.[]; .name == "Default") then
-            if ([.[] | select(.name == "Default") | .items[].language] == $langs) then empty
-            else map(if .name == "Default" then .items = $items else . end) end
+            if ([.[] | select(.name == "Default") | .items][0] == $items
+                and ([.[] | select(.name == "Default") | .cutoff][0] == $cutoff)) then empty
+            else map(if .name == "Default" then .items = $items | .cutoff = $cutoff else . end) end
           else
-            . + [{profileId: ((map(.profileId) | max // 0) + 1), name: "Default", cutoff: null,
+            . + [{profileId: ((map(.profileId) | max // 0) + 1), name: "Default", cutoff: $cutoff,
                   items: $items, mustContain: [], mustNotContain: [], originalFormat: null}]
           end' <<< "$EXISTING_PROFILES" 2>/dev/null || true)
       if [ -z "$profiles_json" ]; then
-        ok "Language profile: Default ($(echo "$SUBTITLE_LANGS" | tr ',' ' '))"
+        ok "Language profile: Default ($(echo "$SUBTITLE_LANGS" | tr ',' ' '); $(cfg '.subtitles.want // "first"'))"
       else
         local default_id lang
         default_id=$(jq -r '.[] | select(.name == "Default") | .profileId' <<< "$profiles_json")
@@ -94,6 +110,11 @@ PYEOF
           -d "settings-general-serie_default_profile=$default_id" \
           -d "settings-general-movie_default_profile=$default_id" >/dev/null 2>&1 && \
           ok "Language profile: Default ($(echo "$SUBTITLE_LANGS" | tr ',' ' '), updated)" || warn "Could not set the language profile"
+        # Bazarr recomputes what's missing only when it re-indexes
+        local task
+        for task in series_full_scan_subtitles movies_full_scan_subtitles; do
+          curl -sf -o /dev/null -X POST "$BAZARR_URL/api/system/tasks?apikey=$BAZARR_API_KEY_VAL" --data-urlencode "taskid=$task" 2>/dev/null || true
+        done
       fi
     fi
   fi
@@ -121,13 +142,24 @@ else:
 PYEOF
 ) || bazarr_auth="failed"
     if [ "$bazarr_auth" = "updated" ]; then
-      ok "Bazarr login set: $JELLYFIN_USER"
       svc_restart bazarr >/dev/null 2>&1 || true
       wait_for "Bazarr" "$BAZARR_URL"
     elif [ "$bazarr_auth" = "failed" ]; then
       warn "Could not set the Bazarr login"
-    else
-      ok "Bazarr auth already configured"
+    fi
+    if [ "$bazarr_auth" != failed ]; then
+      if bazarr_login_works "$JELLYFIN_USER" "$JELLYFIN_PASS"; then
+        creds_match bazarr "$JELLYFIN_USER" "$JELLYFIN_PASS" || creds_set bazarr "$JELLYFIN_USER" "$JELLYFIN_PASS"
+        ok "Bazarr login: $JELLYFIN_USER"
+      else
+        warn "Bazarr's login doesn't work yet (retried next run)"
+      fi
     fi
   fi
+}
+
+# Bazarr's login API: 204 when the login works
+bazarr_login_works() {
+  [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST "$BAZARR_URL/api/system/account?action=login" \
+    --data-urlencode "username=$1" --data-urlencode "password=$2" 2>/dev/null)" = "204" ]
 }

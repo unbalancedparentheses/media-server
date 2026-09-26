@@ -181,30 +181,33 @@ write_secure_defaults_to_config() {
 prompt_credentials() {
   local path="$1"
   info "Setting up credentials..."
-  echo "  Jellyfin credentials are shared across most services"
-  echo "  (Seerr, Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd)."
+  echo "  The Jellyfin login is shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr,"
+  echo "  SABnzbd and Cleanuparr. qBittorrent has its own."
   echo ""
+  # With nothing to read (piped or redirected input), explain instead of
+  # failing on the prompt
+  prompt_read() { read -r "$@" || err "No answer to the password prompt; run with --yes to generate passwords (or edit $CONFIG_FILE first)"; }
 
   local jf_user jf_pass jf_pass2 qbit_user qbit_pass qbit_pass2
 
-  read -r -p "  Jellyfin username [admin]: " jf_user
+  prompt_read -p "  Jellyfin username [admin]: " jf_user
   jf_user="${jf_user:-admin}"
   while true; do
-    read -r -s -p "  Jellyfin password: " jf_pass; echo
+    prompt_read -s -p "  Jellyfin password: " jf_pass; echo
     [ -z "$jf_pass" ] && warn "Password cannot be empty" && continue
-    read -r -s -p "  Confirm password:  " jf_pass2; echo
+    prompt_read -s -p "  Confirm password:  " jf_pass2; echo
     [ "$jf_pass" = "$jf_pass2" ] && break
     warn "Passwords don't match — try again"
   done
   ok "Jellyfin: $jf_user"
   echo ""
 
-  read -r -p "  qBittorrent username [admin]: " qbit_user
+  prompt_read -p "  qBittorrent username [admin]: " qbit_user
   qbit_user="${qbit_user:-admin}"
   while true; do
-    read -r -s -p "  qBittorrent password: " qbit_pass; echo
+    prompt_read -s -p "  qBittorrent password: " qbit_pass; echo
     [ -z "$qbit_pass" ] && warn "Password cannot be empty" && continue
-    read -r -s -p "  Confirm password:     " qbit_pass2; echo
+    prompt_read -s -p "  Confirm password:     " qbit_pass2; echo
     [ "$qbit_pass" = "$qbit_pass2" ] && break
     warn "Passwords don't match — try again"
   done
@@ -214,51 +217,100 @@ prompt_credentials() {
   ok "Credentials saved to config.toml"
 }
 
-# ─── Credentials actually applied to the services ──────────────
-# Jellyfin and qBittorrent need the current password to set a new one, so
-# the last applied logins are kept in ~/media/.state (0600, like config.toml).
-# CREDS_CHANGED is true when config.toml differs from what was last applied
-# (or nothing was recorded yet), and every service then gets the new login.
-load_applied_credentials() {
-  local f="$STATE_DIR/credentials.json"
-  APPLIED_JF_USER="" APPLIED_JF_PASS="" APPLIED_QB_USER="" APPLIED_QB_PASS=""
-  if [ -f "$f" ]; then
-    APPLIED_JF_USER=$(jq -r '.jellyfin.username // ""' "$f")
-    APPLIED_JF_PASS=$(jq -r '.jellyfin.password // ""' "$f")
-    APPLIED_QB_USER=$(jq -r '.qbittorrent.username // ""' "$f")
-    APPLIED_QB_PASS=$(jq -r '.qbittorrent.password // ""' "$f")
-  fi
-  CREDS_CHANGED=false
-  { [ "$APPLIED_JF_USER" != "$JELLYFIN_USER" ] || [ "$APPLIED_JF_PASS" != "$JELLYFIN_PASS" ]; } && CREDS_CHANGED=true
+# ─── Credentials applied to each service ─────────────────────────
+# ~/media/.state/credentials.json (0600, like config.toml) records, per
+# service, the login it last verified working. A service's entry only
+# advances after its new login was checked, so an interrupted or failed
+# change is retried on the next run, and services that need the current
+# password to set a new one (Jellyfin) still have it.
+creds_file() { printf '%s/credentials.json' "$STATE_DIR"; }
+
+# Loads the record into CREDS_JSON, upgrading the older format (one shared
+# jellyfin/qbittorrent entry): the shared login is assumed for the services
+# it covered, except Cleanuparr, whose password setup may not have applied
+creds_load() {
+  local f
+  f=$(creds_file)
+  CREDS_JSON='{"version":2,"services":{}}'
+  [ -f "$f" ] || return 0
+  CREDS_JSON=$(jq -c '
+    if .version == 2 then .
+    else {version: 2, services: (
+      (if .jellyfin then
+        reduce ("jellyfin", "sonarr", "radarr", "prowlarr", "bazarr", "sabnzbd") as $s ({}; .[$s] = $jf)
+       else {} end) as $shared
+      | $shared + (if .qbittorrent then {qbittorrent: .qbittorrent} else {} end))}
+    end' --argjson jf "$(jq -c '.jellyfin // null' "$f")" "$f" 2>/dev/null) || {
+    warn "$(creds_file) is unreadable; every service's login will be re-applied"
+    CREDS_JSON='{"version":2,"services":{}}'
+  }
   return 0
 }
-save_applied_credentials() {
-  local f="$STATE_DIR/credentials.json"
-  mkdir -p "$STATE_DIR"
-  (umask 077 && jq -n --arg ju "$JELLYFIN_USER" --arg jp "$JELLYFIN_PASS" --arg qu "$QBIT_USER" --arg qp "$QBIT_PASS" \
-    '{jellyfin: {username: $ju, password: $jp}, qbittorrent: {username: $qu, password: $qp}}' > "$f")
+
+# creds_get <service> <username|password>; empty if not recorded
+creds_get() { jq -r --arg s "$1" --arg f "$2" '.services[$s][$f] // ""' <<< "$CREDS_JSON"; }
+
+# True if <service>'s recorded login is <user>/<pass>
+creds_match() {
+  [ "$(creds_get "$1" username)" = "$2" ] && [ "$(creds_get "$1" password)" = "$3" ]
 }
 
-# *arr/Prowlarr web login: set whenever config.toml's login changed (their
-# API key allows it without the old password) or none is set
+# Record <service>'s verified login and write the file atomically
+creds_set() {
+  local f tmp
+  f=$(creds_file)
+  CREDS_JSON=$(jq -c --arg s "$1" --arg u "$2" --arg p "$3" '.services[$s] = {username: $u, password: $p}' <<< "$CREDS_JSON")
+  mkdir -p "$STATE_DIR"
+  tmp="$f.tmp.$$"
+  (umask 077 && jq . <<< "$CREDS_JSON" > "$tmp") && mv -f "$tmp" "$f"
+}
+
+# *arr/Prowlarr form login: 302 to the app on success, back to /login?…loginFailed on failure
+arr_login_works() {  # url user pass
+  local loc
+  loc=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 -X POST "$1/login" \
+    --data-urlencode "username=$2" --data-urlencode "password=$3" 2>/dev/null) || return 1
+  [ -n "$loc" ] && [[ "$loc" != *loginFailed* ]]
+}
+
+# *arr/Prowlarr web login: the API key allows setting it without the old
+# password. Applied when the record or the app's settings differ, then
+# checked by logging in; only a working login is recorded.
 set_arr_login() {
-  local label="$1" url="$2" key="$3" api_ver="${4:-v3}" H="X-Api-Key: $3" host id current
+  local label="$1" url="$2" key="$3" api_ver="${4:-v3}" svc="$5" H="X-Api-Key: $3" host id
   host=$(api GET "$url/api/$api_ver/config/host" -H "$H") || { warn "$label: could not read its login settings"; return 0; }
-  current=$(jq -r '.username // empty' <<< "$host")
-  if [ "$current" = "$JELLYFIN_USER" ] && [ "$CREDS_CHANGED" != "true" ]; then
-    ok "$label login: $current"
+  if creds_match "$svc" "$JELLYFIN_USER" "$JELLYFIN_PASS" && \
+     jq -e --arg u "$JELLYFIN_USER" '.username == $u and .authenticationMethod == "forms"' <<< "$host" >/dev/null; then
+    ok "$label login: $JELLYFIN_USER"
     return 0
   fi
   id=$(jq -r '.id' <<< "$host")
   api PUT "$url/api/$api_ver/config/host/$id" -H "$H" -d "$(jq -c --arg user "$JELLYFIN_USER" --arg pass "$JELLYFIN_PASS" \
-    '.authenticationMethod = "forms" | .authenticationRequired = "enabled" | .username = $user | .password = $pass | .passwordConfirmation = $pass' <<< "$host")" >/dev/null && \
-    ok "$label login set: $JELLYFIN_USER" || warn "$label: could not set its login"
+    '.authenticationMethod = "forms" | .authenticationRequired = "enabled" | .username = $user | .password = $pass | .passwordConfirmation = $pass' <<< "$host")" >/dev/null || \
+    { warn "$label: could not set its login (retried next run)"; return 0; }
+  if arr_login_works "$url" "$JELLYFIN_USER" "$JELLYFIN_PASS"; then
+    creds_set "$svc" "$JELLYFIN_USER" "$JELLYFIN_PASS"
+    ok "$label login set: $JELLYFIN_USER"
+  else
+    warn "$label: the new login doesn't work yet (retried next run)"
+  fi
 }
 
 # Jellyfin 12 only accepts the Authorization header (no X-Emby-Token)
 jf_auth() { printf 'Authorization: MediaBrowser Token="%s"' "$1"; }
 
-# Every call is bounded: a stalled service can't hang setup or a poll loop
+# Every curl is bounded: a service that accepts a connection and never
+# answers can't hang setup. A later --max-time on the command line wins
+# (curl keeps the last value), e.g. for large downloads.
+curl() { command curl --connect-timeout 5 --max-time "${CURL_MAX_TIME:-60}" "$@"; }
+
+# HTTP status of a request ("000" if there was no answer), for telling
+# "not found" (404) apart from an unreachable service
+api_status() {
+  local method="$1" url="$2"; shift 2
+  curl -s -o /dev/null -w '%{http_code}' -X "$method" "$url" "$@" 2>/dev/null || true
+}
+
 api() {
   local method="$1" url="$2"; shift 2
   curl -sf --connect-timeout 5 --max-time "${API_MAX_TIME:-60}" -X "$method" "$url" -H "Content-Type: application/json" "$@" 2>/dev/null
@@ -356,6 +408,14 @@ validate_config_semantics() {
   is_non_negative_int "$disk_min" || err "disk.min_free_gb must be a whole number of GB"
   dashboard_port=$(cfg '.network.dashboard_port // 80')
   is_non_negative_int "$dashboard_port" || err "network.dashboard_port must be a port number"
+
+  case "$(cfg '.subtitles.want // "first"')" in first|all) ;; *) err 'subtitles.want must be "first" or "all"' ;; esac
+  local strikes
+  strikes=$(cfg '.cleanuparr.stalled_strikes // 6')
+  { is_non_negative_int "$strikes" && [ "$strikes" -ge 3 ]; } || err "cleanuparr.stalled_strikes must be a whole number, 3 or more"
+  local up_kib
+  up_kib=$(cfg '.downloads.upload_limit_kib // 100')
+  is_non_negative_int "$up_kib" || err "downloads.upload_limit_kib must be a whole number (0 = no limit)"
 
   validate_quality_profile sonarr_profile
   validate_quality_profile sonarr_anime_profile

@@ -61,6 +61,8 @@ configure_tailscale() {
   if [ -z "$TS_CLI" ]; then
     return 0
   elif [ "$(cfg_bool .network.tailscale_https true)" != "true" ]; then
+    # Take down what an earlier run published
+    remove_tailscale_serve
     ok "Tailscale HTTPS disabled (network.tailscale_https = false)"
   elif ! "$TS_CLI" status &>/dev/null; then
     warn "Tailscale is not connected; open it from the menu bar to enable remote access"
@@ -69,15 +71,19 @@ configure_tailscale() {
     TS_HOSTNAME=$("$TS_CLI" status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)
     [ -n "$TS_IP" ] && ok "Tailscale connected ($TS_IP)"
     if [ -n "$TS_HOSTNAME" ]; then
-      SERVE_STATUS=$("$TS_CLI" serve status 2>/dev/null || echo "")
-      if echo "$SERVE_STATUS" | grep -q "https.*443" && echo "$SERVE_STATUS" | grep -q "https.*8096" && echo "$SERVE_STATUS" | grep -q "https.*5055"; then
-        ok "Tailscale HTTPS already configured"
-      else
-        info "Configuring Tailscale HTTPS..."
-        run_timeout 10 "$TS_CLI" serve --bg --yes --https=443 "http://127.0.0.1:$DASHBOARD_PORT" </dev/null 2>/dev/null && ok "HTTPS :443 → dashboard" || warn "Failed to configure HTTPS :443"
-        run_timeout 10 "$TS_CLI" serve --bg --yes --https=8096 http://127.0.0.1:8096 </dev/null 2>/dev/null && ok "HTTPS :8096 → Jellyfin" || warn "Failed to configure HTTPS :8096"
-        run_timeout 10 "$TS_CLI" serve --bg --yes --https=5055 http://127.0.0.1:5055 </dev/null 2>/dev/null && ok "HTTPS :5055 → Seerr" || warn "Failed to configure HTTPS :5055"
-      fi
+      local serve port target label
+      serve=$("$TS_CLI" serve status --json 2>/dev/null || echo "{}")
+      for route in "443|http://127.0.0.1:$DASHBOARD_PORT|dashboard" "8096|http://127.0.0.1:8096|Jellyfin" "5055|http://127.0.0.1:5055|Seerr"; do
+        IFS='|' read -r port target label <<< "$route"
+        # Already published to the same place (not just the same port)?
+        if jq -e --arg p ":$port" --arg t "$target" \
+            'any(.Web // {} | to_entries[]; (.key | endswith($p)) and .value.Handlers["/"].Proxy == $t)' <<< "$serve" >/dev/null 2>&1; then
+          ok "HTTPS :$port → $label"
+        else
+          run_timeout 10 "$TS_CLI" serve --bg --yes --https="$port" "$target" </dev/null >/dev/null 2>&1 && \
+            ok "HTTPS :$port → $label (published)" || warn "Failed to publish HTTPS :$port"
+        fi
+      done
     fi
   fi
   return 0
@@ -106,8 +112,8 @@ admin_host() {
 }
 
 # *arr config.xml: API key, port and bind address are set before first start
-# so setup knows the key and the second Sonarr gets its own port. Existing
-# files keep their key; port and bind address follow config.toml.
+# so setup knows the key. Existing files keep their key; port and bind
+# address follow config.toml.
 seed_arr_config() {
   local name="$1" port="$2" file="$CONFIG_DIR/$1/config.xml" bind="${ADMIN_BIND:-0.0.0.0}"
   [ "$bind" = "0.0.0.0" ] && bind="*"
@@ -135,43 +141,16 @@ XML
   return 0
 }
 
-# qBittorrent stores the Web UI password as PBKDF2-SHA512; writing it up
-# front avoids the random first-run password that's only printed to the log.
-# On macOS qBittorrent reads qBittorrent.ini (qBittorrent.conf on Linux).
-# An existing file keeps its password; one without a password gets ours.
+# qBittorrent's Web UI login is written before first start, which avoids
+# the random first-run password that's only printed to its log. On macOS
+# qBittorrent reads qBittorrent.ini. An existing password is kept here;
+# configure_qbittorrent changes it when config.toml's differs.
 seed_qbittorrent_config() {
-  local dir="$CONFIG_DIR/qbittorrent/qBittorrent/config" file bind="${ADMIN_BIND:-0.0.0.0}"
-  file="$dir/qBittorrent.ini"
-  [ -f "$file" ] && grep -q '^WebUI\\Password_PBKDF2=' "$file" && return 0
-  mkdir -p "$dir"
+  local bind="${ADMIN_BIND:-0.0.0.0}"
+  [ -f "$QBIT_INI" ] && grep -q '^WebUI\\Password_PBKDF2=' "$QBIT_INI" && return 0
+  mkdir -p "$(dirname "$QBIT_INI")"
   [ "$bind" = "0.0.0.0" ] && bind="*"
-  python3 - "$file" "$(cfg '.qbittorrent.username')" "$(cfg '.qbittorrent.password')" "$bind" << 'PY'
-import base64, hashlib, os, sys
-
-path, user, password, bind = sys.argv[1:]
-salt = os.urandom(16)
-key = hashlib.pbkdf2_hmac("sha512", password.encode(), salt, 100000, 64)
-pbkdf2 = f"@ByteArray({base64.b64encode(salt).decode()}:{base64.b64encode(key).decode()})"
-prefs = {
-    "WebUI\\Address": bind,
-    "WebUI\\Port": "8081",
-    "WebUI\\Username": user,
-    "WebUI\\Password_PBKDF2": f'"{pbkdf2}"',
-}
-
-lines = open(path).read().splitlines() if os.path.exists(path) else []
-if not any(l.strip() == "[LegalNotice]" for l in lines):
-    lines = ["[LegalNotice]", "Accepted=true", ""] + lines
-if not any(l.strip() == "[Preferences]" for l in lines):
-    lines += ["", "[Preferences]"]
-# Drop existing values for these keys, then add ours under [Preferences]
-lines = [l for l in lines if l.split("=", 1)[0] not in prefs]
-i = lines.index("[Preferences]") + 1
-lines[i:i] = [f"{k}={v}" for k, v in prefs.items()]
-with open(path, "w") as f:
-    f.write("\n".join(lines) + "\n")
-os.chmod(path, 0o600)
-PY
+  qbit_ini_set_login "$(cfg '.qbittorrent.username')" "$(cfg '.qbittorrent.password')" "$bind"
   ok "qBittorrent: qBittorrent.ini"
 }
 
@@ -200,7 +179,9 @@ write_nginx_config() {
   [ -f "$proxy" ] || : > "$proxy"
   cp "$SCRIPT_DIR/landing.html" "$CONFIG_DIR/nginx/www/index.html"
   cp "$SCRIPT_DIR/admin.html" "$CONFIG_DIR/nginx/www/admin.html"
-  chmod 644 "$CONFIG_DIR/nginx/www/"*.html
+  printf 'window.MEDIA_SETTINGS=%s;\n' "$(jq -nc --argjson local "$([ "${ADMIN_BIND:-0.0.0.0}" = 127.0.0.1 ] && echo true || echo false)" '{adminLocalOnly:$local}')" \
+    > "$CONFIG_DIR/nginx/www/settings.js"
+  chmod 644 "$CONFIG_DIR/nginx/www/"*.html "$CONFIG_DIR/nginx/www/settings.js"
 }
 
 write_service_configs() {
@@ -218,6 +199,8 @@ write_service_configs() {
 start_stack() {
   info "Starting services..."
   remove_retired_services
+  # Before Cleanuparr can start on a wider address
+  cleanuparr_require_login
   local changed
   changed=$(write_launch_agents)
   # Also restart services whose config file changed (e.g. a new admin_bind)
@@ -266,9 +249,14 @@ wait_for_services() {
   while IFS='|' read -r svc_name svc_url; do
     [ -z "$svc_name" ] && continue
     if [ "$svc_name" = "Byparr" ]; then
-      WAIT_MAX=600 wait_for "$svc_name" "$svc_url"
+      # Only Cloudflare-protected indexers need it; don't stop setup for it
+      WAIT_MAX=600 wait_for "$svc_name" "$svc_url" || {
+        BYPARR_DOWN=true
+        warn "Byparr didn't start (see $LOG_DIR/byparr.log); indexers with flaresolverr = true won't work until it does"
+      }
     else
-      wait_for "$svc_name" "$svc_url"
+      wait_for "$svc_name" "$svc_url" || \
+        err "$svc_name didn't start within ${WAIT_MAX:-120}s; see $LOG_DIR and 'nix run .#status', then re-run setup"
     fi
   done <<< "$SERVICE_HEALTH_ENDPOINTS"
 }

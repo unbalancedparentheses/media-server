@@ -269,7 +269,10 @@
               jq
               openssl
               sqlite
-              (python3.withPackages (ps: [ ps.pyyaml ]))
+              (python3.withPackages (ps: [
+                ps.pyyaml
+                ps.bcrypt
+              ]))
             ];
             text = ''
               export MEDIA_SERVICES_JSON=${manifest}
@@ -326,6 +329,27 @@
         backup = app pkgs [ "--backup" ];
         restore = app pkgs [ "--restore" ];
         update = app pkgs [ "--update" ];
+        # Failure-path tests (no services needed)
+        unit = {
+          type = "app";
+          program = nixpkgs.lib.getExe (
+            pkgs.writeShellApplication {
+              name = "media-server-unit-tests";
+              runtimeInputs = with pkgs; [
+                bash
+                coreutils
+                gnutar
+                gzip
+                gnused
+                gnugrep
+                gawk
+                jq
+                python3
+              ];
+              text = "exec bash ${self}/tests/recovery.sh";
+            }
+          );
+        };
       });
 
       devShells = forAllSystems (pkgs: {
