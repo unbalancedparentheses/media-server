@@ -15,6 +15,7 @@ init_service_registry() {
   SABNZBD_URL="http://$admin:8080"
   SEERR_URL="http://localhost:5055"
   BYPARR_URL="http://127.0.0.1:8191"
+  CLEANUPARR_URL="http://$admin:11011"
   DASHBOARD_PORT="${DASHBOARD_PORT:-80}"
   DASHBOARD_URL="http://localhost:$DASHBOARD_PORT"
 
@@ -38,13 +39,14 @@ init_service_registry() {
   SERVICE_HEALTH_ENDPOINTS+=$'qBittorrent|'"$QBIT_URL"$'\n'
   SERVICE_HEALTH_ENDPOINTS+=$'Seerr|'"$SEERR_URL"$'/api/v1/status\n'
   SERVICE_HEALTH_ENDPOINTS+=$'Byparr|'"$BYPARR_URL"$'/health\n'
+  SERVICE_HEALTH_ENDPOINTS+=$'Cleanuparr|'"$CLEANUPARR_URL"$'/health\n'
   SERVICE_HEALTH_ENDPOINTS+=$'Dashboard|'"$DASHBOARD_URL"$'\n'
   SERVICE_HEALTH_ENDPOINTS="${SERVICE_HEALTH_ENDPOINTS%$'\n'}"
 }
 
 # launchd agents, one per service (names match flake.nix `services`).
 # One per line: setup.sh sets IFS to newline/tab, so spaces don't split.
-SERVICE_NAMES=$'jellyfin\nsonarr\nradarr\nprowlarr\nbazarr\nqbittorrent\nsabnzbd\nunpackerr\nseerr\nbyparr\nnginx\ndiskwatch'
+SERVICE_NAMES=$'jellyfin\nsonarr\nradarr\nprowlarr\nbazarr\nqbittorrent\nsabnzbd\nunpackerr\ncleanuparr\nseerr\nbyparr\nnginx\ndiskwatch'
 LABEL_PREFIX="${MEDIA_LABEL_PREFIX:-org.media-server}"
 svc_label() { printf '%s.%s' "$LABEL_PREFIX" "$1"; }
 svc_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$(svc_label "$1")"; }

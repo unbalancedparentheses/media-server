@@ -1,5 +1,5 @@
 {
-  description = "Self-hosted media server for macOS: Jellyfin, Seerr, Sonarr, Radarr, Prowlarr, Bazarr, qBittorrent, SABnzbd, run as launchd agents";
+  description = "Self-hosted media server for macOS: Jellyfin, Seerr, Sonarr, Radarr, Prowlarr, Bazarr, qBittorrent, SABnzbd, Cleanuparr, run as launchd agents";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -88,6 +88,41 @@
             fi
             exec ${exe pkgs.uv} run --frozen --no-dev python main.py
           '';
+
+          # Cleanuparr isn't in nixpkgs; upstream publishes self-contained
+          # macOS builds. It keeps its data in CLEANUPARR_CONFIG_PATH.
+          cleanuparr =
+            let
+              version = "2.10.8";
+              arch = if pkgs.stdenv.hostPlatform.isAarch64 then "arm64" else "amd64";
+            in
+            pkgs.stdenvNoCC.mkDerivation {
+              pname = "cleanuparr";
+              inherit version;
+              src = pkgs.fetchzip {
+                url = "https://github.com/Cleanuparr/Cleanuparr/releases/download/v${version}/Cleanuparr-${version}-osx-${arch}.zip";
+                hash =
+                  {
+                    arm64 = "sha256-CLl/FvWOAtpvT4k0x19AasCrt+ZG1m0d+tfSLRa3l7M=";
+                    amd64 = "sha256-Xbu/GehuffwzDMiFF0AZeCkAvY6obupNUeY0IytPmRg=";
+                  }
+                  .${arch};
+              };
+              # A signed single-file .NET app: leave the binaries untouched
+              dontFixup = true;
+              installPhase = ''
+                mkdir -p $out/lib/cleanuparr $out/bin
+                cp -R . $out/lib/cleanuparr
+                ln -s $out/lib/cleanuparr/Cleanuparr $out/bin/cleanuparr
+              '';
+              meta = {
+                description = "Removes stalled and failed downloads from the *arr apps";
+                homepage = "https://github.com/Cleanuparr/Cleanuparr";
+                license = lib.licenses.gpl3Only;
+                mainProgram = "cleanuparr";
+                platforms = lib.platforms.darwin;
+              };
+            };
 
           # Checks free space on the media disk every 30 minutes and shows a
           # macOS notification (at most every 6 hours) when it runs low
@@ -181,6 +216,15 @@
                 BYPARR_STATE = "@STATE@/byparr";
               };
             };
+            cleanuparr = {
+              # The real binary, not the bin/ symlink: it finds wwwroot next to itself
+              args = [ "${cleanuparr}/lib/cleanuparr/Cleanuparr" ];
+              env = {
+                PORT = "11011";
+                BIND_ADDRESS = "@ADMIN_BIND@";
+                CLEANUPARR_CONFIG_PATH = "@CONFIG@/cleanuparr";
+              };
+            };
             diskwatch = {
               args = [ "${diskwatchStart}" ];
               env = {
@@ -224,6 +268,7 @@
               gawk
               jq
               openssl
+              sqlite
               (python3.withPackages (ps: [ ps.pyyaml ]))
             ];
             text = ''
@@ -239,6 +284,7 @@
             manifest
             seerr
             sabnzbd
+            cleanuparr
             ;
         };
 
@@ -259,7 +305,12 @@
         in
         {
           default = stack.cli;
-          inherit (stack) manifest seerr sabnzbd;
+          inherit (stack)
+            manifest
+            seerr
+            sabnzbd
+            cleanuparr
+            ;
         }
       );
 

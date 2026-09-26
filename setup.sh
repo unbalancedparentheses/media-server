@@ -112,6 +112,7 @@ run_setup() {
   write_service_configs
   start_stack
   read_setup_config
+  load_applied_credentials
   wait_for_services
   load_api_keys
   configure_qbittorrent
@@ -126,7 +127,11 @@ run_setup() {
   configure_seerr
   configure_moonbase
   configure_unpackerr
+  configure_cleanuparr
   write_api_proxy
+  # Only once Jellyfin accepted the configured login; otherwise keep the old
+  # record so the next run can still log in with it
+  [ -n "${JELLYFIN_TOKEN:-}" ] && save_applied_credentials
 }
 
 print_summary() {

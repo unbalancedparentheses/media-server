@@ -24,9 +24,12 @@ configure_arr() {
     fi
   done
 
-  EXISTING_DL=$(api GET "$url/api/$api_ver/downloadclient" -H "$H" | jq -r '.[].name' 2>/dev/null || echo "")
+  local clients qbit_id sab_id
+  clients=$(api GET "$url/api/$api_ver/downloadclient" -H "$H" 2>/dev/null || echo "[]")
+  qbit_id=$(jq -r '[.[] | select(.implementation == "QBittorrent") | .id][0] // empty' <<< "$clients")
+  sab_id=$(jq -r '[.[] | select(.implementation == "Sabnzbd") | .id][0] // empty' <<< "$clients")
 
-  if ! echo "$EXISTING_DL" | grep -q "qBittorrent"; then
+  if [ -z "$qbit_id" ]; then
     QBIT_DL_JSON=$(jq -nc --arg u "$QBIT_USER" --arg p "$QBIT_PASS" --arg cf "$cat_field" --arg cn "$name" \
       '{name:"qBittorrent",implementation:"QBittorrent",configContract:"QBittorrentSettings",
         enable:true,protocol:"torrent",priority:1,
@@ -35,16 +38,25 @@ configure_arr() {
           {name:$cf,value:$cn}]}')
     api POST "$url/api/$api_ver/downloadclient" -H "$H" -d "$QBIT_DL_JSON" >/dev/null 2>&1 && \
       ok "qBittorrent connected (category: $name)" || warn "Could not add qBittorrent"
-  else ok "qBittorrent connected"; fi
+  else
+    # Keep the login in step with config.toml
+    sync_resource_fields "$name qBittorrent client" "$url/api/$api_ver/downloadclient" "$qbit_id" \
+      "$(jq -nc --arg u "$QBIT_USER" --arg p "$QBIT_PASS" '{username:$u, password:$p}')" "$key"
+    ok "qBittorrent connected"
+  fi
 
-  if [ -n "$SABNZBD_KEY" ] && ! echo "$EXISTING_DL" | grep -q "SABnzbd"; then
+  if [ -n "$SABNZBD_KEY" ] && [ -z "$sab_id" ]; then
     api POST "$url/api/$api_ver/downloadclient" -H "$H" -d '{
       "name":"SABnzbd","implementation":"Sabnzbd","configContract":"SabnzbdSettings",
       "enable":true,"protocol":"usenet","priority":2,
       "fields":[{"name":"host","value":"localhost"},{"name":"port","value":8080},
         {"name":"apiKey","value":"'"$SABNZBD_KEY"'"},{"name":"'"$cat_field"'","value":"'"$name"'"}]
     }' >/dev/null 2>&1 && ok "SABnzbd connected (category: $name)" || warn "Could not add SABnzbd"
-  elif [ -n "$SABNZBD_KEY" ]; then ok "SABnzbd connected"; fi
+  elif [ -n "$SABNZBD_KEY" ]; then
+    sync_resource_fields "$name SABnzbd client" "$url/api/$api_ver/downloadclient" "$sab_id" \
+      "$(jq -nc --arg k "$SABNZBD_KEY" '{apiKey:$k}')" "$key"
+    ok "SABnzbd connected"
+  fi
 
   # Add Jellyfin notification connection (triggers library scan on import/upgrade)
   if [ -n "$JELLYFIN_API_KEY" ]; then
@@ -60,21 +72,7 @@ configure_arr() {
     else ok "Jellyfin notification connected"; fi
   fi
 
-  # Configure web UI authentication (Sonarr v4 / Radarr v5 enable auth by default)
-  HOST_CONFIG=$(api GET "$url/api/$api_ver/config/host" -H "$H" 2>/dev/null || echo "")
-  if [ -n "$HOST_CONFIG" ] && [ "$HOST_CONFIG" != "null" ]; then
-    CURRENT_AUTH_USER=$(echo "$HOST_CONFIG" | jq -r '.username // empty' 2>/dev/null)
-    if [ -z "$CURRENT_AUTH_USER" ]; then
-      HOST_ID=$(echo "$HOST_CONFIG" | jq -r '.id' 2>/dev/null)
-      UPDATED_HOST=$(echo "$HOST_CONFIG" | jq -c \
-        --arg user "$JELLYFIN_USER" --arg pass "$JELLYFIN_PASS" \
-        '.authenticationMethod = "forms" | .username = $user | .password = $pass | .passwordConfirmation = $pass | .authenticationRequired = "enabled"' 2>/dev/null)
-      api PUT "$url/api/$api_ver/config/host/$HOST_ID" -H "$H" -d "$UPDATED_HOST" >/dev/null 2>&1 && \
-        ok "Auth set: $JELLYFIN_USER" || warn "Could not set authentication"
-    else
-      ok "Auth: $CURRENT_AUTH_USER"
-    fi
-  fi
+  set_arr_login "$name" "$url" "$key" "$api_ver"
 }
 
 enable_unknown_quality() {
@@ -101,11 +99,48 @@ set_min_free_space() {
     ok "$label: imports stop below $DISK_MIN_GB GB free" || warn "$label: could not set minimum free space"
 }
 
+# Older versions ran a second Sonarr for anime. Add its series to Sonarr
+# (as anime, keeping their folders, no search) and rescan so the existing
+# episode files are picked up. Its data folder is left in place.
+migrate_anime_sonarr() {
+  local db="$CONFIG_DIR/sonarr-anime/sonarr.db" marker="$STATE_DIR/sonarr-anime-migrated"
+  local H="X-Api-Key: $SONARR_KEY" rows row tvdb path monitored have profile_id lookup failed=0 added=0
+  [ -f "$db" ] && [ ! -f "$marker" ] || return 0
+  info "Moving the old anime Sonarr's series into Sonarr..."
+  rows=$(sqlite3 -json "file:$db?mode=ro" 'SELECT TvdbId, Path, Monitored FROM Series' 2>/dev/null) || {
+    warn "Could not read $db; its series were not moved (setup retries next run)"; return 0; }
+  have=$(api GET "$SONARR_URL/api/v3/series" -H "$H" | jq -c '[.[].tvdbId]') || { warn "Could not list Sonarr series"; return 0; }
+  profile_id=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "$H" | \
+    jq -r --arg n "$SONARR_ANIME_PROFILE" '([.[] | select(.name == $n) | .id][0]) // .[0].id')
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    tvdb=$(jq -r .TvdbId <<< "$row"); path=$(jq -r .Path <<< "$row"); monitored=$(jq -r '.Monitored == 1' <<< "$row")
+    jq -e --argjson t "$tvdb" 'index($t)' <<< "$have" >/dev/null && continue
+    lookup=$(api GET "$SONARR_URL/api/v3/series/lookup?term=tvdb:$tvdb" -H "$H" | jq -c '.[0] // empty') || lookup=""
+    if [ -n "$lookup" ] && api POST "$SONARR_URL/api/v3/series" -H "$H" -d "$(jq -c \
+        --arg path "$path" --argjson pid "$profile_id" --argjson mon "$monitored" \
+        '. + {path:$path, qualityProfileId:$pid, monitored:$mon, seriesType:"anime", seasonFolder:true,
+              addOptions:{searchForMissingEpisodes:false, monitor:(if $mon then "all" else "none" end)}}' <<< "$lookup")" >/dev/null; then
+      ok "Moved: $(jq -r .title <<< "$lookup")"
+      added=$((added + 1))
+    else
+      warn "Could not move the series at $path (TVDB $tvdb)"
+      failed=1
+    fi
+  done < <(jq -c '.[]' <<< "${rows:-[]}")
+  [ "$added" -gt 0 ] && api POST "$SONARR_URL/api/v3/command" -H "$H" -d '{"name":"RescanSeries"}' >/dev/null
+  if [ "$failed" = 0 ]; then
+    touch "$marker"
+    ok "Old anime Sonarr's series are in Sonarr; you can delete $CONFIG_DIR/sonarr-anime"
+  fi
+}
+
 configure_arrs() {
   # One Sonarr for TV and anime: Seerr sends anime to the anime folder
   [ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "$TV_DIR"$'\n'"$ANIME_DIR" "tvCategory"
   [ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "$MOVIES_DIR" "movieCategory"
   [ -n "$SONARR_KEY" ]       && set_min_free_space "Sonarr" "$SONARR_URL" "$SONARR_KEY"
+  [ -n "$SONARR_KEY" ]       && migrate_anime_sonarr
   [ -n "$RADARR_KEY" ]       && set_min_free_space "Radarr" "$RADARR_URL" "$RADARR_KEY"
 
   [ -n "$SONARR_KEY" ]       && enable_unknown_quality "$SONARR_URL"       "$SONARR_KEY"
@@ -130,7 +165,7 @@ apply_junk_filters() {
     # Filters score -10000 (never grab); files can set their own score, e.g.
     # +100 for "Prefer HEVC", which [quality] prefer_h265 = false turns off
     score=$(jq -r ".mediaServerScore // $JUNK_SCORE" "$f")
-    [ "$name" = "Prefer HEVC" ] && [ "$(cfg '.quality.prefer_h265 // true')" != "true" ] && score=0
+    [ "$name" = "Prefer HEVC" ] && [ "$(cfg_bool .quality.prefer_h265 true)" != "true" ] && score=0
     id=$(jq -r --arg n "$name" '.[] | select(.name == $n) | .id' <<< "$existing" | head -1)
     if [ -n "$id" ]; then
       api PUT "$url/api/v3/customformat/$id" -H "$H" -d "$(jq -c --argjson id "$id" '. + {id: $id}' <<< "$payload")" >/dev/null || \
@@ -159,7 +194,7 @@ apply_junk_filters() {
     api PUT "$url/api/v3/qualityprofile/$(jq -r '.id' <<< "$profile")" -H "$H" -d "$updated" >/dev/null || \
       warn "$label: could not update profile $(jq -r '.name' <<< "$profile")"
   done < <(jq -c '.[]' <<< "$profiles")
-  ok "$label: release filters on (BR-DISK, LQ, Upscaled, Extras, Foreign Subtitles$([ "$app" = radarr ] && echo ", 3D")); HEVC preferred: $(cfg '.quality.prefer_h265 // true')"
+  ok "$label: release filters on (BR-DISK, LQ, Upscaled, Extras, Foreign Subtitles$([ "$app" = radarr ] && echo ", 3D")); HEVC preferred: $(cfg_bool .quality.prefer_h265 true)"
 }
 
 configure_junk_filters() {

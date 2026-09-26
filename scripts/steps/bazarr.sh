@@ -65,32 +65,35 @@ PYEOF
     if [ -n "$BAZARR_API_KEY_VAL" ]; then
       wait_for "Bazarr" "$BAZARR_URL"
       EXISTING_PROFILES=$(curl -sf "$BAZARR_URL/api/system/languages/profiles?apikey=$BAZARR_API_KEY_VAL" 2>/dev/null || echo "[]")
-      PROFILE_COUNT=$(echo "$EXISTING_PROFILES" | jq 'length' 2>/dev/null || echo "0")
-
-      if [ "$PROFILE_COUNT" = "0" ] || [ -z "$PROFILE_COUNT" ]; then
-        # Build language items for the profile
-        LANG_ITEMS="[]"
-        IDX=0
+      # The "Default" profile carries subtitles.languages: create it, or
+      # update it when the list changed. Other profiles are kept as they are.
+      local want_langs profiles_json
+      want_langs=$(jq -Rc 'split(",") | map(select(. != ""))' <<< "$SUBTITLE_LANGS")
+      profiles_json=$(jq -c --argjson langs "$want_langs" '
+        ($langs | to_entries | map({id: .key, language: .value, hi: false, forced: false, audio_exclude: "False", audio_only_include: "False"})) as $items
+        | if any(.[]; .name == "Default") then
+            if ([.[] | select(.name == "Default") | .items[].language] == $langs) then empty
+            else map(if .name == "Default" then .items = $items else . end) end
+          else
+            . + [{profileId: ((map(.profileId) | max // 0) + 1), name: "Default", cutoff: null,
+                  items: $items, mustContain: [], mustNotContain: [], originalFormat: null}]
+          end' <<< "$EXISTING_PROFILES" 2>/dev/null || true)
+      if [ -z "$profiles_json" ]; then
+        ok "Language profile: Default ($(echo "$SUBTITLE_LANGS" | tr ',' ' '))"
+      else
+        local default_id lang
+        default_id=$(jq -r '.[] | select(.name == "Default") | .profileId' <<< "$profiles_json")
+        # Every language a profile uses has to be enabled
         LANG_ENABLED_ARGS=()
-        IFS=',' read -ra LANGS <<< "$SUBTITLE_LANGS"
-        for lang in "${LANGS[@]}"; do
-          LANG_ITEMS=$(echo "$LANG_ITEMS" | jq --arg code "$lang" --argjson idx "$IDX" \
-            '. + [{"id": $idx, "language": $code, "hi": false, "forced": false}]')
-          LANG_ENABLED_ARGS+=(-d "languages-enabled=$lang")
-          IDX=$((IDX + 1))
-        done
-
-        PROFILE_JSON=$(jq -n --argjson items "$LANG_ITEMS" \
-          '[{"profileId":1,"name":"Default","cutoff":null,"items":$items,"mustContain":"","mustNotContain":"","originalFormat":null}]')
-
+        while IFS= read -r lang; do
+          [ -n "$lang" ] && LANG_ENABLED_ARGS+=(-d "languages-enabled=$lang")
+        done < <(jq -r '[.[].items[].language] | unique | .[]' <<< "$profiles_json")
         api_retry curl -sf -X POST "$BAZARR_URL/api/system/settings?apikey=$BAZARR_API_KEY_VAL" \
           "${LANG_ENABLED_ARGS[@]}" \
-          --data-urlencode "languages-profiles=$PROFILE_JSON" \
-          -d "settings-general-serie_default_profile=1" \
-          -d "settings-general-movie_default_profile=1" >/dev/null 2>&1 && \
-          ok "Language profile: Default ($(echo "$SUBTITLE_LANGS" | tr ',' ' '))" || warn "Could not create language profile"
-      else
-        ok "Language profiles already configured ($PROFILE_COUNT)"
+          --data-urlencode "languages-profiles=$profiles_json" \
+          -d "settings-general-serie_default_profile=$default_id" \
+          -d "settings-general-movie_default_profile=$default_id" >/dev/null 2>&1 && \
+          ok "Language profile: Default ($(echo "$SUBTITLE_LANGS" | tr ',' ' '), updated)" || warn "Could not set the language profile"
       fi
     fi
   fi

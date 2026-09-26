@@ -13,7 +13,7 @@ Everything runs natively from [Nix](https://nixos.org): no Docker, no VM. Each s
 ```
 You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr ──> Indexers
                                              │                (Byparr for Cloudflare)
-                                   qBittorrent / SABnzbd
+                                   qBittorrent / SABnzbd  <── Cleanuparr (clears stuck downloads)
                                              │
                                       download completes
                                              │
@@ -24,7 +24,7 @@ You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr �
 
 1. Browse and request in **Moonfin** (or **Seerr** directly)
 2. **Sonarr** (TV/anime) or **Radarr** (movies) searches indexers via **Prowlarr**, skipping junk releases
-3. The best match goes to **qBittorrent** or **SABnzbd** (Usenet)
+3. The best match goes to **qBittorrent** or **SABnzbd** (Usenet). If a torrent stalls, **Cleanuparr** removes it and the release is blocklisted so Sonarr/Radarr try another
 4. The file is downloaded, renamed, and added to your **Jellyfin** library
 5. **Bazarr** fetches subtitles (English + Spanish by default)
 
@@ -89,6 +89,7 @@ Log in with a Jellyfin user. Create one per family member in Jellyfin (Dashboard
 | **[SABnzbd](https://sabnzbd.org)** | 8080 | Usenet client (optional; needs a paid provider) |
 | **[Byparr](https://github.com/ThePhaseless/Byparr)** | 8191 (local only) | Gets past Cloudflare on protected indexers |
 | **[Unpackerr](https://unpackerr.zip)** | — | Extracts archived downloads for import |
+| **[Cleanuparr](https://github.com/Cleanuparr/Cleanuparr)** | 11011 | Removes stalled, metadata-stuck and failed-import downloads; Sonarr/Radarr blocklist them and search again |
 | **[nginx](https://nginx.org)** | 80 | Dashboard with live download/calendar widgets |
 | **diskwatch** | — | Warns (macOS notification) when the media disk runs low |
 
@@ -98,14 +99,15 @@ The dashboard at `http://localhost` (or `http://<mac-ip>`) links to everything; 
 
 `~/media/config.toml` (created from `config.toml.example` on first run). Re-run `nix run .#install` after editing.
 
-- **Credentials:** `[jellyfin]` and `[qbittorrent]`. The Jellyfin login is shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr and SABnzbd.
+- **Credentials:** `[jellyfin]` and `[qbittorrent]`. The Jellyfin login is shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd and Cleanuparr. To change a password, edit it here and re-run install: setup remembers the last applied one (in `~/media/.state/credentials.json`) and changes it everywhere, Jellyfin included. Renaming the Jellyfin user has to be done in Jellyfin itself.
 - **Quality:** `[quality]` picks the Sonarr/Radarr profiles Seerr requests use (built-in profiles: `HD-1080p`, `Ultra-HD`, …). Anime requests use `sonarr_anime_profile` and go to `~/media/anime`, so they show up in Jellyfin's Anime library.
 - **Release filters:** BR-DISK images, known-bad release groups, upscales, extras-only, 3D, and releases tagged with non-English subtitles (VOSTFR, BIG5, CHS, …; common with anime) are scored -10000 in every profile, so they're never grabbed. See [`custom-formats/`](custom-formats/README.md). HEVC (x265) releases get +100, so the smaller file wins when several are acceptable (`prefer_h265 = false` to turn off).
 - **Subtitles:** `[subtitles]` languages and providers. The defaults need no account; OpenSubtitles.com, SubDL, Jimaku (anime) and Addic7ed are listed commented out, to enable after adding their login or API key in Bazarr. Most anime releases already carry English subtitles in the file, which the `embeddedsubtitles` provider recognizes.
 - **Indexers:** `[[indexers]]` public torrent and anime indexers (Nyaa, SubsPlease, Mikan, Bangumi); `flaresolverr = true` routes one through Byparr. All of them sync to Sonarr and Radarr.
 - **Usenet:** public torrent sites are often thin (few or no seeders). Usenet is faster and more reliable, but needs two paid accounts: a **provider** (e.g. Newshosting, Eweka, Frugal Usenet) under `[[usenet_providers]]`, and an **indexer** (e.g. NZBgeek, DrunkenSlug, NZBFinder) under `[[indexers]]` with its API key (see the NZBgeek example in `config.toml.example`). Set `enable = true` on both and re-run install; Sonarr and Radarr then use SABnzbd automatically.
+- **Stuck downloads:** `[cleanuparr]` Cleanuparr checks the queue every 5 minutes. A public torrent with no progress for `stalled_strikes` checks (default 6, about 30 minutes), one that never gets metadata, or one that fails to import 3 times is removed, blocklisted, and searched for again. `enabled = false` turns it off.
 - **Disk space:** `[disk] warn_free_gb` (default 50) shows a macOS notification when the media disk runs low; below `min_free_gb` (default 10) Sonarr and Radarr stop importing so the disk never fills completely. `nix run .#status` shows free space.
-- **Network:** `[network] admin_bind` restricts where the admin UIs listen (`"127.0.0.1"` = this Mac only, or your Tailscale IP); `dashboard_port` moves the dashboard off port 80.
+- **Network:** `[network] admin_bind` restricts where the admin UIs listen (`"0.0.0.0"` = every interface, `"127.0.0.1"` = this Mac only); `dashboard_port` moves the dashboard off port 80.
 
 There's no built-in VPN. If you use one, run its Mac app; torrent traffic follows the system connection.
 

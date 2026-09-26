@@ -29,12 +29,12 @@ e2e_pass() { E2E_PASSED=$((E2E_PASSED + 1)); ok "$*"; }
 e2e_fail() { E2E_FAILED=$((E2E_FAILED + 1)); printf "\033[1;31m   ✗ %s\033[0m\n" "$*"; }
 
 # wait_until <seconds> <command...>: poll every 3s until the command succeeds
+# (elapsed time, not a count of sleeps, so a slow check can't stretch it)
 wait_until() {
-  local max="$1" i=0
+  local max="$1" start=$SECONDS
   shift
   until "$@" >/dev/null 2>&1; do
-    i=$((i + 3))
-    [ "$i" -ge "$max" ] && return 1
+    [ $((SECONDS - start)) -ge "$max" ] && return 1
     sleep 3
   done
 }
@@ -103,49 +103,102 @@ e2e_resume_radarr_indexers() {
   e2e_step "Radarr indexers restored"
 }
 
-# Remove the test titles everywhere, in dependency order: downloads, then
+# Ownership: everything the test creates (Radarr movie, Sonarr series, Seerr
+# media, torrent hashes, download folders) is recorded here as it's created,
+# and cleanup removes only what's recorded. Nothing is matched by title.
+e2e_owned_file() { printf '%s' "$STATE_DIR/e2e/owned.json"; }
+e2e_own() {
+  local f
+  f=$(e2e_owned_file)
+  [ -f "$f" ] || echo '{}' > "$f"
+  jq --arg k "$1" --arg v "$2" \
+    'if $k == "hashes" or $k == "paths" then .[$k] = ((.[$k] // []) + [$v] | unique) else .[$k] = $v end' \
+    "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# Remove what the test owns, in dependency order: downloads, then
 # Radarr/Sonarr (with files), then wait for Jellyfin to drop the items, and
-# only then Seerr (otherwise Seerr re-syncs them from Jellyfin). Works from
-# the tmdb/tvdb ids, so it also cleans up after an interrupted run.
+# only then Seerr (otherwise Seerr re-syncs them from Jellyfin). Returns
+# non-zero if anything couldn't be removed; the record is kept for next time.
 e2e_cleanup() {
-  local H_RADARR="X-Api-Key: $RADARR_KEY" H_SONARR="X-Api-Key: $SONARR_KEY" H_SEERR="X-Api-Key: $SEERR_KEY"
-  local movie_id series_id qid media_id cookie hashes
-  movie_id=$(api GET "$RADARR_URL/api/v3/movie?tmdbId=$E2E_MOVIE_TMDB" -H "$H_RADARR" | jq -r '.[0].id // empty' || true)
-  series_id=$(api GET "$SONARR_URL/api/v3/series" -H "$H_SONARR" | jq -r --argjson t "$E2E_SERIES_TVDB" '.[] | select(.tvdbId == $t) | .id' || true)
-  [ -n "$movie_id" ] && for qid in $(api GET "$RADARR_URL/api/v3/queue?movieIds=$movie_id" -H "$H_RADARR" | jq -r '.records[]?.id'); do
-    api DELETE "$RADARR_URL/api/v3/queue/$qid?removeFromClient=true&blocklist=false" -H "$H_RADARR" >/dev/null || true
-  done
-  [ -n "$series_id" ] && for qid in $(api GET "$SONARR_URL/api/v3/queue?seriesIds=$series_id" -H "$H_SONARR" | jq -r '.records[]?.id'); do
-    api DELETE "$SONARR_URL/api/v3/queue/$qid?removeFromClient=true&blocklist=false" -H "$H_SONARR" >/dev/null || true
-  done
-  [ -n "$movie_id" ] && api DELETE "$RADARR_URL/api/v3/movie/$movie_id?deleteFiles=true&addImportExclusion=false" -H "$H_RADARR" >/dev/null
-  [ -n "$series_id" ] && api DELETE "$SONARR_URL/api/v3/series/$series_id?deleteFiles=true" -H "$H_SONARR" >/dev/null
+  local f H_RADARR="X-Api-Key: $RADARR_KEY" H_SONARR="X-Api-Key: $SONARR_KEY" H_SEERR="X-Api-Key: $SEERR_KEY"
+  f=$(e2e_owned_file)
+  [ -f "$f" ] || return 0
+  local movie_id series_id media_id hashes path qid cookie failed=0
+  movie_id=$(jq -r '.movie_id // empty' "$f")
+  series_id=$(jq -r '.series_id // empty' "$f")
+  media_id=$(jq -r '.seerr_media_id // empty' "$f")
+  hashes=$(jq -r '(.hashes // []) | join("|")' "$f")
 
-  # Torrents the test created (named with the tag) or that match the titles
-  cookie=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
-    --data-urlencode "username=$QBIT_USER" --data-urlencode "password=$QBIT_PASS" | extract_qbit_cookie || true)
-  if [ -n "$cookie" ]; then
-    hashes=$(curl -sf "$QBIT_URL/api/v2/torrents/info" -b "$cookie" | \
-      jq -r --arg tag "$E2E_TAG" '[.[] | select((.name | contains($tag)) or (.name | test("^(Tears.of.Steel|Pioneer.One)"; "i"))) | .hash] | join("|")')
-    [ -n "$hashes" ] && curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/delete" -b "$cookie" \
-      --data-urlencode "hashes=$hashes" --data-urlencode "deleteFiles=true"
+  # Queued downloads for the test's own movie/series (including anything
+  # Radarr/Sonarr grabbed for them on their own)
+  if [ -n "$movie_id" ]; then
+    for qid in $(api GET "$RADARR_URL/api/v3/queue?movieIds=$movie_id" -H "$H_RADARR" | jq -r '.records[]?.id'); do
+      api DELETE "$RADARR_URL/api/v3/queue/$qid?removeFromClient=true&blocklist=false" -H "$H_RADARR" >/dev/null || failed=1
+    done
+    if api GET "$RADARR_URL/api/v3/movie/$movie_id" -H "$H_RADARR" >/dev/null; then
+      api DELETE "$RADARR_URL/api/v3/movie/$movie_id?deleteFiles=true&addImportExclusion=false" -H "$H_RADARR" >/dev/null || failed=1
+    fi
   fi
-  rm -rf "$DL_COMPLETE"/radarr/*"$E2E_TAG"* "$DL_COMPLETE"/sonarr/*"$E2E_TAG"* "$STATE_DIR/e2e/torrents"
-  mkdir -p "$STATE_DIR/e2e/torrents"
+  if [ -n "$series_id" ]; then
+    for qid in $(api GET "$SONARR_URL/api/v3/queue?seriesIds=$series_id" -H "$H_SONARR" | jq -r '.records[]?.id'); do
+      api DELETE "$SONARR_URL/api/v3/queue/$qid?removeFromClient=true&blocklist=false" -H "$H_SONARR" >/dev/null || failed=1
+    done
+    if api GET "$SONARR_URL/api/v3/series/$series_id" -H "$H_SONARR" >/dev/null; then
+      api DELETE "$SONARR_URL/api/v3/series/$series_id?deleteFiles=true" -H "$H_SONARR" >/dev/null || failed=1
+    fi
+  fi
 
-  # Jellyfin must forget the items before Seerr does
-  local JA
-  JA=$(jf_auth "$JELLYFIN_TOKEN")
-  api POST "$JELLYFIN_URL/Library/Refresh" -H "$JA" >/dev/null || true
-  jellyfin_clean() {
-    api GET "$JELLYFIN_URL/Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path" -H "$JA" | \
-      jq -e --arg tag "$E2E_TAG" '[.Items[] | select((.Path // "") | contains($tag))] | length == 0'
-  }
-  wait_until 120 jellyfin_clean || warn "Jellyfin still lists a test item"
+  if [ -n "$hashes" ]; then
+    cookie=$(curl -sf --max-time 20 -c - "$QBIT_URL/api/v2/auth/login" \
+      --data-urlencode "username=$QBIT_USER" --data-urlencode "password=$QBIT_PASS" | extract_qbit_cookie || true)
+    if [ -n "$cookie" ]; then
+      curl -sf --max-time 20 -o /dev/null "$QBIT_URL/api/v2/torrents/delete" -b "$cookie" \
+        --data-urlencode "hashes=$hashes" --data-urlencode "deleteFiles=true" || failed=1
+    else
+      failed=1
+    fi
+  fi
+  while IFS= read -r path; do
+    # Only ever inside the download folders
+    case "$path" in "$DL_COMPLETE"/*) rm -rf "$path" ;; esac
+  done < <(jq -r '(.paths // [])[]' "$f")
 
-  media_id=$(api GET "$SEERR_URL/api/v1/movie/$E2E_MOVIE_TMDB" -H "$H_SEERR" | jq -r '.mediaInfo.id // empty' || true)
-  [ -n "$media_id" ] && api DELETE "$SEERR_URL/api/v1/media/$media_id" -H "$H_SEERR" >/dev/null
-  return 0
+  # Jellyfin must forget the test's files (named with the tag) before Seerr
+  if [ -n "${JELLYFIN_TOKEN:-}" ]; then
+    local JA
+    JA=$(jf_auth "$JELLYFIN_TOKEN")
+    api POST "$JELLYFIN_URL/Library/Refresh" -H "$JA" >/dev/null || true
+    jellyfin_clean() {
+      api GET "$JELLYFIN_URL/Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path" -H "$JA" | \
+        jq -e --arg tag "$E2E_TAG" '[.Items[] | select((.Path // "") | contains($tag))] | length == 0'
+    }
+    wait_until 120 jellyfin_clean || { warn "Jellyfin still lists a test item"; failed=1; }
+  fi
+  if [ -n "$media_id" ]; then
+    api DELETE "$SEERR_URL/api/v1/media/$media_id" -H "$H_SEERR" >/dev/null || failed=1
+  fi
+
+  if [ "$failed" -eq 0 ]; then
+    rm -f "$f"
+    rm -rf "$STATE_DIR/e2e/torrents"
+  else
+    warn "Some test items couldn't be removed; the next run retries (record: $f)"
+  fi
+  return "$failed"
+}
+
+# Refuse to run if the test titles already exist and aren't the test's own:
+# the test would change them and its cleanup would delete them
+e2e_require_clean_slate() {
+  local H_RADARR="X-Api-Key: $RADARR_KEY" H_SONARR="X-Api-Key: $SONARR_KEY" H_SEERR="X-Api-Key: $SEERR_KEY" found=""
+  api GET "$RADARR_URL/api/v3/movie?tmdbId=$E2E_MOVIE_TMDB" -H "$H_RADARR" | jq -e 'length > 0' >/dev/null 2>&1 && \
+    found="$found Tears of Steel is in Radarr;"
+  api GET "$SONARR_URL/api/v3/series" -H "$H_SONARR" | jq -e --argjson t "$E2E_SERIES_TVDB" 'any(.[]; .tvdbId == $t)' >/dev/null 2>&1 && \
+    found="$found Pioneer One is in Sonarr;"
+  [ -n "$(api GET "$SEERR_URL/api/v1/movie/$E2E_MOVIE_TMDB" -H "$H_SEERR" | jq -r '.mediaInfo.id // empty')" ] && \
+    found="$found Tears of Steel is in Seerr;"
+  [ -z "$found" ] || err "The test uses Tears of Steel and Pioneer One, and they're already in your library:$found it won't touch them. Remove them first to run the test."
 }
 
 do_e2e() {
@@ -175,27 +228,32 @@ do_e2e() {
   qbit_cookie=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
     --data-urlencode "username=$QBIT_USER" --data-urlencode "password=$QBIT_PASS" | extract_qbit_cookie || true)
 
-  # Leftovers from an interrupted earlier run would make Seerr think the
-  # movie is already available, so start from a clean slate
-  if api GET "$RADARR_URL/api/v3/movie?tmdbId=$E2E_MOVIE_TMDB" -H "$H_RADARR" | jq -e 'length > 0' >/dev/null 2>&1 || \
-     api GET "$SONARR_URL/api/v3/series" -H "$H_SONARR" | jq -e --argjson t "$E2E_SERIES_TVDB" 'any(.[]; .tvdbId == $t)' >/dev/null 2>&1 || \
-     [ "$(api GET "$SEERR_URL/api/v1/movie/$E2E_MOVIE_TMDB" -H "$H_SEERR" | jq -r '.mediaInfo.id // empty')" != "" ]; then
-    e2e_step "Removing leftovers from an earlier run"
-    e2e_cleanup
+  # Leftovers recorded by an interrupted earlier run are removed first;
+  # anything else with the test titles makes the test refuse to run
+  if [ -f "$(e2e_owned_file)" ]; then
+    e2e_step "Removing what an interrupted earlier run left behind"
+    e2e_cleanup || err "Could not clean up the earlier run; see $(e2e_owned_file)"
   fi
+  e2e_require_clean_slate
+  mkdir -p "$torrents"
 
   # Serve the test torrents to Radarr/Sonarr
   python3 -m http.server "$E2E_PORT" --bind 127.0.0.1 --directory "$torrents" >/dev/null 2>&1 &
   server_pid=$!
   E2E_SERVER_PID=$server_pid
-  trap 'kill "$E2E_SERVER_PID" 2>/dev/null || true; e2e_resume_radarr_indexers; cleanup' EXIT
+  # On any exit (failure, Ctrl-C): stop the server, restore the indexers
+  # and remove what the test created, unless --keep
+  E2E_KEEP_ON_EXIT="$keep"
+  trap 'kill "$E2E_SERVER_PID" 2>/dev/null || true; e2e_resume_radarr_indexers; [ "$E2E_KEEP_ON_EXIT" = "true" ] || e2e_cleanup || true; cleanup' EXIT
 
   # ── Movie ──────────────────────────────────────────────────────
   info "Movie: Tears of Steel (2012)"
   local movie_name="Tears.of.Steel.2012.1080p.WEB-DL.x264-$E2E_TAG" movie_hash movie_id=""
   mkdir -p "$DL_COMPLETE/radarr/$movie_name"
   ln -f "$src" "$DL_COMPLETE/radarr/$movie_name/$movie_name.mov"
+  e2e_own paths "$DL_COMPLETE/radarr/$movie_name"
   movie_hash=$(make_torrent "$DL_COMPLETE/radarr/$movie_name" "$torrents/$movie_name.torrent")
+  e2e_own hashes "$movie_hash"
 
   # Seerr has Radarr search as soon as the movie is added, and a public
   # release could win the race against the test release. Pause automatic
@@ -211,6 +269,8 @@ do_e2e() {
   radarr_movie_id() { api GET "$RADARR_URL/api/v3/movie?tmdbId=$E2E_MOVIE_TMDB" -H "$H_RADARR" | jq -er '.[0].id'; }
   if wait_until 90 radarr_movie_id; then
     movie_id=$(radarr_movie_id)
+    e2e_own movie_id "$movie_id"
+    e2e_own seerr_media_id "$(api GET "$SEERR_URL/api/v1/movie/$E2E_MOVIE_TMDB" -H "$H_SEERR" | jq -r '.mediaInfo.id // empty')"
     e2e_pass "Seerr → Radarr: movie added ($(api GET "$RADARR_URL/api/v3/movie/$movie_id" -H "$H_RADARR" | jq -r '.rootFolderPath'))"
   else
     e2e_fail "Seerr → Radarr: movie never appeared in Radarr"
@@ -262,7 +322,10 @@ do_e2e() {
     fi
 
     seerr_available() {
-      api POST "$SEERR_URL/api/v1/settings/jobs/jellyfin-recently-added-scan/run" -H "$H_SEERR" >/dev/null
+      # Starting a scan aborts one in progress, so only start one when idle
+      api GET "$SEERR_URL/api/v1/settings/jobs" -H "$H_SEERR" | \
+        jq -e 'any(.[]; .id == "jellyfin-recently-added-scan" and .running)' >/dev/null || \
+        api POST "$SEERR_URL/api/v1/settings/jobs/jellyfin-recently-added-scan/run" -H "$H_SEERR" >/dev/null
       [ "$(api GET "$SEERR_URL/api/v1/movie/$E2E_MOVIE_TMDB" -H "$H_SEERR" | jq -r '.mediaInfo.status')" = "5" ]
     }
     if wait_until 180 seerr_available; then
@@ -277,7 +340,9 @@ do_e2e() {
   local tv_name="Pioneer.One.S01E01.1080p.WEB-DL.x264-$E2E_TAG" tv_hash series_id="" episode_id="" profile_id lookup
   mkdir -p "$DL_COMPLETE/sonarr/$tv_name"
   ln -f "$src" "$DL_COMPLETE/sonarr/$tv_name/$tv_name.mov"
+  e2e_own paths "$DL_COMPLETE/sonarr/$tv_name"
   tv_hash=$(make_torrent "$DL_COMPLETE/sonarr/$tv_name" "$torrents/$tv_name.torrent")
+  e2e_own hashes "$tv_hash"
 
   profile_id=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "$H_SONARR" | jq -r --arg n "$SONARR_PROFILE" '.[] | select(.name == $n) | .id')
   lookup=$(api GET "$SONARR_URL/api/v3/series/lookup?term=tvdb:$E2E_SERIES_TVDB" -H "$H_SONARR" | jq -c '.[0]')
@@ -287,9 +352,14 @@ do_e2e() {
             addOptions:{monitor:"none", searchForMissingEpisodes:false}}' <<< "$lookup")" | jq -r '.id // empty' || true)
   fi
   if [ -n "$series_id" ]; then
+    e2e_own series_id "$series_id"
     e2e_pass "Sonarr: series added (no indexer search)"
     s01e01_id() { api GET "$SONARR_URL/api/v3/episode?seriesId=$series_id" -H "$H_SONARR" | jq -er '.[] | select(.seasonNumber == 1 and .episodeNumber == 1) | .id'; }
-    wait_until 60 s01e01_id && episode_id=$(s01e01_id)
+    if wait_until 60 s01e01_id; then
+      episode_id=$(s01e01_id)
+    else
+      e2e_fail "Sonarr never listed Pioneer One S01E01, so TV import wasn't tested"
+    fi
   else
     e2e_fail "Sonarr: could not add Pioneer One"
   fi
@@ -333,8 +403,11 @@ do_e2e() {
     warn "--keep: leaving the test movie, series and torrents in place"
   else
     info "Removing what the test added..."
-    e2e_cleanup
-    ok "Test movie, series, request and torrents removed (the source file stays cached in $dir)"
+    if e2e_cleanup; then
+      ok "Test movie, series, request and torrents removed (the source file stays cached in $dir)"
+    else
+      e2e_fail "Cleanup incomplete"
+    fi
   fi
 
   kill "$server_pid" 2>/dev/null || true

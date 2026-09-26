@@ -60,7 +60,7 @@ configure_tailscale() {
   TS_HOSTNAME=""
   if [ -z "$TS_CLI" ]; then
     return 0
-  elif [ "$(cfg '.network.tailscale_https // true')" != "true" ]; then
+  elif [ "$(cfg_bool .network.tailscale_https true)" != "true" ]; then
     ok "Tailscale HTTPS disabled (network.tailscale_https = false)"
   elif ! "$TS_CLI" status &>/dev/null; then
     warn "Tailscale is not connected; open it from the menu bar to enable remote access"
@@ -95,7 +95,7 @@ create_directories() {
   mkdir -p "$DOWNLOADS_DIR"/{torrents,usenet}/incomplete \
     "$DOWNLOADS_DIR"/{torrents,usenet}/complete/{sonarr,radarr}
   mkdir -p "$BACKUP_DIR" "$LOG_DIR" "$STATE_DIR"
-  mkdir -p "$CONFIG_DIR"/{jellyfin,sonarr,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,seerr,unpackerr,byparr}
+  mkdir -p "$CONFIG_DIR"/{jellyfin,sonarr,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,seerr,unpackerr,cleanuparr,byparr}
   mkdir -p "$CONFIG_DIR"/nginx/{www,temp}
   ok "$MEDIA_DIR directory tree ready"
 }

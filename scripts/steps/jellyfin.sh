@@ -22,6 +22,26 @@ configure_jellyfin() {
   fi
 
   jellyfin_login
+  # config.toml's password changed since it was last applied: log in with
+  # the previous one and change it (Jellyfin requires the current password)
+  if [ -z "$JELLYFIN_TOKEN" ] && [ -n "${APPLIED_JF_PASS:-}" ] && [ "$APPLIED_JF_PASS" != "$JELLYFIN_PASS" ]; then
+    local new_user="$JELLYFIN_USER" new_pass="$JELLYFIN_PASS" uid
+    JELLYFIN_USER="${APPLIED_JF_USER:-$new_user}" JELLYFIN_PASS="$APPLIED_JF_PASS"
+    jellyfin_login
+    JELLYFIN_USER="$new_user" JELLYFIN_PASS="$new_pass"
+    if [ -n "$JELLYFIN_TOKEN" ]; then
+      uid=$(api GET "$JELLYFIN_URL/Users/Me" -H "$(jf_auth "$JELLYFIN_TOKEN")" | jq -r '.Id // empty')
+      if [ -n "$uid" ] && api POST "$JELLYFIN_URL/Users/$uid/Password" -H "$(jf_auth "$JELLYFIN_TOKEN")" \
+          -d "$(jq -nc --arg c "$APPLIED_JF_PASS" --arg n "$JELLYFIN_PASS" '{CurrentPw:$c, NewPw:$n}')" >/dev/null; then
+        ok "Jellyfin password changed to the one in config.toml"
+      else
+        warn "Could not change the Jellyfin password"
+      fi
+      [ "${APPLIED_JF_USER:-$JELLYFIN_USER}" != "$JELLYFIN_USER" ] && \
+        warn "Renaming the Jellyfin user isn't automatic: rename '${APPLIED_JF_USER}' to '$JELLYFIN_USER' in Jellyfin (Dashboard → Users)"
+      jellyfin_login
+    fi
+  fi
 
   JELLYFIN_API_KEY=""
   if [ -n "$JELLYFIN_TOKEN" ]; then

@@ -29,8 +29,12 @@ configure_prowlarr() {
     else ok "Byparr connected"; fi
 
     # qBittorrent in Prowlarr
-    EXISTING_DLC=$(api GET "$PROWLARR_URL/api/v1/downloadclient" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
-    if ! echo "$EXISTING_DLC" | grep -q "qBittorrent"; then
+    local prowl_qbit_id
+    prowl_qbit_id=$(api GET "$PROWLARR_URL/api/v1/downloadclient" -H "$PH" | jq -r '[.[] | select(.implementation == "QBittorrent") | .id][0] // empty' 2>/dev/null || true)
+    if [ -n "$prowl_qbit_id" ]; then
+      sync_resource_fields "Prowlarr qBittorrent client" "$PROWLARR_URL/api/v1/downloadclient" "$prowl_qbit_id" \
+        "$(jq -nc --arg u "$QBIT_USER" --arg p "$QBIT_PASS" '{username:$u, password:$p}')" "$PROWLARR_KEY"
+    else
       PROWL_QBIT_JSON=$(jq -nc --arg u "$QBIT_USER" --arg p "$QBIT_PASS" \
         '{name:"qBittorrent",implementation:"QBittorrent",configContract:"QBittorrentSettings",
           enable:true,protocol:"torrent",priority:1,
@@ -71,9 +75,16 @@ configure_prowlarr() {
       info "Adding indexers from config..."
       for i in $(seq 0 $((INDEXER_COUNT - 1))); do
         IDX_ENABLED=$(cfg ".indexers[$i].enable")
-        [ "$IDX_ENABLED" != "true" ] && continue
-
         IDX_NAME=$(cfg ".indexers[$i].name")
+        if [ "$IDX_ENABLED" != "true" ]; then
+          # Switched off in config.toml: disable it in Prowlarr too (kept, not deleted)
+          local off_idx
+          off_idx=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" | jq -c --arg n "$IDX_NAME" '.[] | select(.name == $n and .enable)' 2>/dev/null || true)
+          [ -n "$off_idx" ] && api PUT "$PROWLARR_URL/api/v1/indexer/$(jq -r .id <<< "$off_idx")?forceSave=true" -H "$PH" \
+            -d "$(jq -c '.enable = false' <<< "$off_idx")" >/dev/null && ok "$IDX_NAME disabled"
+          continue
+        fi
+
         IDX_DEF=$(cfg ".indexers[$i].definitionName")
         IDX_FLARE=$(cfg ".indexers[$i].flaresolverr // false")
 
@@ -128,21 +139,7 @@ configure_prowlarr() {
       rm -f "$TMPDIR_SETUP/prowlarr_indexer.json"
     fi
 
-    # Configure web UI authentication
-    PROWLARR_HOST_CONFIG=$(api GET "$PROWLARR_URL/api/v1/config/host" -H "$PH" 2>/dev/null || echo "")
-    if [ -n "$PROWLARR_HOST_CONFIG" ] && [ "$PROWLARR_HOST_CONFIG" != "null" ]; then
-      PROWLARR_AUTH_USER=$(echo "$PROWLARR_HOST_CONFIG" | jq -r '.username // empty' 2>/dev/null)
-      if [ -z "$PROWLARR_AUTH_USER" ]; then
-        PROWLARR_HOST_ID=$(echo "$PROWLARR_HOST_CONFIG" | jq -r '.id' 2>/dev/null)
-        PROWLARR_HOST_UPDATED=$(echo "$PROWLARR_HOST_CONFIG" | jq -c \
-          --arg user "$JELLYFIN_USER" --arg pass "$JELLYFIN_PASS" \
-          '.authenticationMethod = "forms" | .username = $user | .password = $pass | .passwordConfirmation = $pass | .authenticationRequired = "enabled"' 2>/dev/null)
-        api PUT "$PROWLARR_URL/api/v1/config/host/$PROWLARR_HOST_ID" -H "$PH" -d "$PROWLARR_HOST_UPDATED" >/dev/null 2>&1 && \
-          ok "Auth set: $JELLYFIN_USER" || warn "Could not set authentication"
-      else
-        ok "Auth: $PROWLARR_AUTH_USER"
-      fi
-    fi
+    set_arr_login "Prowlarr" "$PROWLARR_URL" "$PROWLARR_KEY" v1
   fi
 }
 
@@ -159,5 +156,12 @@ add_prowlarr_app() {
         {"name":"baseUrl","value":"'"$url"'"},{"name":"apiKey","value":"'"$key"'"},
         {"name":"syncCategories","value":['"$cats"']}]
     }' >/dev/null 2>&1 && ok "$name connected" || warn "Could not connect $name"
-  else ok "$name connected"; fi
+  else
+    # Keep the URLs and API key current (e.g. after a Sonarr reinstall)
+    local app_id
+    app_id=$(api GET "$PROWLARR_URL/api/v1/applications" -H "$PH" | jq -r --arg n "$name" '.[] | select(.name == $n) | .id')
+    [ -n "$app_id" ] && sync_resource_fields "Prowlarr $name app" "$PROWLARR_URL/api/v1/applications" "$app_id" \
+      "$(jq -nc --arg p "$PROWLARR_INTERNAL" --arg b "$url" --arg k "$key" '{prowlarrUrl:$p, baseUrl:$b, apiKey:$k}')" "$PROWLARR_KEY"
+    ok "$name connected"
+  fi
 }

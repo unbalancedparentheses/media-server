@@ -49,10 +49,9 @@ prefer_h265 = true    # prefer x265/HEVC releases (smaller files, same quality)
 
 # ─── Network ────────────────────────────────────────────────────
 # admin_bind: address the admin UIs (Sonarr, Radarr, Prowlarr, Bazarr,
-#   qBittorrent, SABnzbd) listen on. "0.0.0.0" = every interface (LAN +
-#   Tailscale); "127.0.0.1" = this Mac only; or your Tailscale IP to reach
-#   them only over Tailscale. Jellyfin/Moonfin, Seerr and the dashboard are
-#   always reachable.
+#   qBittorrent, SABnzbd) listen on: "0.0.0.0" = every interface (LAN +
+#   Tailscale) or "127.0.0.1" = this Mac only. Jellyfin/Moonfin, Seerr and
+#   the dashboard are always reachable.
 # dashboard_port: port of the dashboard (http://localhost by default).
 # tailscale_https: if Tailscale is signed in, publish Jellyfin/Moonfin,
 #   Seerr and the dashboard over HTTPS on your tailnet.
@@ -71,6 +70,16 @@ tailscale_https = true
 [disk]
 warn_free_gb = 50
 min_free_gb = 10
+
+# ─── Stuck downloads (Cleanuparr) ────────────────────────────────
+# Every 5 minutes Cleanuparr checks the download queue and removes public
+# torrents that stalled (no progress for stalled_strikes checks), never got
+# metadata, or failed to import 3 times. Sonarr/Radarr blocklist the release
+# and search for another one.
+
+[cleanuparr]
+enabled = true
+stalled_strikes = 6   # 6 checks x 5 minutes = about 30 minutes stalled
 
 # ─── Indexers (Prowlarr) ───────────────────────────────────────
 

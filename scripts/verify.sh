@@ -200,6 +200,26 @@ run_verification() {
     check "Bazarr → subtitle providers enabled ($BAZARR_PROVIDERS)" "$([ "$BAZARR_PROVIDERS" -gt 0 ] 2>/dev/null && echo true || echo false)"
   fi
 
+  info "Cleanuparr..."
+  local cu_key cu_status
+  cu_key=$(cleanuparr_key)
+  cu_status=$(api GET "$CLEANUPARR_URL/api/auth/status" || echo "{}")
+  check "Cleanuparr → login required" "$(jq '.setupCompleted == true and .authBypassActive == false' <<< "$cu_status" 2>/dev/null || echo false)"
+  if [ -n "$cu_key" ]; then
+    local cu_arr cu_app
+    for cu_app in sonarr radarr; do
+      cu_arr=$(api GET "$CLEANUPARR_URL/api/configuration/$cu_app" -H "X-Api-Key: $cu_key" || echo "{}")
+      check "Cleanuparr → ${cu_app^} connected" "$(jq 'any(.instances[]?; .enabled)' <<< "$cu_arr" 2>/dev/null || echo false)"
+    done
+    check "Cleanuparr → qBittorrent connected" "$(api GET "$CLEANUPARR_URL/api/configuration/download_client" -H "X-Api-Key: $cu_key" | jq 'any(.clients[]?; .typeName == "qBittorrent" and .enabled)' 2>/dev/null || echo false)"
+    if [ "$(cfg_bool .cleanuparr.enabled true)" = true ]; then
+      check "Cleanuparr → queue cleaner on" "$(api GET "$CLEANUPARR_URL/api/configuration/queue_cleaner" -H "X-Api-Key: $cu_key" | jq '.enabled' 2>/dev/null || echo false)"
+      check "Cleanuparr → stalled-download rule" "$(api GET "$CLEANUPARR_URL/api/queue-rules/stall" -H "X-Api-Key: $cu_key" | jq 'any(.[]; .enabled)' 2>/dev/null || echo false)"
+    fi
+  else
+    check "Cleanuparr → API key readable" false
+  fi
+
   info "Health checks..."
   # The *arr apps cache health results; ask for a fresh check (it runs async)
   check_arr_health() {
@@ -256,7 +276,7 @@ run_verification() {
     local name="$1" url="$2" key="$3" profile="$4" cfs profiles cf
     cfs=$(api GET "$url/api/v3/customformat" -H "X-Api-Key: $key" || echo "[]")
     profiles=$(api GET "$url/api/v3/qualityprofile" -H "X-Api-Key: $key" || echo "[]")
-    if [ "$(cfg '.quality.prefer_h265 // true')" = "true" ]; then
+    if [ "$(cfg_bool .quality.prefer_h265 true)" = "true" ]; then
       check "$name → HEVC preferred in $profile" "$(jq --argjson cfs "$cfs" --arg p "$profile" '
         ([$cfs[] | select(.name == "Prefer HEVC") | .id][0]) as $id
         | [.[] | select(.name == $p)][0] | any(.formatItems[]; .format == $id and .score > 0)' <<< "$profiles" 2>/dev/null || echo false)"

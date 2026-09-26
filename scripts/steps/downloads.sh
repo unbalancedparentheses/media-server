@@ -4,9 +4,18 @@
 configure_qbittorrent() {
   info "Configuring qBittorrent..."
 
-  # The password was written to qBittorrent.conf before first start
-  QBIT_COOKIE=$(api_retry curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
-    --data-urlencode "username=$QBIT_USER" --data-urlencode "password=$QBIT_PASS" 2>/dev/null | extract_qbit_cookie || echo "")
+  # The password was written to qBittorrent.ini before first start. If
+  # config.toml's password changed since, log in with the previous one and
+  # set the new one below.
+  local try_user try_pass
+  QBIT_COOKIE=""
+  for try in "$QBIT_USER|$QBIT_PASS" "${APPLIED_QB_USER:-}|${APPLIED_QB_PASS:-}"; do
+    IFS='|' read -r try_user try_pass <<< "$try"
+    [ -n "$try_pass" ] || continue
+    QBIT_COOKIE=$(api_retry curl -sf --max-time 20 -c - "$QBIT_URL/api/v2/auth/login" \
+      --data-urlencode "username=$try_user" --data-urlencode "password=$try_pass" 2>/dev/null | extract_qbit_cookie || echo "")
+    [ -n "$QBIT_COOKIE" ] && break
+  done
 
   if [ -n "$QBIT_COOKIE" ]; then
     ok "Logged in"
@@ -22,9 +31,10 @@ configure_qbittorrent() {
       --arg user "$QBIT_USER" --arg pass "$QBIT_PASS" \
       --arg save "$DL_COMPLETE" --arg temp "$DL_INCOMPLETE" \
       --argjson ratio "$SEED_RATIO" --argjson seed_time "$SEED_TIME" \
-      --arg admin_net "$admin_net" \
+      --arg admin_net "$admin_net" --arg bind "${ADMIN_BIND:-0.0.0.0}" \
       '{web_ui_username:$user, web_ui_password:$pass,
         save_path:$save, temp_path:$temp, temp_path_enabled:true,
+        web_ui_address:(if $bind == "0.0.0.0" then "*" else $bind end),
         web_ui_port:8081, max_ratio:$ratio, max_seeding_time:$seed_time,
         auto_tmm_enabled:true,
         up_limit:102400, web_ui_csrf_protection_enabled:true,
@@ -113,7 +123,7 @@ configure_sabnzbd_auth() {
   # SABnzbd auth — set username/password via API
   if [ -n "$SABNZBD_KEY" ]; then
     SAB_AUTH_USER=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=misc&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.config.misc.username // empty' 2>/dev/null)
-    if [ -z "$SAB_AUTH_USER" ]; then
+    if [ "$SAB_AUTH_USER" != "$JELLYFIN_USER" ] || [ "$CREDS_CHANGED" = "true" ]; then
       curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=username&value=$(urlencode "$JELLYFIN_USER")&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
       curl -sf "$SABNZBD_URL/api?mode=set_config&section=misc&keyword=password&value=$(urlencode "$JELLYFIN_PASS")&apikey=$SABNZBD_KEY&output=json" >/dev/null 2>&1
       ok "SABnzbd auth set: $JELLYFIN_USER"

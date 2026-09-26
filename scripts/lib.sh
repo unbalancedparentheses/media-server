@@ -214,23 +214,64 @@ prompt_credentials() {
   ok "Credentials saved to config.toml"
 }
 
+# ─── Credentials actually applied to the services ──────────────
+# Jellyfin and qBittorrent need the current password to set a new one, so
+# the last applied logins are kept in ~/media/.state (0600, like config.toml).
+# CREDS_CHANGED is true when config.toml differs from what was last applied
+# (or nothing was recorded yet), and every service then gets the new login.
+load_applied_credentials() {
+  local f="$STATE_DIR/credentials.json"
+  APPLIED_JF_USER="" APPLIED_JF_PASS="" APPLIED_QB_USER="" APPLIED_QB_PASS=""
+  if [ -f "$f" ]; then
+    APPLIED_JF_USER=$(jq -r '.jellyfin.username // ""' "$f")
+    APPLIED_JF_PASS=$(jq -r '.jellyfin.password // ""' "$f")
+    APPLIED_QB_USER=$(jq -r '.qbittorrent.username // ""' "$f")
+    APPLIED_QB_PASS=$(jq -r '.qbittorrent.password // ""' "$f")
+  fi
+  CREDS_CHANGED=false
+  { [ "$APPLIED_JF_USER" != "$JELLYFIN_USER" ] || [ "$APPLIED_JF_PASS" != "$JELLYFIN_PASS" ]; } && CREDS_CHANGED=true
+  return 0
+}
+save_applied_credentials() {
+  local f="$STATE_DIR/credentials.json"
+  mkdir -p "$STATE_DIR"
+  (umask 077 && jq -n --arg ju "$JELLYFIN_USER" --arg jp "$JELLYFIN_PASS" --arg qu "$QBIT_USER" --arg qp "$QBIT_PASS" \
+    '{jellyfin: {username: $ju, password: $jp}, qbittorrent: {username: $qu, password: $qp}}' > "$f")
+}
+
+# *arr/Prowlarr web login: set whenever config.toml's login changed (their
+# API key allows it without the old password) or none is set
+set_arr_login() {
+  local label="$1" url="$2" key="$3" api_ver="${4:-v3}" H="X-Api-Key: $3" host id current
+  host=$(api GET "$url/api/$api_ver/config/host" -H "$H") || { warn "$label: could not read its login settings"; return 0; }
+  current=$(jq -r '.username // empty' <<< "$host")
+  if [ "$current" = "$JELLYFIN_USER" ] && [ "$CREDS_CHANGED" != "true" ]; then
+    ok "$label login: $current"
+    return 0
+  fi
+  id=$(jq -r '.id' <<< "$host")
+  api PUT "$url/api/$api_ver/config/host/$id" -H "$H" -d "$(jq -c --arg user "$JELLYFIN_USER" --arg pass "$JELLYFIN_PASS" \
+    '.authenticationMethod = "forms" | .authenticationRequired = "enabled" | .username = $user | .password = $pass | .passwordConfirmation = $pass' <<< "$host")" >/dev/null && \
+    ok "$label login set: $JELLYFIN_USER" || warn "$label: could not set its login"
+}
+
 # Jellyfin 12 only accepts the Authorization header (no X-Emby-Token)
 jf_auth() { printf 'Authorization: MediaBrowser Token="%s"' "$1"; }
 
+# Every call is bounded: a stalled service can't hang setup or a poll loop
 api() {
   local method="$1" url="$2"; shift 2
-  curl -sf -X "$method" "$url" -H "Content-Type: application/json" "$@" 2>/dev/null
+  curl -sf --connect-timeout 5 --max-time "${API_MAX_TIME:-60}" -X "$method" "$url" -H "Content-Type: application/json" "$@" 2>/dev/null
 }
 
 # wait_for <name> <url>; gives up after $WAIT_MAX seconds (default 120)
 wait_for() {
-  local name="$1" url="$2" max="${WAIT_MAX:-120}" i=0 code
+  local name="$1" url="$2" max="${WAIT_MAX:-120}" start=$SECONDS code
   printf "   Waiting for %-15s" "$name..."
   while true; do
-    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 "$url" 2>/dev/null || echo "000")
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 10 "$url" 2>/dev/null || echo "000")
     { [ "${code:0:1}" = "2" ] || [ "${code:0:1}" = "3" ]; } && break
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] && echo " timeout!" && return 1
+    [ $((SECONDS - start)) -ge "$max" ] && echo " timeout!" && return 1
     sleep 1
   done
   echo " up"
@@ -246,6 +287,9 @@ api_retry() {
 }
 
 cfg() { echo "$CONFIG_JSON" | jq -r "$1"; }
+# cfg_bool <path> <default>: "true"/"false"; only a missing value gets the
+# default (jq's // would also replace an explicit false)
+cfg_bool() { echo "$CONFIG_JSON" | jq -r --argjson d "$2" "if $1 == null then \$d else ($1 == true) end"; }
 cfg_required_string() {
   local jq_path="$1" label="$2" val
   val=$(cfg "$jq_path // empty")
@@ -300,7 +344,11 @@ validate_config_semantics() {
   is_non_negative_int "$seed_time" || err "downloads.seeding_time_minutes must be a non-negative integer"
   [ -n "$timezone" ] || err "timezone must be set"
   admin_bind=$(cfg '.network.admin_bind // "0.0.0.0"')
-  [[ "$admin_bind" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || err "network.admin_bind must be an IPv4 address (e.g. 0.0.0.0 or 127.0.0.1)"
+  # The services reach each other on localhost, so only these two work
+  case "$admin_bind" in
+    0.0.0.0|127.0.0.1) ;;
+    *) err "network.admin_bind must be \"0.0.0.0\" (every interface) or \"127.0.0.1\" (this Mac only)" ;;
+  esac
   local disk_warn disk_min
   disk_warn=$(cfg '.disk.warn_free_gb // 50')
   disk_min=$(cfg '.disk.min_free_gb // 10')
@@ -320,3 +368,14 @@ get_api_key() {
 }
 
 
+
+# Set named fields on an existing *arr/Prowlarr resource (a download client,
+# an application...) so changed passwords, API keys and URLs reach it.
+# Secrets read back masked, so the update is sent every run.
+sync_resource_fields() {  # label resource-url id fields-json api-key
+  local label="$1" base="$2" id="$3" fields="$4" H="X-Api-Key: $5" cur
+  cur=$(api GET "$base/$id" -H "$H") || { warn "$label: could not read its settings"; return 0; }
+  api PUT "$base/$id?forceSave=true" -H "$H" \
+    -d "$(jq -c --argjson f "$fields" '.fields |= map(if $f[.name] != null then .value = $f[.name] else . end)' <<< "$cur")" >/dev/null || \
+    warn "$label: could not update its settings"
+}
