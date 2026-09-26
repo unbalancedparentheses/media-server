@@ -21,18 +21,38 @@ configure_cleanuparr() {
   # create it now (with the Jellyfin login, like the other admin UIs)
   status=$(api GET "$CLEANUPARR_URL/api/auth/status") || { warn "Cleanuparr is not responding"; return 0; }
   if [ "$(jq -r .setupCompleted <<< "$status")" != "true" ]; then
-    if [ "${#JELLYFIN_PASS}" -lt 8 ] || [ "${#JELLYFIN_USER}" -lt 3 ]; then
-      warn "Cleanuparr needs a username of 3+ and a password of 8+ characters; set it up at $CLEANUPARR_URL"
+    local account_pass="$JELLYFIN_PASS"
+    # Cleanuparr wants 8+ characters; with a shorter password the account
+    # gets a random one (login is skipped on this Mac when admin_bind is
+    # 127.0.0.1, see below)
+    [ "${#account_pass}" -ge 8 ] || account_pass=$(openssl rand -hex 16)
+    if [ "${#JELLYFIN_USER}" -lt 3 ]; then
+      warn "Cleanuparr needs a username of 3+ characters; set it up at $CLEANUPARR_URL"
       return 0
     fi
     api POST "$CLEANUPARR_URL/api/auth/setup/account" \
-      -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{username:$u, password:$p}')" >/dev/null 2>&1 || true
+      -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$account_pass" '{username:$u, password:$p}')" >/dev/null 2>&1 || true
     api POST "$CLEANUPARR_URL/api/auth/setup/complete" >/dev/null 2>&1 || true
   fi
   CLEANUPARR_KEY=$(cleanuparr_key)
   [ -n "$CLEANUPARR_KEY" ] || { warn "Could not read Cleanuparr's API key"; return 0; }
-  ok "Cleanuparr login: $JELLYFIN_USER"
   sync_cleanuparr_login
+
+  # Listening on 127.0.0.1 only this Mac can reach it, so skip the login.
+  # (Its "local addresses" include the LAN, so not when on 0.0.0.0.)
+  local general want_bypass=false
+  [ "${ADMIN_BIND:-0.0.0.0}" = "127.0.0.1" ] && want_bypass=true
+  general=$(cleanuparr_api GET configuration/general || echo "{}")
+  if [ "$(jq -r '.auth.disableAuthForLocalAddresses' <<< "$general")" != "$want_bypass" ]; then
+    cleanuparr_api PUT configuration/general \
+      -d "$(jq -c --argjson b "$want_bypass" '.auth.disableAuthForLocalAddresses = $b' <<< "$general")" >/dev/null || \
+      warn "Cleanuparr: could not update its login settings"
+  fi
+  if [ "$want_bypass" = true ]; then
+    ok "Cleanuparr: no login needed (listens on this Mac only)"
+  else
+    ok "Cleanuparr login: $JELLYFIN_USER"
+  fi
 
   local app url key existing id
   for app in sonarr radarr; do
@@ -96,6 +116,11 @@ configure_cleanuparr() {
 sync_cleanuparr_login() {
   [ "${CREDS_CHANGED:-false}" = true ] && [ -n "${APPLIED_JF_PASS:-}" ] || return 0
   local current="$APPLIED_JF_PASS"
+  if [ "$current" != "$JELLYFIN_PASS" ] && [ "${#JELLYFIN_PASS}" -lt 8 ]; then
+    [ "${ADMIN_BIND:-0.0.0.0}" = "127.0.0.1" ] || \
+      warn "Cleanuparr needs a password of 8+ characters; it keeps its old one"
+    return 0
+  fi
   if [ "$current" != "$JELLYFIN_PASS" ]; then
     cleanuparr_api PUT account/password \
       -d "$(jq -nc --arg c "$current" --arg n "$JELLYFIN_PASS" '{currentPassword:$c, newPassword:$n}')" >/dev/null && \

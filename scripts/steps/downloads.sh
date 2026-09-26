@@ -41,9 +41,15 @@ configure_qbittorrent() {
         bypass_local_auth:true,
         bypass_auth_subnet_whitelist_enabled:($admin_net != ""),
         bypass_auth_subnet_whitelist:$admin_net}')
+    local old_address
+    old_address=$(curl -sf "$QBIT_URL/api/v2/app/preferences" -b "$QBIT_COOKIE" 2>/dev/null | jq -r '.web_ui_address // empty' || true)
     curl -sf -o /dev/null "$QBIT_URL/api/v2/app/setPreferences" \
       -b "$QBIT_COOKIE" \
       --data-urlencode "json=$QBIT_PREFS" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"
+    # A new listen address only takes effect after a restart
+    if [ -n "$old_address" ] && [ "$old_address" != "$(jq -r .web_ui_address <<< "$QBIT_PREFS")" ]; then
+      svc_restart qbittorrent >/dev/null 2>&1 && wait_for "qBittorrent" "$QBIT_URL" && ok "qBittorrent restarted to listen on ${ADMIN_BIND:-0.0.0.0}"
+    fi
 
     for cat in sonarr radarr; do
       curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/createCategory" \

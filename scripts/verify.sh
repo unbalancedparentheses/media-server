@@ -204,7 +204,11 @@ run_verification() {
   local cu_key cu_status
   cu_key=$(cleanuparr_key)
   cu_status=$(api GET "$CLEANUPARR_URL/api/auth/status" || echo "{}")
-  check "Cleanuparr → login required" "$(jq '.setupCompleted == true and .authBypassActive == false' <<< "$cu_status" 2>/dev/null || echo false)"
+  if [ "${ADMIN_BIND:-0.0.0.0}" = "127.0.0.1" ]; then
+    check "Cleanuparr → account set up (login skipped: this Mac only)" "$(jq '.setupCompleted == true' <<< "$cu_status" 2>/dev/null || echo false)"
+  else
+    check "Cleanuparr → login required" "$(jq '.setupCompleted == true and .authBypassActive == false' <<< "$cu_status" 2>/dev/null || echo false)"
+  fi
   if [ -n "$cu_key" ]; then
     local cu_arr cu_app
     for cu_app in sonarr radarr; do

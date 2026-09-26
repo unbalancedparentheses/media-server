@@ -118,6 +118,7 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 - **qBittorrent:** it skips its login only for requests from this Mac, which is how the dashboard reads it. Requests from the network log in.
 - **Dashboard widgets:** they go through nginx, which adds the API keys, but only for the read-only endpoints the widgets use, and only for `GET`.
 - **Byparr:** it has no login, so it only listens on `127.0.0.1`.
+- **Cleanuparr:** requires passwords of 8+ characters. With `admin_bind = "127.0.0.1"` it skips its login (only this Mac can reach it), so a shorter shared password is fine; on `0.0.0.0` it uses the Jellyfin login.
 - **Firewall prompts:** with the macOS firewall on, the first start may ask whether each service may accept incoming connections. Allow Jellyfin and Seerr at least.
 - **Sleep and login:** the Mac must be awake to serve. Enable System Settings → Energy → "Prevent automatic sleeping when the display is off". The services are launchd *user* agents, so after a reboot they start when you log in. A locked screen is fine, but for unattended recovery after power loss, turn on automatic login (System Settings → Users & Groups).
 
