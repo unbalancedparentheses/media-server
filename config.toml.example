@@ -54,6 +54,9 @@ sonarr_profile = "HD-1080p"
 sonarr_anime_profile = "HD-1080p"   # for anime (goes to ~/media/anime)
 radarr_profile = "HD-1080p"
 prefer_h265 = true    # prefer x265/HEVC releases (smaller files, same quality)
+prefer_english_audio = true   # movies and TV: prefer releases with English audio
+anime_block_dubs = true       # anime: never grab English-dub-only releases
+                              # (Japanese audio + subtitles; dual audio is fine)
 
 # ─── Network ────────────────────────────────────────────────────
 # admin_bind: address the admin UIs (Sonarr, Radarr, Prowlarr, Bazarr,

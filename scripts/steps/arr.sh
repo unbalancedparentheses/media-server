@@ -118,7 +118,7 @@ migrate_anime_sonarr() {
     warn "Could not read $db; its series were not moved (setup retries next run)"; return 0; }
   have=$(api GET "$SONARR_URL/api/v3/series" -H "$H" | jq -c '[.[].tvdbId]') || { warn "Could not list Sonarr series"; return 0; }
   profile_id=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "$H" | \
-    jq -r --arg n "$SONARR_ANIME_PROFILE" '([.[] | select(.name == $n) | .id][0]) // .[0].id')
+    jq -r --arg a "$ANIME_PROFILE" --arg n "$SONARR_ANIME_PROFILE" '([.[] | select(.name == $a) | .id][0]) // ([.[] | select(.name == $n) | .id][0]) // .[0].id')
   while IFS= read -r row; do
     [ -n "$row" ] || continue
     old_id=$(jq -r .Id <<< "$row"); tvdb=$(jq -r .TvdbId <<< "$row"); path=$(jq -r .Path <<< "$row")
@@ -146,20 +146,26 @@ migrate_anime_sonarr() {
   fi
 }
 
+# Wait until Sonarr has finished adding a series: its episodes are listed
+# and no refresh or scan is pending. Only then are the add options (such as
+# monitor "none") applied, so monitoring changed earlier gets overwritten.
+sonarr_series_settled() {  # series-id [timeout]
+  local id="$1" max="${2:-180}" start=$SECONDS H="X-Api-Key: $SONARR_KEY"
+  until [ "$(api GET "$SONARR_URL/api/v3/episode?seriesId=$id" -H "$H" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] && \
+        ! api GET "$SONARR_URL/api/v3/command" -H "$H" | \
+          jq -e 'any(.[]; (.name == "RefreshSeries" or .name == "RescanSeries") and (.status == "queued" or .status == "started"))' >/dev/null; do
+    [ $((SECONDS - start)) -ge "$max" ] && return 1
+    sleep 2
+  done
+}
+
 # Copy one series' monitoring from the old database: episodes, seasons and
 # the series flag, once Sonarr has finished adding it (its refresh and scan
 # would otherwise overwrite them), then check it took
 migrate_monitoring() {  # db old-series-id new-series-id old-row
-  local db="$1" old_id="$2" new_id="$3" row="$4" H="X-Api-Key: $SONARR_KEY" start=$SECONDS eps old_eps ids series want
-  while :; do
-    eps=$(api GET "$SONARR_URL/api/v3/episode?seriesId=$new_id" -H "$H" || echo "[]")
-    if [ "$(jq 'length' <<< "$eps")" -gt 0 ] && \
-       ! api GET "$SONARR_URL/api/v3/command" -H "$H" | jq -e 'any(.[]; (.name == "RefreshSeries" or .name == "RescanSeries") and (.status == "queued" or .status == "started"))' >/dev/null; then
-      break
-    fi
-    [ $((SECONDS - start)) -ge 180 ] && { warn "Sonarr is still adding series $new_id"; return 1; }
-    sleep 2
-  done
+  local db="$1" old_id="$2" new_id="$3" row="$4" H="X-Api-Key: $SONARR_KEY" eps old_eps ids series want
+  sonarr_series_settled "$new_id" || { warn "Sonarr is still adding series $new_id"; return 1; }
+  eps=$(api GET "$SONARR_URL/api/v3/episode?seriesId=$new_id" -H "$H") || return 1
   old_eps=$(sqlite3 -json "file:$db?mode=ro" "SELECT SeasonNumber AS s, EpisodeNumber AS e, Monitored AS m FROM Episodes WHERE SeriesId = $old_id" 2>/dev/null) || return 1
   old_eps="${old_eps:-[]}"
   for want in true false; do
@@ -196,12 +202,16 @@ configure_arrs() {
 }
 
 
-# Junk-release filters: create the TRaSH custom formats in custom-formats/<app>
-# (updating ones that already exist) and score them -10000 in every quality
-# profile, whose minimum score is kept at 0 or above, so matches are rejected.
+# Release filters: create the custom formats in custom-formats/<app>
+# (updating ones that already exist) and score them in the quality profiles.
+# Filters score -10000 (never grabbed: profiles' minimum score is kept at 0
+# or above); a file can set its own score ("mediaServerScore") and limit
+# itself to the Anime profile or the other ones ("mediaServerProfiles":
+# "anime" / "standard").
 JUNK_SCORE=-10000
+ANIME_PROFILE="Anime"
 apply_junk_filters() {
-  local label="$1" url="$2" key="$3" app="$4" H f payload name existing id scores="{}" score profiles
+  local label="$1" url="$2" key="$3" app="$4" H f payload name existing id formats="[]" score scope profiles
   H="X-Api-Key: $key"
   existing=$(api GET "$url/api/v3/customformat" -H "$H" || echo "[]")
   for f in "$SCRIPT_DIR/custom-formats/$app"/*.json; do
@@ -210,10 +220,14 @@ apply_junk_filters() {
       specifications: [.specifications[] | {name, implementation, negate, required,
         fields: [.fields | to_entries[] | {name: .key, value: .value}]}]}' "$f")
     name=$(jq -r '.name' <<< "$payload")
-    # Filters score -10000 (never grab); files can set their own score, e.g.
-    # +100 for "Prefer HEVC", which [quality] prefer_h265 = false turns off
     score=$(jq -r ".mediaServerScore // $JUNK_SCORE" "$f")
-    [ "$name" = "Prefer HEVC" ] && [ "$(cfg_bool .quality.prefer_h265 true)" != "true" ] && score=0
+    scope=$(jq -r '.mediaServerProfiles // "all"' "$f")
+    # Preferences config.toml can turn off
+    case "$name" in
+      "Prefer HEVC") [ "$(cfg_bool .quality.prefer_h265 true)" = true ] || score=0 ;;
+      "Prefer English Audio") [ "$(cfg_bool .quality.prefer_english_audio true)" = true ] || score=0 ;;
+      "Dubs Only") [ "$(cfg_bool .quality.anime_block_dubs true)" = true ] || score=0 ;;
+    esac
     id=$(jq -r --arg n "$name" '.[] | select(.name == $n) | .id' <<< "$existing" | head -1)
     if [ -n "$id" ]; then
       api PUT "$url/api/v3/customformat/$id" -H "$H" -d "$(jq -c --argjson id "$id" '. + {id: $id}' <<< "$payload")" >/dev/null || \
@@ -222,17 +236,20 @@ apply_junk_filters() {
       id=$(api POST "$url/api/v3/customformat" -H "$H" -d "$payload" | jq -r '.id // empty') || true
       [ -n "$id" ] || { warn "$label: could not create custom format $name"; continue; }
     fi
-    scores=$(jq -c --arg id "$id" --argjson s "$score" '. + {($id): $s}' <<< "$scores")
+    formats=$(jq -c --argjson id "$id" --argjson s "$score" --arg scope "$scope" '. + [{id: $id, score: $s, scope: $scope}]' <<< "$formats")
   done
-  [ "$scores" != "{}" ] || return 0
+  [ "$formats" != "[]" ] || return 0
 
   profiles=$(api GET "$url/api/v3/qualityprofile" -H "$H" || echo "[]")
   local profile updated
   while IFS= read -r profile; do
     [ -n "$profile" ] || continue
-    updated=$(jq -c --argjson scores "$scores" '
+    updated=$(jq -c --argjson formats "$formats" --arg anime "$ANIME_PROFILE" '
+      (.name == $anime) as $is_anime
+      | ($formats | map({key: (.id | tostring),
+          value: (if .scope == "all" or (.scope == "anime") == $is_anime then .score else 0 end)}) | from_entries) as $scores
       # Rejection relies on the profile requiring a score of at least 0
-      .minFormatScore = ([.minFormatScore // 0, 0] | max)
+      | .minFormatScore = ([.minFormatScore // 0, 0] | max)
       | [.formatItems[].format | tostring] as $have
       | .formatItems = ([.formatItems[] | (.format | tostring) as $f
             | if $scores[$f] != null then .score = $scores[$f] else . end]
@@ -242,11 +259,43 @@ apply_junk_filters() {
     api PUT "$url/api/v3/qualityprofile/$(jq -r '.id' <<< "$profile")" -H "$H" -d "$updated" >/dev/null || \
       warn "$label: could not update profile $(jq -r '.name' <<< "$profile")"
   done < <(jq -c '.[]' <<< "$profiles")
-  ok "$label: release filters on (BR-DISK, LQ, Upscaled, Extras, Foreign Subtitles$([ "$app" = radarr ] && echo ", 3D")); HEVC preferred: $(cfg_bool .quality.prefer_h265 true)"
+  ok "$label: release filters on (BR-DISK, LQ, Upscaled, Extras, Foreign Subtitles$([ "$app" = radarr ] && echo ", 3D"))"
+  ok "$label: prefer HEVC $(cfg_bool .quality.prefer_h265 true), English audio $(cfg_bool .quality.prefer_english_audio true)$([ "$app" = sonarr ] && echo "; anime: block dub-only releases $(cfg_bool .quality.anime_block_dubs true)")"
+}
+
+# Sonarr's "Anime" profile: a copy of quality.sonarr_anime_profile, where
+# anime-only filters apply (dub-only releases blocked) and TV preferences
+# don't. Seerr's anime requests use it, and anime series still on the base
+# profile move to it. Kept in step with the base profile's qualities.
+ensure_anime_profile() {
+  local H="X-Api-Key: $SONARR_KEY" profiles base anime id moved
+  profiles=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "$H") || { warn "Sonarr: could not read quality profiles"; return 0; }
+  base=$(jq -c --arg n "$SONARR_ANIME_PROFILE" '[.[] | select(.name == $n)][0] // empty' <<< "$profiles")
+  [ -n "$base" ] || { warn "Sonarr: profile '$SONARR_ANIME_PROFILE' not found; no Anime profile"; return 0; }
+  anime=$(jq -c --arg n "$ANIME_PROFILE" '[.[] | select(.name == $n)][0] // empty' <<< "$profiles")
+  if [ -z "$anime" ]; then
+    api POST "$SONARR_URL/api/v3/qualityprofile" -H "$H" \
+      -d "$(jq -c --arg n "$ANIME_PROFILE" 'del(.id) | .name = $n' <<< "$base")" >/dev/null && \
+      ok "Sonarr: '$ANIME_PROFILE' profile created (from $SONARR_ANIME_PROFILE)" || { warn "Sonarr: could not create the Anime profile"; return 0; }
+  else
+    local synced
+    synced=$(jq -c --argjson b "$base" '.items = $b.items | .cutoff = $b.cutoff | .upgradeAllowed = $b.upgradeAllowed' <<< "$anime")
+    [ "$synced" = "$anime" ] || api PUT "$SONARR_URL/api/v3/qualityprofile/$(jq -r .id <<< "$anime")" -H "$H" -d "$synced" >/dev/null || \
+      warn "Sonarr: could not update the Anime profile"
+  fi
+  id=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "$H" | jq -r --arg n "$ANIME_PROFILE" '.[] | select(.name == $n) | .id')
+  moved=$(api GET "$SONARR_URL/api/v3/series" -H "$H" | jq -c --argjson base "$(jq .id <<< "$base")" \
+    '[.[] | select(.seriesType == "anime" and .qualityProfileId == $base) | .id]')
+  if [ -n "$id" ] && [ -n "$moved" ] && [ "$moved" != "[]" ]; then
+    api PUT "$SONARR_URL/api/v3/series/editor" -H "$H" -d "$(jq -nc --argjson ids "$moved" --argjson p "$id" '{seriesIds: $ids, qualityProfileId: $p}')" >/dev/null && \
+      ok "Sonarr: $(jq length <<< "$moved") anime series moved to the '$ANIME_PROFILE' profile" || warn "Sonarr: could not move anime series to the Anime profile"
+  fi
+  return 0
 }
 
 configure_junk_filters() {
   info "Blocking junk releases..."
+  [ -n "$SONARR_KEY" ]       && ensure_anime_profile
   [ -n "$SONARR_KEY" ]       && apply_junk_filters "Sonarr"       "$SONARR_URL"       "$SONARR_KEY"       sonarr
   [ -n "$RADARR_KEY" ]       && apply_junk_filters "Radarr"       "$RADARR_URL"       "$RADARR_KEY"       radarr
   return 0

@@ -1,0 +1,18 @@
+{
+  "name": "Prefer English Audio",
+  "mediaServerScore": 50,
+  "mediaServerProfiles": "standard",
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [
+    {
+      "name": "English",
+      "implementation": "LanguageSpecification",
+      "negate": false,
+      "required": false,
+      "fields": {
+        "value": 1,
+        "exceptLanguage": false
+      }
+    }
+  ]
+}

@@ -154,7 +154,7 @@ run_verification() {
     }
     # Anime requests go to the same Sonarr, into the anime folder
     check_seerr_conn "Sonarr" "$JS_SONARR_V" "Sonarr" 8989 "$TV_DIR" "$SONARR_PROFILE" \
-      "(.seriesType // \"standard\") != \"anime\" and .animeSeriesType == \"anime\" and .activeAnimeDirectory == \"$ANIME_DIR\" and .activeAnimeProfileName == \"$SONARR_ANIME_PROFILE\""
+      "(.seriesType // \"standard\") != \"anime\" and .animeSeriesType == \"anime\" and .activeAnimeDirectory == \"$ANIME_DIR\" and .activeAnimeProfileName == \"$ANIME_PROFILE\""
     check "Seerr → only one Sonarr connection" "$(jq 'length == 1' <<< "$JS_SONARR_V" 2>/dev/null || echo false)"
     check_seerr_conn "Radarr" "$JS_RADARR_V" "Radarr" 7878 "$MOVIES_DIR" "$RADARR_PROFILE"
 
@@ -298,7 +298,33 @@ run_verification() {
     done
   }
   [ -n "$SONARR_KEY" ] && check_junk_filter "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE"
+  [ -n "$SONARR_KEY" ] && check_junk_filter "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$ANIME_PROFILE"
   [ -n "$RADARR_KEY" ] && check_junk_filter "Radarr" "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE"
+
+  # Score of custom format <cf> in profile <profile> (empty if unset)
+  cf_score() {  # url key profile cf
+    local cfs
+    cfs=$(api GET "$1/api/v3/customformat" -H "X-Api-Key: $2" || echo "[]")
+    api GET "$1/api/v3/qualityprofile" -H "X-Api-Key: $2" | jq -r --argjson cfs "$cfs" --arg p "$3" --arg cf "$4" '
+      ([$cfs[] | select(.name == $cf) | .id][0]) as $id
+      | [.[] | select(.name == $p)][0].formatItems[]? | select(.format == $id) | .score' 2>/dev/null
+  }
+  if [ -n "$SONARR_KEY" ]; then
+    if [ "$(cfg_bool .quality.anime_block_dubs true)" = true ]; then
+      check "Sonarr → dub-only releases blocked for anime ($ANIME_PROFILE)" "$([ "$(cf_score "$SONARR_URL" "$SONARR_KEY" "$ANIME_PROFILE" "Dubs Only")" = "-10000" ] && echo true || echo false)"
+    fi
+    check "Sonarr → dub-only releases allowed for TV ($SONARR_PROFILE)" "$([ "$(cf_score "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE" "Dubs Only")" = "0" ] && echo true || echo false)"
+    # Setup moves anime series off the base profile (others were chosen by hand)
+    local base_pid
+    base_pid=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" | jq -r --arg p "$SONARR_ANIME_PROFILE" '.[] | select(.name == $p) | .id' 2>/dev/null || true)
+    check "Sonarr → anime series use the $ANIME_PROFILE profile" "$([ -n "$base_pid" ] && api GET "$SONARR_URL/api/v3/series" -H "X-Api-Key: $SONARR_KEY" | \
+      jq --argjson pid "$base_pid" 'all(.[] | select(.seriesType == "anime"); .qualityProfileId != $pid)' 2>/dev/null || echo false)"
+  fi
+  if [ "$(cfg_bool .quality.prefer_english_audio true)" = true ]; then
+    [ -n "$SONARR_KEY" ] && check "Sonarr → English audio preferred for TV ($SONARR_PROFILE)" "$([ "$(cf_score "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE" "Prefer English Audio")" = "50" ] && echo true || echo false)"
+    [ -n "$SONARR_KEY" ] && check "Sonarr → no English-audio preference for anime" "$([ "$(cf_score "$SONARR_URL" "$SONARR_KEY" "$ANIME_PROFILE" "Prefer English Audio")" = "0" ] && echo true || echo false)"
+    [ -n "$RADARR_KEY" ] && check "Radarr → English audio preferred ($RADARR_PROFILE)" "$([ "$(cf_score "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE" "Prefer English Audio")" = "50" ] && echo true || echo false)"
+  fi
 
   info "Disk space..."
   local free_gb mm_min

@@ -64,8 +64,9 @@ configure_seerr() {
       # Anime requests go to the same Sonarr, into the anime folder with
       # the anime profile and Sonarr's anime numbering
       local anime_profile
-      anime_profile=$(arr_profile "$url" "$key" "$SONARR_ANIME_PROFILE")
-      [ -n "$anime_profile" ] || { warn "$name: anime profile '$SONARR_ANIME_PROFILE' doesn't exist; using '$PNAME' for anime"; anime_profile="$PROFILE"; }
+      anime_profile=$(arr_profile "$url" "$key" "$ANIME_PROFILE")
+      [ -n "$anime_profile" ] || anime_profile=$(arr_profile "$url" "$key" "$SONARR_ANIME_PROFILE")
+      [ -n "$anime_profile" ] || { warn "$name: no '$ANIME_PROFILE' or '$SONARR_ANIME_PROFILE' profile; using '$PNAME' for anime"; anime_profile="$PROFILE"; }
       JS_SONARR_JSON=$(jq -nc \
         --arg name "$name" --argjson port "$port" --arg key "$key" \
         --argjson pid "$PID" --arg pname "$PNAME" --arg dir "$dir" \
@@ -150,12 +151,12 @@ sync_js_connections() {
   fi
   local anime_profile='{}'
   if [ "$kind" = "sonarr" ]; then
-    anime_profile=$(arr_profile "$url" "$key" "$SONARR_ANIME_PROFILE")
+    anime_profile=$(arr_profile "$url" "$key" "$ANIME_PROFILE")
     [ -n "$anime_profile" ] || anime_profile='{}'
   fi
   updated=$(echo "$conn" | jq -c --argjson p "$profile" --arg want "$profile_name" --arg dir "$dir" \
     --arg key "$key" --argjson port "$port" --arg kind "$kind" \
-    --argjson ap "$anime_profile" --arg awant "$SONARR_ANIME_PROFILE" --arg adir "$ANIME_DIR" '
+    --argjson ap "$anime_profile" --arg awant "$ANIME_PROFILE" --arg adir "$ANIME_DIR" '
     .enableSearch = true
     | .hostname = "localhost" | .port = $port | .useSsl = false | .apiKey = $key
     | .activeDirectory = $dir

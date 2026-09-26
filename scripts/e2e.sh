@@ -376,7 +376,8 @@ do_e2e() {
     e2e_own series_id "$series_id"
     e2e_pass "Sonarr: series added (no indexer search)"
     s01e01_id() { api GET "$SONARR_URL/api/v3/episode?seriesId=$series_id" -H "$H_SONARR" | jq -er '.[] | select(.seasonNumber == 1 and .episodeNumber == 1) | .id'; }
-    if wait_until 60 s01e01_id; then
+    # Monitoring set before Sonarr finishes adding the series gets reset
+    if sonarr_series_settled "$series_id" 120 && s01e01_id >/dev/null; then
       episode_id=$(s01e01_id)
     else
       e2e_fail "Sonarr never listed Pioneer One S01E01, so TV import wasn't tested"
