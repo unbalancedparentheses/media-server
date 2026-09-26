@@ -57,6 +57,19 @@ prefer_h265 = true    # prefer x265/HEVC releases (smaller files, same quality)
 prefer_english_audio = true   # movies and TV: prefer releases with English audio
 anime_block_dubs = true       # anime: never grab English-dub-only releases
                               # (Japanese audio + subtitles; dual audio is fine)
+anime_release_groups = true   # anime: prefer well-rated release groups (TRaSH tiers)
+
+# ─── Playback (Jellyfin user defaults) ──────────────────────────
+# subtitle_mode: "Always", "Smart" (only when the audio isn't your
+#   language), "OnlyForced", "Default" or "None".
+# subtitle_language / audio_language: 3-letter codes. audio_language is
+#   used when a file has that track (dual-audio anime → Japanese); other
+#   files play their default track. "" = always the default track.
+
+[playback]
+subtitle_mode = "Always"
+subtitle_language = "eng"
+audio_language = "jpn"
 
 # ─── Network ────────────────────────────────────────────────────
 # admin_bind: address the admin UIs (Sonarr, Radarr, Prowlarr, Bazarr,

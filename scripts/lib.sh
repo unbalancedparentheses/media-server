@@ -410,6 +410,7 @@ validate_config_semantics() {
   is_non_negative_int "$dashboard_port" || err "network.dashboard_port must be a port number"
 
   case "$(cfg '.subtitles.want // "first"')" in first|all) ;; *) err 'subtitles.want must be "first" or "all"' ;; esac
+  case "$(cfg '.playback.subtitle_mode // "Always"')" in Always|Smart|OnlyForced|Default|None) ;; *) err 'playback.subtitle_mode must be "Always", "Smart", "OnlyForced", "Default" or "None"' ;; esac
   local strikes
   strikes=$(cfg '.cleanuparr.stalled_strikes // 6')
   { is_non_negative_int "$strikes" && [ "$strikes" -ge 3 ]; } || err "cleanuparr.stalled_strikes must be a whole number, 3 or more"

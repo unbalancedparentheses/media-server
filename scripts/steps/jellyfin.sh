@@ -102,6 +102,8 @@ configure_jellyfin() {
       fi
     done
 
+    set_jellyfin_playback
+
     # Reduce library monitor delay to 15 seconds for faster content detection
     SYS_CONFIG=$(api GET "$JELLYFIN_URL/System/Configuration" -H "$(jf_auth "$JELLYFIN_TOKEN")" 2>/dev/null || echo "")
     if [ -n "$SYS_CONFIG" ] && [ "$SYS_CONFIG" != "null" ]; then
@@ -132,4 +134,33 @@ jellyfin_login() {
   resp=$(api_retry api POST "$JELLYFIN_URL/Users/AuthenticateByName" -H "$JF_HEADER" \
     -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{Username:$u,Pw:$p}')" || echo "")
   JELLYFIN_TOKEN=$(echo "$resp" | jq -r '.AccessToken // empty' 2>/dev/null || echo "")
+}
+
+# Playback defaults for the Jellyfin user ([playback] in config.toml):
+# subtitles always on in the preferred language (Jellyfin falls back to
+# another one when the file has none in it), and the preferred audio
+# language when a file has it (Japanese: dual-audio anime plays in
+# Japanese; everything else uses the file's default track)
+set_jellyfin_playback() {
+  local me uid conf want
+  me=$(api GET "$JELLYFIN_URL/Users/Me" -H "$(jf_auth "$JELLYFIN_TOKEN")") || { warn "Could not read the Jellyfin user's settings"; return 0; }
+  uid=$(jq -r .Id <<< "$me")
+  conf=$(jq -c .Configuration <<< "$me")
+  want=$(jq -c --arg mode "$(cfg '.playback.subtitle_mode // "Always"')" --arg sub "$(cfg '.playback.subtitle_language // "eng"')" \
+    --arg audio "$(cfg '.playback.audio_language // "jpn"')" '
+    .SubtitleMode = $mode | .SubtitleLanguagePreference = $sub
+    | .AudioLanguagePreference = (if $audio == "" then null else $audio end)
+    # With a preferred audio language, pick by language, not the default flag
+    | .PlayDefaultAudioTrack = ($audio == "")' <<< "$conf")
+  if [ "$want" = "$conf" ]; then
+    ok "Playback: subtitles $(jq -r .SubtitleMode <<< "$want") ($(jq -r .SubtitleLanguagePreference <<< "$want")), audio $(jq -r '.AudioLanguagePreference // "default track"' <<< "$want")"
+    return 0
+  fi
+  # /Users/Configuration?userId= on Jellyfin 10.9+, /Users/<id>/Configuration before
+  if api POST "$JELLYFIN_URL/Users/Configuration?userId=$uid" -H "$(jf_auth "$JELLYFIN_TOKEN")" -d "$want" >/dev/null || \
+     api POST "$JELLYFIN_URL/Users/$uid/Configuration" -H "$(jf_auth "$JELLYFIN_TOKEN")" -d "$want" >/dev/null; then
+    ok "Playback: subtitles $(jq -r .SubtitleMode <<< "$want") ($(jq -r .SubtitleLanguagePreference <<< "$want")), audio $(jq -r '.AudioLanguagePreference // "default track"' <<< "$want") (updated)"
+  else
+    warn "Could not set the Jellyfin user's playback settings"
+  fi
 }

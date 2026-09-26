@@ -111,6 +111,11 @@ run_verification() {
     -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{Username:$u,Pw:$p}')" 2>/dev/null || true)
   JF_TOKEN_V=$(echo "$JF_AUTH_V" | jq -r '.AccessToken // empty' 2>/dev/null)
   check "Jellyfin → login" "$([ -n "$JF_TOKEN_V" ] && echo true || echo false)"
+  if [ -n "$JF_TOKEN_V" ]; then
+    check "Jellyfin → playback: subtitles $(cfg '.playback.subtitle_mode // "Always"') ($(cfg '.playback.subtitle_language // "eng"'))" \
+      "$(api GET "$JELLYFIN_URL/Users/Me" -H "$(jf_auth "$JF_TOKEN_V")" | jq --arg m "$(cfg '.playback.subtitle_mode // "Always"')" --arg l "$(cfg '.playback.subtitle_language // "eng"')" \
+        '.Configuration.SubtitleMode == $m and .Configuration.SubtitleLanguagePreference == $l' 2>/dev/null || echo false)"
+  fi
 
   if [ -n "$JF_TOKEN_V" ]; then
     curl -sf "$JELLYFIN_URL/Library/VirtualFolders" -H "$(jf_auth "$JF_TOKEN_V")" > "$TMPDIR_SETUP/jf_verify.json" 2>/dev/null || echo "[]" > "$TMPDIR_SETUP/jf_verify.json"
@@ -319,6 +324,13 @@ run_verification() {
     base_pid=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "X-Api-Key: $SONARR_KEY" | jq -r --arg p "$SONARR_ANIME_PROFILE" '.[] | select(.name == $p) | .id' 2>/dev/null || true)
     check "Sonarr → anime series use the $ANIME_PROFILE profile" "$([ -n "$base_pid" ] && api GET "$SONARR_URL/api/v3/series" -H "X-Api-Key: $SONARR_KEY" | \
       jq --argjson pid "$base_pid" 'all(.[] | select(.seriesType == "anime"); .qualityProfileId != $pid)' 2>/dev/null || echo false)"
+  fi
+  if [ -n "$SONARR_KEY" ]; then
+    check "Sonarr → raw anime (no subtitles) blocked ($ANIME_PROFILE)" "$([ "$(cf_score "$SONARR_URL" "$SONARR_KEY" "$ANIME_PROFILE" "Anime Raws")" = "-10000" ] && echo true || echo false)"
+    if [ "$(cfg_bool .quality.anime_release_groups true)" = true ]; then
+      check "Sonarr → anime release groups ranked ($ANIME_PROFILE)" "$([ "$(cf_score "$SONARR_URL" "$SONARR_KEY" "$ANIME_PROFILE" "Anime BD Tier 01")" = "1400" ] && echo true || echo false)"
+    fi
+    check "Sonarr → anime rankings off for TV ($SONARR_PROFILE)" "$([ "$(cf_score "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE" "Anime BD Tier 01")" = "0" ] && echo true || echo false)"
   fi
   if [ "$(cfg_bool .quality.prefer_english_audio true)" = true ]; then
     [ -n "$SONARR_KEY" ] && check "Sonarr → English audio preferred for TV ($SONARR_PROFILE)" "$([ "$(cf_score "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE" "Prefer English Audio")" = "50" ] && echo true || echo false)"

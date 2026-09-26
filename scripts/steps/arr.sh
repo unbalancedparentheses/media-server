@@ -227,6 +227,7 @@ apply_junk_filters() {
       "Prefer HEVC") [ "$(cfg_bool .quality.prefer_h265 true)" = true ] || score=0 ;;
       "Prefer English Audio") [ "$(cfg_bool .quality.prefer_english_audio true)" = true ] || score=0 ;;
       "Dubs Only") [ "$(cfg_bool .quality.anime_block_dubs true)" = true ] || score=0 ;;
+      "Anime BD Tier"*|"Anime Web Tier"*) [ "$(cfg_bool .quality.anime_release_groups true)" = true ] || score=0 ;;
     esac
     id=$(jq -r --arg n "$name" '.[] | select(.name == $n) | .id' <<< "$existing" | head -1)
     if [ -n "$id" ]; then
@@ -260,7 +261,7 @@ apply_junk_filters() {
       warn "$label: could not update profile $(jq -r '.name' <<< "$profile")"
   done < <(jq -c '.[]' <<< "$profiles")
   ok "$label: release filters on (BR-DISK, LQ, Upscaled, Extras, Foreign Subtitles$([ "$app" = radarr ] && echo ", 3D"))"
-  ok "$label: prefer HEVC $(cfg_bool .quality.prefer_h265 true), English audio $(cfg_bool .quality.prefer_english_audio true)$([ "$app" = sonarr ] && echo "; anime: block dub-only releases $(cfg_bool .quality.anime_block_dubs true)")"
+  ok "$label: prefer HEVC $(cfg_bool .quality.prefer_h265 true), English audio $(cfg_bool .quality.prefer_english_audio true)$([ "$app" = sonarr ] && echo "; anime: block dub-only releases $(cfg_bool .quality.anime_block_dubs true), rank release groups $(cfg_bool .quality.anime_release_groups true)")"
 }
 
 # Sonarr's "Anime" profile: a copy of quality.sonarr_anime_profile, where

@@ -15,6 +15,11 @@ copied unchanged from `docs/json/{radarr,sonarr}/cf/`:
 - **Upscaled**: SD/HD sources upscaled to a higher resolution
 - **Extras**: bonus-content-only releases mislabeled as the movie or episode
 - **3D** (Radarr): 3D releases
+- **Anime BD Tier 01–08, Anime Web Tier 01–06** (Sonarr, Anime profile
+  only, TRaSH scores +1400…+100): well-rated anime release groups, Blu-ray
+  ranked above web. Turn off with `anime_release_groups = false`.
+- **Anime Raws, Anime LQ Groups** (Sonarr, Anime profile only, -10000):
+  raw releases without subtitles, and low-quality anime groups.
 - **Dubs Only** (Sonarr, `dubs-only.json`, Anime profile only): releases with
   only an English dub (tagged Dub/Dubbed, or from dub-only groups such as
   Yameii), so anime comes with Japanese audio. Dual-audio releases pass.
