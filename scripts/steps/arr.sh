@@ -91,10 +91,22 @@ enable_unknown_quality() {
   fi
 }
 
+# Refuse imports that would leave less than disk.min_free_gb free
+set_min_free_space() {
+  local label="$1" url="$2" key="$3" H="X-Api-Key: $3" mm want
+  want=$(( DISK_MIN_GB * 1024 ))
+  mm=$(api GET "$url/api/v3/config/mediamanagement" -H "$H") || { warn "$label: could not read media management settings"; return 0; }
+  [ "$(jq -r '.minimumFreeSpaceWhenImporting' <<< "$mm")" = "$want" ] && return 0
+  api PUT "$url/api/v3/config/mediamanagement" -H "$H" -d "$(jq -c --argjson w "$want" '.minimumFreeSpaceWhenImporting = $w' <<< "$mm")" >/dev/null && \
+    ok "$label: imports stop below $DISK_MIN_GB GB free" || warn "$label: could not set minimum free space"
+}
+
 configure_arrs() {
   # One Sonarr for TV and anime: Seerr sends anime to the anime folder
   [ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "$TV_DIR"$'\n'"$ANIME_DIR" "tvCategory"
   [ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "$MOVIES_DIR" "movieCategory"
+  [ -n "$SONARR_KEY" ]       && set_min_free_space "Sonarr" "$SONARR_URL" "$SONARR_KEY"
+  [ -n "$RADARR_KEY" ]       && set_min_free_space "Radarr" "$RADARR_URL" "$RADARR_KEY"
 
   [ -n "$SONARR_KEY" ]       && enable_unknown_quality "$SONARR_URL"       "$SONARR_KEY"
   [ -n "$RADARR_KEY" ]       && enable_unknown_quality "$RADARR_URL"       "$RADARR_KEY"
@@ -106,7 +118,7 @@ configure_arrs() {
 # profile, whose minimum score is kept at 0 or above, so matches are rejected.
 JUNK_SCORE=-10000
 apply_junk_filters() {
-  local label="$1" url="$2" key="$3" app="$4" H f payload name existing id ids="" profiles
+  local label="$1" url="$2" key="$3" app="$4" H f payload name existing id scores="{}" score profiles
   H="X-Api-Key: $key"
   existing=$(api GET "$url/api/v3/customformat" -H "$H" || echo "[]")
   for f in "$SCRIPT_DIR/custom-formats/$app"/*.json; do
@@ -115,6 +127,10 @@ apply_junk_filters() {
       specifications: [.specifications[] | {name, implementation, negate, required,
         fields: [.fields | to_entries[] | {name: .key, value: .value}]}]}' "$f")
     name=$(jq -r '.name' <<< "$payload")
+    # Filters score -10000 (never grab); files can set their own score, e.g.
+    # +100 for "Prefer HEVC", which [quality] prefer_h265 = false turns off
+    score=$(jq -r ".mediaServerScore // $JUNK_SCORE" "$f")
+    [ "$name" = "Prefer HEVC" ] && [ "$(cfg '.quality.prefer_h265 // true')" != "true" ] && score=0
     id=$(jq -r --arg n "$name" '.[] | select(.name == $n) | .id' <<< "$existing" | head -1)
     if [ -n "$id" ]; then
       api PUT "$url/api/v3/customformat/$id" -H "$H" -d "$(jq -c --argjson id "$id" '. + {id: $id}' <<< "$payload")" >/dev/null || \
@@ -123,26 +139,27 @@ apply_junk_filters() {
       id=$(api POST "$url/api/v3/customformat" -H "$H" -d "$payload" | jq -r '.id // empty') || true
       [ -n "$id" ] || { warn "$label: could not create custom format $name"; continue; }
     fi
-    ids="$ids $id"
+    scores=$(jq -c --arg id "$id" --argjson s "$score" '. + {($id): $s}' <<< "$scores")
   done
-  [ -n "$ids" ] || return 0
+  [ "$scores" != "{}" ] || return 0
 
   profiles=$(api GET "$url/api/v3/qualityprofile" -H "$H" || echo "[]")
   local profile updated
   while IFS= read -r profile; do
     [ -n "$profile" ] || continue
-    updated=$(jq -c --arg ids "$ids" --argjson score "$JUNK_SCORE" '
-      ($ids | split(" ") | map(select(. != "") | tonumber)) as $junk
+    updated=$(jq -c --argjson scores "$scores" '
       # Rejection relies on the profile requiring a score of at least 0
-      | .minFormatScore = ([.minFormatScore // 0, 0] | max)
-      | [.formatItems[].format] as $have
-      | .formatItems = ([.formatItems[] | if (.format as $f | $junk | index($f)) then .score = $score else . end]
-          + [$junk[] | select(. as $j | $have | index($j) | not) | {format: ., score: $score}])' <<< "$profile")
+      .minFormatScore = ([.minFormatScore // 0, 0] | max)
+      | [.formatItems[].format | tostring] as $have
+      | .formatItems = ([.formatItems[] | (.format | tostring) as $f
+            | if $scores[$f] != null then .score = $scores[$f] else . end]
+          + [$scores | to_entries[] | select(.key as $k | $have | index($k) | not)
+              | {format: (.key | tonumber), score: .value}])' <<< "$profile")
     [ "$updated" = "$profile" ] && continue
     api PUT "$url/api/v3/qualityprofile/$(jq -r '.id' <<< "$profile")" -H "$H" -d "$updated" >/dev/null || \
       warn "$label: could not update profile $(jq -r '.name' <<< "$profile")"
   done < <(jq -c '.[]' <<< "$profiles")
-  ok "$label: release filters on (BR-DISK, LQ, Upscaled, Extras, Foreign Subtitles$([ "$app" = radarr ] && echo ", 3D"))"
+  ok "$label: release filters on (BR-DISK, LQ, Upscaled, Extras, Foreign Subtitles$([ "$app" = radarr ] && echo ", 3D")); HEVC preferred: $(cfg '.quality.prefer_h265 // true')"
 }
 
 configure_junk_filters() {

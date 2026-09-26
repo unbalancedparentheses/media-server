@@ -90,6 +90,7 @@ Log in with a Jellyfin user. Create one per family member in Jellyfin (Dashboard
 | **[Byparr](https://github.com/ThePhaseless/Byparr)** | 8191 (local only) | Gets past Cloudflare on protected indexers |
 | **[Unpackerr](https://unpackerr.zip)** | — | Extracts archived downloads for import |
 | **[nginx](https://nginx.org)** | 80 | Dashboard with live download/calendar widgets |
+| **diskwatch** | — | Warns (macOS notification) when the media disk runs low |
 
 The dashboard at `http://localhost` (or `http://<mac-ip>`) links to everything; `admin.html` lists the admin UIs.
 
@@ -99,10 +100,11 @@ The dashboard at `http://localhost` (or `http://<mac-ip>`) links to everything; 
 
 - **Credentials:** `[jellyfin]` and `[qbittorrent]`. The Jellyfin login is shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr and SABnzbd.
 - **Quality:** `[quality]` picks the Sonarr/Radarr profiles Seerr requests use (built-in profiles: `HD-1080p`, `Ultra-HD`, …). Anime requests use `sonarr_anime_profile` and go to `~/media/anime`, so they show up in Jellyfin's Anime library.
-- **Release filters:** BR-DISK images, known-bad release groups, upscales, extras-only, 3D, and releases tagged with non-English subtitles (VOSTFR, BIG5, CHS, …; common with anime) are scored -10000 in every profile, so they're never grabbed. See [`custom-formats/`](custom-formats/README.md).
+- **Release filters:** BR-DISK images, known-bad release groups, upscales, extras-only, 3D, and releases tagged with non-English subtitles (VOSTFR, BIG5, CHS, …; common with anime) are scored -10000 in every profile, so they're never grabbed. See [`custom-formats/`](custom-formats/README.md). HEVC (x265) releases get +100, so the smaller file wins when several are acceptable (`prefer_h265 = false` to turn off).
 - **Subtitles:** `[subtitles]` languages and providers. The defaults need no account; OpenSubtitles.com, SubDL, Jimaku (anime) and Addic7ed are listed commented out, to enable after adding their login or API key in Bazarr. Most anime releases already carry English subtitles in the file, which the `embeddedsubtitles` provider recognizes.
 - **Indexers:** `[[indexers]]` public torrent and anime indexers (Nyaa, SubsPlease, Mikan, Bangumi); `flaresolverr = true` routes one through Byparr. All of them sync to Sonarr and Radarr.
-- **Usenet:** `[[usenet_providers]]` for SABnzbd.
+- **Usenet:** public torrent sites are often thin (few or no seeders). Usenet is faster and more reliable, but needs two paid accounts: a **provider** (e.g. Newshosting, Eweka, Frugal Usenet) under `[[usenet_providers]]`, and an **indexer** (e.g. NZBgeek, DrunkenSlug, NZBFinder) under `[[indexers]]` with its API key (see the NZBgeek example in `config.toml.example`). Set `enable = true` on both and re-run install; Sonarr and Radarr then use SABnzbd automatically.
+- **Disk space:** `[disk] warn_free_gb` (default 50) shows a macOS notification when the media disk runs low; below `min_free_gb` (default 10) Sonarr and Radarr stop importing so the disk never fills completely. `nix run .#status` shows free space.
 - **Network:** `[network] admin_bind` restricts where the admin UIs listen (`"127.0.0.1"` = this Mac only, or your Tailscale IP); `dashboard_port` moves the dashboard off port 80.
 
 There's no built-in VPN. If you use one, run its Mac app; torrent traffic follows the system connection.

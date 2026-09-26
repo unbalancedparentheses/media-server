@@ -301,6 +301,11 @@ validate_config_semantics() {
   [ -n "$timezone" ] || err "timezone must be set"
   admin_bind=$(cfg '.network.admin_bind // "0.0.0.0"')
   [[ "$admin_bind" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || err "network.admin_bind must be an IPv4 address (e.g. 0.0.0.0 or 127.0.0.1)"
+  local disk_warn disk_min
+  disk_warn=$(cfg '.disk.warn_free_gb // 50')
+  disk_min=$(cfg '.disk.min_free_gb // 10')
+  is_non_negative_int "$disk_warn" || err "disk.warn_free_gb must be a whole number of GB"
+  is_non_negative_int "$disk_min" || err "disk.min_free_gb must be a whole number of GB"
   dashboard_port=$(cfg '.network.dashboard_port // 80')
   is_non_negative_int "$dashboard_port" || err "network.dashboard_port must be a port number"
 

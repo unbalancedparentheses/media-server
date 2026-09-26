@@ -256,6 +256,11 @@ run_verification() {
     local name="$1" url="$2" key="$3" profile="$4" cfs profiles cf
     cfs=$(api GET "$url/api/v3/customformat" -H "X-Api-Key: $key" || echo "[]")
     profiles=$(api GET "$url/api/v3/qualityprofile" -H "X-Api-Key: $key" || echo "[]")
+    if [ "$(cfg '.quality.prefer_h265 // true')" = "true" ]; then
+      check "$name → HEVC preferred in $profile" "$(jq --argjson cfs "$cfs" --arg p "$profile" '
+        ([$cfs[] | select(.name == "Prefer HEVC") | .id][0]) as $id
+        | [.[] | select(.name == $p)][0] | any(.formatItems[]; .format == $id and .score > 0)' <<< "$profiles" 2>/dev/null || echo false)"
+    fi
     for cf in "BR-DISK" "Foreign Subtitles"; do
       check "$name → $cf blocked in $profile" "$(jq --argjson cfs "$cfs" --arg p "$profile" --arg cf "$cf" '
         ([$cfs[] | select(.name == $cf) | .id][0]) as $id
@@ -264,6 +269,16 @@ run_verification() {
   }
   [ -n "$SONARR_KEY" ] && check_junk_filter "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE"
   [ -n "$RADARR_KEY" ] && check_junk_filter "Radarr" "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE"
+
+  info "Disk space..."
+  local free_gb mm_min
+  free_gb=$(( $(df -Pk "$MEDIA_DIR" | awk 'NR == 2 { print $4 }') / 1024 / 1024 ))
+  check "Media disk: $free_gb GB free (imports stop below $DISK_MIN_GB GB)" "$([ "$free_gb" -ge "$DISK_MIN_GB" ] && echo true || echo false)"
+  for svc in "Sonarr|$SONARR_URL|$SONARR_KEY" "Radarr|$RADARR_URL|$RADARR_KEY"; do
+    IFS='|' read -r name url key <<< "$svc"
+    mm_min=$(api GET "$url/api/v3/config/mediamanagement" -H "X-Api-Key: $key" | jq -r '.minimumFreeSpaceWhenImporting' 2>/dev/null || echo "")
+    check "$name → minimum free space $DISK_MIN_GB GB" "$([ "$mm_min" = "$(( DISK_MIN_GB * 1024 ))" ] && echo true || echo false)"
+  done
 
   info "Moonfin..."
   check "Moonfin web app (/Moonfin/Web/)" "$(case "$(http_code "$JELLYFIN_URL/Moonfin/Web/")" in 2*|3*) echo true ;; *) echo false ;; esac)"

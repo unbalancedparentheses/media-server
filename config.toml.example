@@ -45,6 +45,7 @@ providers = [
 sonarr_profile = "HD-1080p"
 sonarr_anime_profile = "HD-1080p"   # for anime (goes to ~/media/anime)
 radarr_profile = "HD-1080p"
+prefer_h265 = true    # prefer x265/HEVC releases (smaller files, same quality)
 
 # ─── Network ────────────────────────────────────────────────────
 # admin_bind: address the admin UIs (Sonarr, Radarr, Prowlarr, Bazarr,
@@ -60,6 +61,16 @@ radarr_profile = "HD-1080p"
 admin_bind = "0.0.0.0"
 dashboard_port = 80
 tailscale_https = true
+
+# ─── Disk space ────────────────────────────────────────────────
+# warn_free_gb: show a macOS notification when free space on the media disk
+#   drops below this (checked every 30 minutes, at most one warning per 6h).
+# min_free_gb: Sonarr/Radarr stop importing below this, so the disk never
+#   fills up completely.
+
+[disk]
+warn_free_gb = 50
+min_free_gb = 10
 
 # ─── Indexers (Prowlarr) ───────────────────────────────────────
 

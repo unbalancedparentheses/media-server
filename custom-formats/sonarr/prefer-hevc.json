@@ -1,0 +1,16 @@
+{
+  "name": "Prefer HEVC",
+  "mediaServerScore": 100,
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [
+    {
+      "name": "x265 / HEVC",
+      "implementation": "ReleaseTitleSpecification",
+      "negate": false,
+      "required": true,
+      "fields": {
+        "value": "(?<![a-z0-9])(x265|h[ .]?265|HEVC)(?![a-z0-9])"
+      }
+    }
+  ]
+}

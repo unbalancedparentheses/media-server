@@ -89,8 +89,31 @@
             exec ${exe pkgs.uv} run --frozen --no-dev python main.py
           '';
 
+          # Checks free space on the media disk every 30 minutes and shows a
+          # macOS notification (at most every 6 hours) when it runs low
+          diskwatchStart = pkgs.writeShellScript "diskwatch" ''
+            set -u
+            last_file="$DISKWATCH_STATE/last-warning"
+            mkdir -p "$DISKWATCH_STATE"
+            while :; do
+              free_kb=$(/bin/df -Pk "$MEDIA_DIR" | /usr/bin/awk 'NR == 2 { print $4 }')
+              free_gb=$(( ''${free_kb:-0} / 1024 / 1024 ))
+              if [ "$free_gb" -lt "$DISK_WARN_GB" ]; then
+                echo "$(/bin/date '+%F %T') low disk space: $free_gb GB free (warning below $DISK_WARN_GB GB)"
+                now=$(/bin/date +%s)
+                last=$(cat "$last_file" 2>/dev/null || echo 0)
+                if [ $(( now - last )) -ge 21600 ]; then
+                  /usr/bin/osascript -e "display notification \"Only $free_gb GB free on the media disk. Imports stop below $DISK_MIN_GB GB; delete something or add space.\" with title \"Media server: disk almost full\" sound name \"Basso\"" || true
+                  echo "$now" > "$last_file"
+                fi
+              fi
+              sleep 1800
+            done
+          '';
+
           # Placeholders filled in by setup.sh when it writes the launchd agents:
-          # @CONFIG@ (~/media/config), @STATE@ (~/media/.state), @ADMIN_BIND@
+          # @MEDIA@ (~/media), @CONFIG@ (~/media/config), @STATE@ (~/media/.state),
+          # @ADMIN_BIND@, @DISK_WARN_GB@, @DISK_MIN_GB@
           services = {
             jellyfin.args = [
               (exe pkgs.jellyfin)
@@ -156,6 +179,15 @@
                 HOST = "127.0.0.1";
                 PORT = "8191";
                 BYPARR_STATE = "@STATE@/byparr";
+              };
+            };
+            diskwatch = {
+              args = [ "${diskwatchStart}" ];
+              env = {
+                MEDIA_DIR = "@MEDIA@";
+                DISKWATCH_STATE = "@STATE@/diskwatch";
+                DISK_WARN_GB = "@DISK_WARN_GB@";
+                DISK_MIN_GB = "@DISK_MIN_GB@";
               };
             };
             nginx.args = [

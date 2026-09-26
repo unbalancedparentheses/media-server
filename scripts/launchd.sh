@@ -9,11 +9,14 @@ LAUNCHD_DOMAIN="gui/$(id -u)"
 write_launch_agents() {
   mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
   python3 - "$MEDIA_SERVICES_JSON" "$LABEL_PREFIX" "$HOME/Library/LaunchAgents" \
-    "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR" "${ADMIN_BIND:-0.0.0.0}" "${TZ_VALUE:-}" << 'PY'
+    "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR" "${ADMIN_BIND:-0.0.0.0}" "${TZ_VALUE:-}" \
+    "$MEDIA_DIR" "${DISK_WARN_GB:-50}" "${DISK_MIN_GB:-10}" << 'PY'
 import json, os, plistlib, sys
 
-manifest, prefix, agents_dir, config_dir, state_dir, log_dir, admin_bind, tz = sys.argv[1:]
-subst = {"@CONFIG@": config_dir, "@STATE@": state_dir, "@ADMIN_BIND@": admin_bind}
+(manifest, prefix, agents_dir, config_dir, state_dir, log_dir, admin_bind, tz,
+ media_dir, disk_warn, disk_min) = sys.argv[1:]
+subst = {"@MEDIA@": media_dir, "@CONFIG@": config_dir, "@STATE@": state_dir,
+         "@ADMIN_BIND@": admin_bind, "@DISK_WARN_GB@": disk_warn, "@DISK_MIN_GB@": disk_min}
 
 def fill(s):
     for k, v in subst.items():

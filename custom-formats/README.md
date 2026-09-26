@@ -1,8 +1,9 @@
 # Release filters
 
 setup.sh creates every custom format in this folder in Sonarr (`sonarr/`) or
-Radarr (`radarr/`) and scores it -10000 in every quality profile, whose
-minimum score is kept at 0 or above, so matching releases are never grabbed.
+Radarr (`radarr/`) and scores it in every quality profile: -10000 unless the
+file sets `"mediaServerScore"`. Profiles' minimum score is kept at 0 or
+above, so -10000 means the release is never grabbed.
 
 From [TRaSH Guides](https://github.com/TRaSH-Guides/Guides) (MIT, commit edb8ff81ae63),
 copied unchanged from `docs/json/{radarr,sonarr}/cf/`:
@@ -14,6 +15,10 @@ copied unchanged from `docs/json/{radarr,sonarr}/cf/`:
 - **3D** (Radarr): 3D releases
 
 Ours:
+
+- **Prefer HEVC** (`prefer-hevc.json`, scored **+100**, not -10000): x265/HEVC
+  releases win over otherwise equal ones, for smaller files. Turn off with
+  `prefer_h265 = false` under `[quality]`.
 
 - **Foreign Subtitles** (`foreign-subs.json`): releases tagged with Chinese,
   French, Portuguese, Italian or Russian subtitles (VOSTFR, BIG5, CHS/CHT,

@@ -228,6 +228,14 @@ do_status() {
       *) warn "$(printf '%-13s %s (HTTP %s)' "$svc_name" "$svc_url" "${code:-none}")" ;;
     esac
   done <<< "$SERVICE_HEALTH_ENDPOINTS"
+  info "Disk"
+  local free_gb
+  free_gb=$(( $(df -Pk "$MEDIA_DIR" | awk 'NR == 2 { print $4 }') / 1024 / 1024 ))
+  if [ "$free_gb" -lt "${DISK_WARN_GB:-50}" ]; then
+    warn "$free_gb GB free on the media disk (warning below ${DISK_WARN_GB:-50} GB, imports stop below ${DISK_MIN_GB:-10} GB)"
+  else
+    ok "$free_gb GB free on the media disk"
+  fi
   echo ""
   echo "  Logs: $LOG_DIR (nix run .#logs -- <service>)"
 }

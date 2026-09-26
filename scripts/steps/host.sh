@@ -50,6 +50,8 @@ load_runtime_settings() {
   TZ_VALUE=$(cfg "$TIMEZONE_PATH // \"\"")
   ADMIN_BIND=$(cfg '.network.admin_bind // "0.0.0.0"')
   DASHBOARD_PORT=$(cfg '.network.dashboard_port // 80')
+  DISK_WARN_GB=$(cfg '.disk.warn_free_gb // 50')
+  DISK_MIN_GB=$(cfg '.disk.min_free_gb // 10')
   init_service_registry
 }
 
