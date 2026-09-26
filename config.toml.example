@@ -109,6 +109,7 @@ enable = true
 name = "Torrent Downloads"
 definitionName = "torrentdownloads"
 enable = true
+flaresolverr = true   # behind Cloudflare
 
 [[indexers]]
 name = "MegaPeer"
@@ -133,6 +134,28 @@ enable = true
 [[indexers]]
 name = "Bangumi Moe"
 definitionName = "bangumi-moe"
+enable = true
+
+[[indexers]]
+name = "KickassTorrents"
+definitionName = "kickasstorrents-to"
+enable = true
+flaresolverr = true   # behind Cloudflare
+
+[[indexers]]
+name = "Uindex"
+definitionName = "uindex"
+enable = true
+flaresolverr = true   # behind Cloudflare
+
+[[indexers]]
+name = "Tokyo Toshokan"
+definitionName = "tokyotosho"
+enable = true
+
+[[indexers]]
+name = "nekoBT"
+definitionName = "nekobt"
 enable = true
 
 # Enable and add your API key if you have an NZBgeek account

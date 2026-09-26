@@ -78,6 +78,17 @@ configure_prowlarr() {
         IDX_FLARE=$(cfg ".indexers[$i].flaresolverr // false")
 
         if echo "$EXISTING_INDEXERS" | grep -q "^${IDX_NAME}$"; then
+          # Route an existing indexer through Byparr if config now asks for it
+          if [ "$IDX_FLARE" = "true" ] && [ -n "$FLARESOLVERR_TAG_ID" ]; then
+            local existing_idx
+            existing_idx=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" | jq -c --arg n "$IDX_NAME" '.[] | select(.name == $n)')
+            if ! jq -e --argjson t "$FLARESOLVERR_TAG_ID" '.tags | index($t)' <<< "$existing_idx" >/dev/null; then
+              api PUT "$PROWLARR_URL/api/v1/indexer/$(jq -r .id <<< "$existing_idx")?forceSave=true" -H "$PH" \
+                -d "$(jq -c --argjson t "$FLARESOLVERR_TAG_ID" '.tags += [$t]' <<< "$existing_idx")" >/dev/null && \
+                ok "$IDX_NAME: now routed through Byparr" || warn "$IDX_NAME: could not route through Byparr"
+              continue
+            fi
+          fi
           ok "$IDX_NAME already added"
           continue
         fi
