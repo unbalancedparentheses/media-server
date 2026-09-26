@@ -197,7 +197,7 @@
               gawk
               jq
               openssl
-              python3
+              (python3.withPackages (ps: [ ps.pyyaml ]))
             ];
             text = ''
               export MEDIA_SERVICES_JSON=${manifest}

@@ -101,7 +101,7 @@ The dashboard at `http://localhost` (or `http://<mac-ip>`) links to everything; 
 - **Credentials:** `[jellyfin]` and `[qbittorrent]`. The Jellyfin login is shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr and SABnzbd.
 - **Quality:** `[quality]` picks the Sonarr/Radarr profile Seerr requests use (built-in profiles: `HD-1080p`, `Ultra-HD`, …).
 - **Junk releases:** BR-DISK images, known-bad release groups, upscales, extras-only and 3D releases are scored -10000 in every profile, so they're never grabbed. The rules are TRaSH Guides' custom formats in [`custom-formats/`](custom-formats/README.md).
-- **Subtitles:** `[subtitles]` languages and providers; some providers need a free account set in Bazarr.
+- **Subtitles:** `[subtitles]` languages and providers. The defaults need no account; OpenSubtitles.com, SubDL, Jimaku (anime) and Addic7ed are listed commented out, to enable after adding their login or API key in Bazarr. Most anime releases already carry English subtitles in the file, which the `embeddedsubtitles` provider recognizes.
 - **Indexers:** `[[indexers]]` public torrent and anime indexers; `flaresolverr = true` routes one through Byparr, `anime = true` sends it only to Sonarr Anime.
 - **Usenet:** `[[usenet_providers]]` for SABnzbd.
 - **Network:** `[network] admin_bind` restricts where the admin UIs listen (`"127.0.0.1"` = this Mac only, or your Tailscale IP); `dashboard_port` moves the dashboard off port 80.
@@ -124,7 +124,7 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 
 `nix run .#e2e` proves the automatic path end to end, with no manual step and no public indexers:
 
-1. **Movie:** requests Blender's Creative Commons film *Tears of Steel* in Seerr. Radarr gets a correctly named release, qBittorrent completes it, Radarr imports it, Jellyfin adds it, and Seerr marks it available.
+1. **Movie:** requests Blender's Creative Commons film *Tears of Steel* in Seerr. Radarr gets a correctly named release, qBittorrent completes it, Radarr imports it, Jellyfin adds it, Bazarr downloads English subtitles, and Seerr marks it available.
 2. **TV:** gives Sonarr an episode of the free series *Pioneer One*, which is imported and appears in Jellyfin.
 
 The film (372 MB) is downloaded once from download.blender.org into `~/media/.state/e2e`. The test builds its own torrents with the data already in place, so they complete instantly. Radarr's automatic indexer search is paused for the minute the test runs, so a public release can't race it. Everything it adds is removed afterwards (`--keep` leaves it for inspection). Results are logged to `~/media/logs/e2e-*.log`.

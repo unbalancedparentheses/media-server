@@ -198,7 +198,12 @@ run_verification() {
   done
   if [ -n "$BAZARR_CONFIG_FILE" ]; then
     BAZARR_AUTH_USER=$(sed -n '/^auth:/,/^[^ ]/{s/^  username: *//p;}' "$BAZARR_CONFIG_FILE" 2>/dev/null | head -1 || echo "")
-    check "Bazarr → auth configured" "$([ -n "$BAZARR_AUTH_USER" ] && [ "$BAZARR_AUTH_USER" != "''" ] && echo true || echo false)"
+    BAZARR_AUTH_TYPE=$(sed -n '/^auth:/,/^[^ ]/{s/^  type: *//p;}' "$BAZARR_CONFIG_FILE" 2>/dev/null | head -1 | tr -d "'" || echo "")
+    # type null means no login at all, even with a username set
+    check "Bazarr → login required ($BAZARR_AUTH_TYPE)" "$([ -n "$BAZARR_AUTH_USER" ] && [ "$BAZARR_AUTH_USER" != "''" ] && { [ "$BAZARR_AUTH_TYPE" = form ] || [ "$BAZARR_AUTH_TYPE" = basic ]; } && echo true || echo false)"
+    BAZARR_APIKEY=$(sed -n '/^auth:/,/^[^ ]/{s/^  apikey: *//p;}' "$BAZARR_CONFIG_FILE" 2>/dev/null | head -1 | tr -d "'" || echo "")
+    BAZARR_PROVIDERS=$(api GET "$BAZARR_URL/api/system/settings" -H "X-API-KEY: $BAZARR_APIKEY" | jq '.general.enabled_providers | length' 2>/dev/null || echo 0)
+    check "Bazarr → subtitle providers enabled ($BAZARR_PROVIDERS)" "$([ "$BAZARR_PROVIDERS" -gt 0 ] 2>/dev/null && echo true || echo false)"
   fi
 
   info "Health checks..."

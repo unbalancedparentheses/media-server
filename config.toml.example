@@ -21,16 +21,18 @@ seeding_time_minutes = 10080
 languages = ["en", "es"]
 providers = [
   # No account needed
-  "podnapisi",         # High quality, well-labeled
   "yifysubtitles",     # Great for movies
   "tvsubtitles",       # TV-focused provider
   "gestdown",          # Good general coverage
   "supersubtitles",    # Broad coverage
-  "embeddedsubtitles", # Extracts subs already in the file
-  # Account needed (configure in Bazarr UI)
-  "opensubtitlescom",  # Largest database (free account at opensubtitles.com)
-  "addic7ed",          # Curated TV subtitles (requires login)
-  "subf2m",            # Subscene successor (requires user-agent in Bazarr)
+  "subtitlecat",       # Large catalog (some machine-translated)
+  "embeddedsubtitles", # Uses subs already in the file (most anime releases)
+  # Need an account or API key: add it in Bazarr (Settings → Providers),
+  # then uncomment. Enabled without one, Bazarr pauses them for 12 hours.
+  # "opensubtitlescom",  # Largest database (free account at opensubtitles.com)
+  # "subdl",             # Large database (free API key at subdl.com)
+  # "jimaku",            # Anime, Japanese and English (free API key at jimaku.cc)
+  # "addic7ed",          # Curated TV subtitles
 ]
 
 # ─── Quality ───────────────────────────────────────────────────

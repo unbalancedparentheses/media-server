@@ -11,104 +11,40 @@ configure_bazarr() {
   if [ -n "$BAZARR_CONFIG" ]; then
     ok "Config: $BAZARR_CONFIG"
 
-    # Use python3 to do targeted updates (preserves all existing config)
+    # Edit with a YAML parser: line-based edits corrupted the file when a
+    # value's shape changed (e.g. a one-line list becoming a block list)
     if python3 - "$BAZARR_CONFIG" "$SONARR_KEY" "$RADARR_KEY" "$SUBTITLE_PROVIDERS" "$SUBTITLE_LANGS" "${ADMIN_BIND:-0.0.0.0}" << 'PYEOF'
-import sys
-import json
+import sys, yaml
 
-config_path = sys.argv[1]
-sonarr_key = sys.argv[2]
-radarr_key = sys.argv[3]
-subtitle_providers = sys.argv[4] if len(sys.argv) > 4 else ''
-subtitle_langs = sys.argv[5] if len(sys.argv) > 5 else ''
-bind_address = sys.argv[6] if len(sys.argv) > 6 else '0.0.0.0'
+path, sonarr_key, radarr_key, providers, langs, bind = sys.argv[1:7]
+with open(path) as f:
+    cfg = yaml.safe_load(f) or {}
+general = cfg.setdefault("general", {})
 
-with open(config_path, 'r') as f:
-    lines = f.readlines()
+for app, key, port in (("sonarr", sonarr_key, 8989), ("radarr", radarr_key, 7878)):
+    if key:
+        cfg.setdefault(app, {}).update(ip="localhost", port=port, base_url="/", apikey=key, ssl=False)
+        general[f"use_{app}"] = True
 
-# Parse into sections: { section_name: { key: line_index } }
-sections = {}
-current_section = None
-for i, line in enumerate(lines):
-    stripped = line.rstrip('\n')
-    if stripped and not stripped[0].isspace() and stripped.endswith(':') and stripped != '---':
-        current_section = stripped[:-1]
-        sections[current_section] = {}
-    elif current_section and stripped.startswith('  ') and ':' in stripped:
-        key = stripped.split(':')[0].strip()
-        sections[current_section][key] = i
+if providers:
+    general["enabled_providers"] = [p.strip() for p in providers.split(",") if p.strip()]
+if langs:
+    general["serie_default_enabled"] = True
+    general["movie_default_enabled"] = True
 
-def set_value(section, key, value):
-    """Update an existing key or append to section."""
-    if isinstance(value, bool):
-        val_str = 'true' if value else 'false'
-    elif isinstance(value, str):
-        val_str = f"'{value}'" if value else "''"
-    else:
-        val_str = str(value)
+general.update(
+    # Minimum score filters out mislabeled subs
+    minimum_score=70, minimum_score_movie=70,
+    # Upgrade subs when a better match appears
+    upgrade_subs=True, upgrade_frequency=12, days_to_upgrade_subs=7,
+    # Prefer embedded subs (always correctly labeled)
+    use_embedded_subs=True,
+    # Listen where the other admin UIs do (network.admin_bind)
+    ip=bind,
+)
 
-    if section in sections and key in sections[section]:
-        idx = sections[section][key]
-        lines[idx] = f'  {key}: {val_str}\n'
-    elif section in sections:
-        # Find end of section to append
-        sec_keys = sections[section]
-        if sec_keys:
-            last_idx = max(sec_keys.values())
-        else:
-            # Find section header line
-            for j, l in enumerate(lines):
-                if l.rstrip('\n') == f'{section}:':
-                    last_idx = j
-                    break
-        lines.insert(last_idx + 1, f'  {key}: {val_str}\n')
-        # Rebuild index for this section
-        sections[section][key] = last_idx + 1
-
-if sonarr_key:
-    set_value('sonarr', 'ip', 'localhost')
-    set_value('sonarr', 'port', 8989)
-    set_value('sonarr', 'base_url', '/')
-    set_value('sonarr', 'apikey', sonarr_key)
-    set_value('sonarr', 'ssl', False)
-    set_value('general', 'use_sonarr', True)
-
-if radarr_key:
-    set_value('radarr', 'ip', 'localhost')
-    set_value('radarr', 'port', 7878)
-    set_value('radarr', 'base_url', '/')
-    set_value('radarr', 'apikey', radarr_key)
-    set_value('radarr', 'ssl', False)
-    set_value('general', 'use_radarr', True)
-
-# Configure subtitle providers
-if subtitle_providers:
-    providers_list = json.dumps(subtitle_providers.split(','))
-    set_value('general', 'enabled_providers', providers_list)
-
-# Enable default language profiles for series and movies
-if subtitle_langs:
-    set_value('general', 'serie_default_enabled', True)
-    set_value('general', 'movie_default_enabled', True)
-
-# Subtitle quality: minimum score filters out mislabeled subs
-set_value('general', 'minimum_score', 70)
-set_value('general', 'minimum_score_movie', 70)
-
-# Auto-upgrade subs when a higher-score match appears
-set_value('general', 'upgrade_subs', True)
-set_value('general', 'upgrade_frequency', 12)
-set_value('general', 'days_to_upgrade_subs', 7)
-
-# Prefer embedded subs (always correctly labeled)
-set_value('general', 'use_embedded_subs', True)
-
-# Listen where the other admin UIs do (network.admin_bind)
-set_value('general', 'ip', bind_address)
-
-with open(config_path, 'w') as f:
-    f.writelines(lines)
-
+with open(path, "w") as f:
+    yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
 print("OK")
 PYEOF
     then
@@ -161,55 +97,32 @@ PYEOF
 
   # Bazarr auth — set via config file and restart (must run after settings API to avoid being overwritten)
   if [ -n "$BAZARR_CONFIG" ]; then
-    BAZARR_AUTH_TYPE=$(sed -n '/^auth:/,/^[^ ]/{s/^  type: *//p;}' "$BAZARR_CONFIG" 2>/dev/null | head -1)
-    if [ -z "$BAZARR_AUTH_TYPE" ] || [ "$BAZARR_AUTH_TYPE" = "null" ] || [ "$BAZARR_AUTH_TYPE" = "''" ]; then
-      if python3 - "$BAZARR_CONFIG" "$JELLYFIN_USER" "$JELLYFIN_PASS" << 'PYEOF'
-import sys
-config_path, user, password = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(config_path, 'r') as f:
-    lines = f.readlines()
-# Find or create auth section
-auth_idx = None
-for i, line in enumerate(lines):
-    if line.strip() == 'auth:':
-        auth_idx = i
-        break
-if auth_idx is None:
-    lines.append('\nauth:\n')
-    auth_idx = len(lines) - 1
-# Remove existing auth keys and rewrite
-new_lines = []
-in_auth = False
-for i, line in enumerate(lines):
-    if line.strip() == 'auth:':
-        in_auth = True
-        new_lines.append(line)
-        new_lines.append("  type: 'forms'\n")
-        new_lines.append(f"  username: '{user}'\n")
-        new_lines.append(f"  password: '{password}'\n")
-        continue
-    if in_auth:
-        stripped = line.strip()
-        if stripped and not stripped.startswith('#') and not line[0].isspace():
-            in_auth = False
-            new_lines.append(line)
-        elif stripped.split(':')[0].strip() in ('type', 'username', 'password'):
-            continue
-        else:
-            new_lines.append(line)
-    else:
-        new_lines.append(line)
-with open(config_path, 'w') as f:
-    f.writelines(new_lines)
-print("OK")
+    # Bazarr accepts only "form" or "basic" (anything else, like the "forms"
+    # an older version of this script wrote, is reset to null = no login)
+    # and stores the password as an MD5 hash
+    local bazarr_auth
+    bazarr_auth=$(python3 - "$BAZARR_CONFIG" "$JELLYFIN_USER" "$JELLYFIN_PASS" << 'PYEOF'
+import hashlib, sys, yaml
+path, user, password = sys.argv[1:4]
+with open(path) as f:
+    cfg = yaml.safe_load(f) or {}
+auth = cfg.setdefault("auth", {})
+want = {"type": "form", "username": user, "password": hashlib.md5(password.encode()).hexdigest()}
+if all(auth.get(k) == v for k, v in want.items()):
+    print("unchanged")
+else:
+    auth.update(want)
+    with open(path, "w") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+    print("updated")
 PYEOF
-      then
-        ok "Bazarr auth set: $JELLYFIN_USER"
-        svc_restart bazarr >/dev/null 2>&1 || true
-        wait_for "Bazarr" "$BAZARR_URL"
-      else
-        warn "Could not set Bazarr auth"
-      fi
+) || bazarr_auth="failed"
+    if [ "$bazarr_auth" = "updated" ]; then
+      ok "Bazarr login set: $JELLYFIN_USER"
+      svc_restart bazarr >/dev/null 2>&1 || true
+      wait_for "Bazarr" "$BAZARR_URL"
+    elif [ "$bazarr_auth" = "failed" ]; then
+      warn "Could not set the Bazarr login"
     else
       ok "Bazarr auth already configured"
     fi
