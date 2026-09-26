@@ -39,15 +39,6 @@ location = /api/sonarr/calendar {
     proxy_set_header X-Api-Key "{{SONARR_KEY}}";
 }
 
-# Sonarr Anime
-location = /api/sonarr-anime/calendar {
-    limit_except GET { deny all; }
-    limit_req zone=api burst=50 nodelay;
-    set $upstream_api_sonarr_anime http://{{ADMIN_HOST}}:8990/api/v3/calendar$is_args$args;
-    proxy_pass $upstream_api_sonarr_anime;
-    proxy_set_header X-Api-Key "{{SONARR_ANIME_KEY}}";
-}
-
 # Radarr
 location = /api/radarr/calendar {
     limit_except GET { deny all; }

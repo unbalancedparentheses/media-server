@@ -25,6 +25,6 @@ PY
 
 
 write_api_proxy_from_template() {
-  export SONARR_KEY SONARR_ANIME_KEY RADARR_KEY JELLYFIN_API_KEY SEERR_KEY SABNZBD_KEY ADMIN_HOST
+  export SONARR_KEY RADARR_KEY JELLYFIN_API_KEY SEERR_KEY SABNZBD_KEY ADMIN_HOST
   render_template "$SCRIPT_DIR/templates/nginx.api-proxy.conf.tpl" "$API_PROXY"
 }

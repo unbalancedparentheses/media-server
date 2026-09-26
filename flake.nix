@@ -104,11 +104,6 @@
               "-nobrowser"
               "-data=@CONFIG@/sonarr"
             ];
-            sonarr-anime.args = [
-              (exe pkgs.sonarr)
-              "-nobrowser"
-              "-data=@CONFIG@/sonarr-anime"
-            ];
             radarr.args = [
               (exe pkgs.radarr)
               "-nobrowser"

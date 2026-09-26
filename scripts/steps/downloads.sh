@@ -35,7 +35,7 @@ configure_qbittorrent() {
       -b "$QBIT_COOKIE" \
       --data-urlencode "json=$QBIT_PREFS" 2>/dev/null && ok "Preferences + credentials set" || warn "Could not set preferences"
 
-    for cat in sonarr sonarr-anime radarr; do
+    for cat in sonarr radarr; do
       curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/createCategory" \
         -b "$QBIT_COOKIE" \
         --data-urlencode "category=$cat" --data-urlencode "savePath=$DL_COMPLETE/$cat" 2>/dev/null && ok "Category: $cat" || \
@@ -59,7 +59,7 @@ configure_sabnzbd() {
 
     # Create categories
     EXISTING_CATS=$(curl -sf "$SABNZBD_URL/api?mode=get_cats&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | jq -r '.categories[]' 2>/dev/null || echo "")
-    for cat in sonarr sonarr-anime radarr; do
+    for cat in sonarr radarr; do
       if ! echo "$EXISTING_CATS" | grep -q "^${cat}$"; then
         curl -sf "$SABNZBD_URL/api?mode=set_config&section=categories&keyword=$cat&apikey=$SABNZBD_KEY&dir=$cat&output=json" >/dev/null 2>&1 && \
           ok "Category: $cat" || warn "Could not create category: $cat"
@@ -135,11 +135,6 @@ configure_unpackerr() {
 [[sonarr]]
 url = "$SONARR_INTERNAL"
 api_key = "$SONARR_KEY"
-paths = ["$DOWNLOADS_DIR"]
-
-[[sonarr]]
-url = "$SONARR_ANIME_INTERNAL"
-api_key = "$SONARR_ANIME_KEY"
 paths = ["$DOWNLOADS_DIR"]
 
 [[radarr]]

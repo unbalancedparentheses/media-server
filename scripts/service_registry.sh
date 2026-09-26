@@ -9,7 +9,6 @@ init_service_registry() {
   QBIT_URL="http://$admin:8081"
   JELLYFIN_URL="http://localhost:8096"
   SONARR_URL="http://$admin:8989"
-  SONARR_ANIME_URL="http://$admin:8990"
   RADARR_URL="http://$admin:7878"
   PROWLARR_URL="http://$admin:9696"
   BAZARR_URL="http://$admin:6767"
@@ -21,7 +20,6 @@ init_service_registry() {
 
   # How the services reach each other (all on this machine)
   SONARR_INTERNAL="http://localhost:8989"
-  SONARR_ANIME_INTERNAL="http://localhost:8990"
   RADARR_INTERNAL="http://localhost:7878"
   PROWLARR_INTERNAL="http://localhost:9696"
 
@@ -33,7 +31,6 @@ init_service_registry() {
   # name|url
   SERVICE_HEALTH_ENDPOINTS=$'Jellyfin|'"$JELLYFIN_URL"$'/health\n'
   SERVICE_HEALTH_ENDPOINTS+=$'Sonarr|'"$SONARR_URL"$'/ping\n'
-  SERVICE_HEALTH_ENDPOINTS+=$'Sonarr Anime|'"$SONARR_ANIME_URL"$'/ping\n'
   SERVICE_HEALTH_ENDPOINTS+=$'Radarr|'"$RADARR_URL"$'/ping\n'
   SERVICE_HEALTH_ENDPOINTS+=$'Prowlarr|'"$PROWLARR_URL"$'/ping\n'
   SERVICE_HEALTH_ENDPOINTS+=$'Bazarr|'"$BAZARR_URL"$'\n'
@@ -47,7 +44,7 @@ init_service_registry() {
 
 # launchd agents, one per service (names match flake.nix `services`).
 # One per line: setup.sh sets IFS to newline/tab, so spaces don't split.
-SERVICE_NAMES=$'jellyfin\nsonarr\nsonarr-anime\nradarr\nprowlarr\nbazarr\nqbittorrent\nsabnzbd\nunpackerr\nseerr\nbyparr\nnginx'
+SERVICE_NAMES=$'jellyfin\nsonarr\nradarr\nprowlarr\nbazarr\nqbittorrent\nsabnzbd\nunpackerr\nseerr\nbyparr\nnginx'
 LABEL_PREFIX="${MEDIA_LABEL_PREFIX:-org.media-server}"
 svc_label() { printf '%s.%s' "$LABEL_PREFIX" "$1"; }
 svc_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$(svc_label "$1")"; }

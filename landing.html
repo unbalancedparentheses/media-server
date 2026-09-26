@@ -237,7 +237,7 @@
     var h=location.hostname;
     var icons={
       Moonfin:'\uD83C\uDF19',Seerr:'\uD83C\uDFAC',Jellyfin:'\u25B6\uFE0F',
-      Sonarr:'\uD83D\uDCFA','Sonarr Anime':'\uD83C\uDF1F',
+      Sonarr:'\uD83D\uDCFA',
       Radarr:'\uD83C\uDFA5',
       Prowlarr:'\uD83D\uDD0D',Bazarr:'\uD83D\uDCAC',
       qBittorrent:'\u2B07\uFE0F',SABnzbd:'\uD83D\uDCE5'
@@ -430,25 +430,22 @@
     refreshSab();
     setInterval(refreshSab,5000);
 
-    // ── Calendar (Sonarr + Sonarr Anime + Radarr) ──
+    // ── Calendar (Sonarr + Radarr) ──
     function refreshCalendar(){
       var today=new Date();
       var end7=new Date(today);end7.setDate(end7.getDate()+7);
       var end90=new Date(today);end90.setDate(end90.getDate()+90);
       var start=isoDate(today),endW=isoDate(end7),endM=isoDate(end90);
       Promise.all([
-        fetch('/api/sonarr/calendar?start='+start+'&end='+endW).then(function(r){return r.json()}).catch(function(){return[]}),
-        fetch('/api/sonarr-anime/calendar?start='+start+'&end='+endW).then(function(r){return r.json()}).catch(function(){return[]}),
+        // includeSeries: without it episodes carry no series title
+        fetch('/api/sonarr/calendar?includeSeries=true&start='+start+'&end='+endW).then(function(r){return r.json()}).catch(function(){return[]}),
         fetch('/api/radarr/calendar?start='+start+'&end='+endM).then(function(r){return r.json()}).catch(function(){return[]})
       ]).then(function(results){
         var items=[];
         results[0].forEach(function(ep){
           items.push({date:ep.airDateUtc||ep.airDate||'',title:ep.series?ep.series.title:'Unknown',sub:'S'+String(ep.seasonNumber).padStart(2,'0')+'E'+String(ep.episodeNumber).padStart(2,'0')+' - '+(ep.title||''),type:'ep'});
         });
-        results[1].forEach(function(ep){
-          items.push({date:ep.airDateUtc||ep.airDate||'',title:ep.series?ep.series.title:'Unknown',sub:'S'+String(ep.seasonNumber).padStart(2,'0')+'E'+String(ep.episodeNumber).padStart(2,'0')+' - '+(ep.title||''),type:'ep'});
-        });
-        results[2].forEach(function(m){
+        results[1].forEach(function(m){
           items.push({date:m.inCinemas||m.digitalRelease||m.physicalRelease||'',title:m.title||'Unknown',sub:m.year?String(m.year):'',type:'movie'});
         });
         items.sort(function(a,b){return(a.date||'').localeCompare(b.date||'')});

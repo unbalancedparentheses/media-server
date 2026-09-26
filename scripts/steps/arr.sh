@@ -6,19 +6,23 @@ configure_arr() {
   info "Configuring $name..."
   local H="X-Api-Key: $key"
 
-  # Remove stale root folders (e.g. /downloads) and ensure only the correct one exists
+  # Root folders: exactly the given ones (newline-separated); others, like
+  # a stale /downloads, are removed
+  local root
   EXISTING_ROOTS=$(api_retry api GET "$url/api/$api_ver/rootfolder" -H "$H" 2>/dev/null || echo "[]")
   while read -r stale_id; do
     [ -n "$stale_id" ] && api DELETE "$url/api/$api_ver/rootfolder/$stale_id" -H "$H" >/dev/null 2>&1 && \
       ok "Removed stale root folder (id: $stale_id)"
-  done < <(echo "$EXISTING_ROOTS" | jq -r '.[] | select(.path != "'"$root_folder"'") | .id' 2>/dev/null)
-
-  if echo "$EXISTING_ROOTS" | jq -r '.[].path' 2>/dev/null | grep -q "^${root_folder}$"; then
-    ok "Root folder: $root_folder"
-  else
-    api_retry api POST "$url/api/$api_ver/rootfolder" -H "$H" -d "{\"path\":\"$root_folder\"}" >/dev/null && \
-      ok "Root folder: $root_folder" || warn "Could not add root folder"
-  fi
+  done < <(echo "$EXISTING_ROOTS" | jq -r --arg roots "$root_folder" \
+    '($roots | split("\n")) as $want | .[] | select(.path as $p | $want | index($p) | not) | .id' 2>/dev/null)
+  for root in $root_folder; do
+    if echo "$EXISTING_ROOTS" | jq -e --arg p "$root" 'any(.[]; .path == $p)' >/dev/null 2>&1; then
+      ok "Root folder: $root"
+    else
+      api_retry api POST "$url/api/$api_ver/rootfolder" -H "$H" -d "$(jq -nc --arg p "$root" '{path:$p}')" >/dev/null && \
+        ok "Root folder: $root" || warn "Could not add root folder $root"
+    fi
+  done
 
   EXISTING_DL=$(api GET "$url/api/$api_ver/downloadclient" -H "$H" | jq -r '.[].name' 2>/dev/null || echo "")
 
@@ -88,12 +92,11 @@ enable_unknown_quality() {
 }
 
 configure_arrs() {
-  [ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "$TV_DIR"    "tvCategory"
-  [ -n "$SONARR_ANIME_KEY" ] && configure_arr "sonarr-anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$ANIME_DIR" "tvCategory"
+  # One Sonarr for TV and anime: Seerr sends anime to the anime folder
+  [ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "$TV_DIR"$'\n'"$ANIME_DIR" "tvCategory"
   [ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "$MOVIES_DIR" "movieCategory"
 
   [ -n "$SONARR_KEY" ]       && enable_unknown_quality "$SONARR_URL"       "$SONARR_KEY"
-  [ -n "$SONARR_ANIME_KEY" ] && enable_unknown_quality "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
   [ -n "$RADARR_KEY" ]       && enable_unknown_quality "$RADARR_URL"       "$RADARR_KEY"
 }
 
@@ -139,13 +142,12 @@ apply_junk_filters() {
     api PUT "$url/api/v3/qualityprofile/$(jq -r '.id' <<< "$profile")" -H "$H" -d "$updated" >/dev/null || \
       warn "$label: could not update profile $(jq -r '.name' <<< "$profile")"
   done < <(jq -c '.[]' <<< "$profiles")
-  ok "$label: junk filters on (BR-DISK, LQ, Upscaled, Extras$([ "$app" = radarr ] && echo ", 3D"))"
+  ok "$label: release filters on (BR-DISK, LQ, Upscaled, Extras, Foreign Subtitles$([ "$app" = radarr ] && echo ", 3D"))"
 }
 
 configure_junk_filters() {
   info "Blocking junk releases..."
   [ -n "$SONARR_KEY" ]       && apply_junk_filters "Sonarr"       "$SONARR_URL"       "$SONARR_KEY"       sonarr
-  [ -n "$SONARR_ANIME_KEY" ] && apply_junk_filters "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" sonarr
   [ -n "$RADARR_KEY" ]       && apply_junk_filters "Radarr"       "$RADARR_URL"       "$RADARR_KEY"       radarr
   return 0
 }

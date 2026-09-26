@@ -7,19 +7,16 @@ configure_prowlarr() {
 
     EXISTING_APPS=$(api GET "$PROWLARR_URL/api/v1/applications" -H "$PH" | jq -r '.[].name' 2>/dev/null || echo "")
 
-    # Create anime tag for routing anime indexers to Sonarr Anime only
-    ANIME_TAG_ID=$(api GET "$PROWLARR_URL/api/v1/tag" -H "$PH" | jq -r '.[] | select(.label == "anime") | .id' 2>/dev/null || echo "")
-    if [ -z "$ANIME_TAG_ID" ]; then
-      ANIME_TAG_ID=$(api POST "$PROWLARR_URL/api/v1/tag" -H "$PH" -d '{"label":"anime"}' | jq -r '.id' 2>/dev/null || echo "")
-      [ -n "$ANIME_TAG_ID" ] && ok "Created anime tag (id: $ANIME_TAG_ID)"
-    fi
-
     SONARR_CATS="5000,5010,5020,5030,5040,5045,5050,5090"
     RADARR_CATS="2000,2010,2020,2030,2040,2045,2050,2060,2070,2080,2090"
 
-    # Sonarr Anime gets the anime tag — only anime-tagged indexers sync to it
+    # One Sonarr handles TV and anime; every indexer syncs to it and Radarr
     [ -n "$SONARR_KEY" ]       && add_prowlarr_app "Sonarr"       "Sonarr" "$SONARR_INTERNAL"       "$SONARR_KEY"       "$SONARR_CATS"
-    [ -n "$SONARR_ANIME_KEY" ] && add_prowlarr_app "Sonarr Anime" "Sonarr" "$SONARR_ANIME_INTERNAL" "$SONARR_ANIME_KEY" "$SONARR_CATS" "$ANIME_TAG_ID"
+    # Older setups had a separate anime Sonarr
+    local old_app
+    old_app=$(api GET "$PROWLARR_URL/api/v1/applications" -H "$PH" | jq -r '.[] | select(.name == "Sonarr Anime") | .id' 2>/dev/null || true)
+    [ -n "$old_app" ] && api DELETE "$PROWLARR_URL/api/v1/applications/$old_app" -H "$PH" >/dev/null && \
+      ok "Removed the old Sonarr Anime app"
     [ -n "$RADARR_KEY" ]       && add_prowlarr_app "Radarr"       "Radarr" "$RADARR_INTERNAL"       "$RADARR_KEY"       "$RADARR_CATS"
 
     # Byparr speaks the FlareSolverr API, so it's added as a FlareSolverr proxy
@@ -79,7 +76,6 @@ configure_prowlarr() {
         IDX_NAME=$(cfg ".indexers[$i].name")
         IDX_DEF=$(cfg ".indexers[$i].definitionName")
         IDX_FLARE=$(cfg ".indexers[$i].flaresolverr // false")
-        IDX_ANIME=$(cfg ".indexers[$i].anime // false")
 
         if echo "$EXISTING_INDEXERS" | grep -q "^${IDX_NAME}$"; then
           ok "$IDX_NAME already added"
@@ -107,10 +103,9 @@ configure_prowlarr() {
           ' 2>/dev/null)
         fi
 
-        # Set name, enable, app profile, and tags (flaresolverr + anime)
+        # Set name, enable, app profile, and tags (flaresolverr)
         IDX_TAGS="[]"
         [ "$IDX_FLARE" = "true" ] && [ -n "$FLARESOLVERR_TAG_ID" ] && IDX_TAGS=$(echo "$IDX_TAGS" | jq -c ". + [$FLARESOLVERR_TAG_ID]")
-        [ "$IDX_ANIME" = "true" ] && [ -n "$ANIME_TAG_ID" ] && IDX_TAGS=$(echo "$IDX_TAGS" | jq -c ". + [$ANIME_TAG_ID]")
         SCHEMA=$(echo "$SCHEMA" | jq -c --arg name "$IDX_NAME" --argjson tags "$IDX_TAGS" \
           '.name = $name | .enable = true | del(.id) | .appProfileId = 1 | .tags = $tags' 2>/dev/null)
 

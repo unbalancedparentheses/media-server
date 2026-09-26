@@ -91,9 +91,9 @@ create_directories() {
   # Per-category folders too: Sonarr/Radarr flag a download client whose
   # folder doesn't exist yet (qBittorrent only creates it on first download)
   mkdir -p "$DOWNLOADS_DIR"/{torrents,usenet}/incomplete \
-    "$DOWNLOADS_DIR"/{torrents,usenet}/complete/{sonarr,sonarr-anime,radarr}
+    "$DOWNLOADS_DIR"/{torrents,usenet}/complete/{sonarr,radarr}
   mkdir -p "$BACKUP_DIR" "$LOG_DIR" "$STATE_DIR"
-  mkdir -p "$CONFIG_DIR"/{jellyfin,sonarr,sonarr-anime,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,seerr,unpackerr,byparr}
+  mkdir -p "$CONFIG_DIR"/{jellyfin,sonarr,radarr,prowlarr,bazarr,sabnzbd,qbittorrent,seerr,unpackerr,byparr}
   mkdir -p "$CONFIG_DIR"/nginx/{www,temp}
   ok "$MEDIA_DIR directory tree ready"
 }
@@ -205,7 +205,6 @@ write_service_configs() {
   info "Writing service configs..."
   CONFIG_CHANGED=""
   seed_arr_config sonarr 8989
-  seed_arr_config sonarr-anime 8990
   seed_arr_config radarr 7878
   seed_arr_config prowlarr 9696
   seed_qbittorrent_config
@@ -216,6 +215,7 @@ write_service_configs() {
 
 start_stack() {
   info "Starting services..."
+  remove_retired_services
   local changed
   changed=$(write_launch_agents)
   # Also restart services whose config file changed (e.g. a new admin_bind)
@@ -224,6 +224,22 @@ start_stack() {
   # the agents point at them
   nix-store --add-root "$STATE_DIR/gcroot" --realise "$MEDIA_SERVICES_JSON" >/dev/null 2>&1 || \
     warn "Could not register a Nix GC root; 'nix-collect-garbage' may remove the running services"
+}
+
+# Stop and remove launchd agents for services this version no longer runs
+# (e.g. the separate anime Sonarr, merged into Sonarr). Their config folders
+# are left in place.
+remove_retired_services() {
+  local plist name
+  for plist in "$HOME/Library/LaunchAgents/$LABEL_PREFIX".*.plist; do
+    [ -e "$plist" ] || continue
+    name=$(basename "$plist" .plist)
+    name="${name#"$LABEL_PREFIX".}"
+    printf '%s\n' "$SERVICE_NAMES" | grep -qx "$name" && continue
+    svc_stop "$name" && rm -f "$plist" && \
+      ok "$name: no longer used, stopped and removed (its data stays in $CONFIG_DIR/$name)"
+  done
+  return 0
 }
 
 read_setup_config() {
@@ -258,7 +274,6 @@ wait_for_services() {
 # Read service API keys from their config files (no output; used by --test too)
 read_api_keys() {
   SONARR_KEY=$(get_api_key "sonarr")
-  SONARR_ANIME_KEY=$(get_api_key "sonarr-anime")
   RADARR_KEY=$(get_api_key "radarr")
   PROWLARR_KEY=$(get_api_key "prowlarr")
   SABNZBD_KEY=""
@@ -272,7 +287,6 @@ load_api_keys() {
   info "Reading API keys..."
   read_api_keys
   [ -n "$SONARR_KEY" ]       && ok "Sonarr:       $(mask "$SONARR_KEY")"       || err "Sonarr key not found"
-  [ -n "$SONARR_ANIME_KEY" ] && ok "Sonarr Anime: $(mask "$SONARR_ANIME_KEY")" || err "Sonarr Anime key not found"
   [ -n "$RADARR_KEY" ]       && ok "Radarr:       $(mask "$RADARR_KEY")"       || err "Radarr key not found"
   [ -n "$PROWLARR_KEY" ]     && ok "Prowlarr:     $(mask "$PROWLARR_KEY")"     || err "Prowlarr key not found"
   [ -n "$SABNZBD_KEY" ]      && ok "SABnzbd:      $(mask "$SABNZBD_KEY")"      || warn "SABnzbd key not found"

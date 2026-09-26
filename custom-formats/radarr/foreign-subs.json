@@ -1,0 +1,15 @@
+{
+  "name": "Foreign Subtitles",
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [
+    {
+      "name": "Tagged with non-English subtitles, or a Chinese fansub group",
+      "implementation": "ReleaseTitleSpecification",
+      "negate": false,
+      "required": true,
+      "fields": {
+        "value": "(?<![a-z0-9])(VOSTFR|SUBFRENCH|VOSTA|BIG5|CHS|CHT|JPSC|JPTC|GB_(?:BIG5|JP|CHT)|简体|繁体|繁體|简繁|繁中|简中|中文|字幕|Legendado|RUSSUB|SubITA|Sub[ ._-]?ITA)(?![a-z0-9])|^\\[(KissSub|LoliHouse|Nekomoe kissaten|ANi|Lilith-Raws|Sakurato|SweetSub)\\]"
+      }
+    }
+  ]
+}

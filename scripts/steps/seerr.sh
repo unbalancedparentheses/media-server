@@ -49,7 +49,7 @@ configure_seerr() {
     EXISTING_JS_SONARR_NAMES=$(api GET "$SEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -r '.[].name' 2>/dev/null || echo "")
 
     add_js_sonarr() {
-      local name="$1" port="$2" key="$3" url="$4" dir="$5" ext_url="$6" is_default="$7" anime="${8:-false}" profile_name="$9"
+      local name="$1" port="$2" key="$3" url="$4" dir="$5" ext_url="$6" is_default="$7" profile_name="$8"
       if echo "$EXISTING_JS_SONARR_NAMES" | grep -q "^${name}$"; then
         ok "$name already connected"
         return
@@ -61,22 +61,35 @@ configure_seerr() {
       fi
       PID=$(echo "$PROFILE" | jq '.id')
       PNAME=$(echo "$PROFILE" | jq -r '.name')
+      # Anime requests go to the same Sonarr, into the anime folder with
+      # the anime profile and Sonarr's anime numbering
+      local anime_profile
+      anime_profile=$(arr_profile "$url" "$key" "$SONARR_ANIME_PROFILE")
+      [ -n "$anime_profile" ] || { warn "$name: anime profile '$SONARR_ANIME_PROFILE' doesn't exist; using '$PNAME' for anime"; anime_profile="$PROFILE"; }
       JS_SONARR_JSON=$(jq -nc \
         --arg name "$name" --argjson port "$port" --arg key "$key" \
         --argjson pid "$PID" --arg pname "$PNAME" --arg dir "$dir" \
-        --argjson is_default "$is_default" --arg ext "$ext_url" --argjson anime "$anime" \
+        --argjson is_default "$is_default" --arg ext "$ext_url" \
+        --argjson ap "$anime_profile" --arg adir "$ANIME_DIR" \
         '{name:$name, hostname:"localhost", port:$port, useSsl:false, apiKey:$key,
           baseUrl:"", activeProfileId:$pid, activeProfileName:$pname, activeDirectory:$dir,
+          activeAnimeProfileId:$ap.id, activeAnimeProfileName:$ap.name, activeAnimeDirectory:$adir,
+          seriesType:"standard", animeSeriesType:"anime",
           is4k:false, enableSeasonFolders:true, isDefault:$is_default, externalUrl:$ext,
-          enableSearch:true} + (if $anime then {seriesType:"anime", animeSeriesType:"anime"} else {} end)')
+          enableSearch:true}')
       api POST "$SEERR_URL/api/v1/settings/sonarr" "${JA[@]}" -d "$JS_SONARR_JSON" >/dev/null 2>&1 && \
         ok "$name connected (profile: $PNAME)" || warn "Could not add $name"
     }
 
     [ -n "$SONARR_KEY" ] && \
-      add_js_sonarr "Sonarr" 8989 "$SONARR_KEY" "$SONARR_URL" "$TV_DIR" "http://localhost:8989" "true" "false" "$SONARR_PROFILE"
-    [ -n "$SONARR_ANIME_KEY" ] && \
-      add_js_sonarr "Sonarr Anime" 8990 "$SONARR_ANIME_KEY" "$SONARR_ANIME_URL" "$ANIME_DIR" "http://localhost:8990" "false" "true" "$SONARR_ANIME_PROFILE"
+      add_js_sonarr "Sonarr" 8989 "$SONARR_KEY" "$SONARR_URL" "$TV_DIR" "http://localhost:8989" "true" "$SONARR_PROFILE"
+
+    # Older setups had a separate anime Sonarr; Seerr can't route anime to a
+    # second instance, so remove that connection
+    local old_conn
+    old_conn=$(api GET "$SEERR_URL/api/v1/settings/sonarr" "${JA[@]}" 2>/dev/null | jq -r '.[] | select(.name == "Sonarr Anime") | .id' || true)
+    [ -n "$old_conn" ] && api DELETE "$SEERR_URL/api/v1/settings/sonarr/$old_conn" "${JA[@]}" >/dev/null && \
+      ok "Removed the old Sonarr Anime connection"
 
     # Add Radarr
     EXISTING_JS_RADARR=$(api GET "$SEERR_URL/api/v1/settings/radarr" "${JA[@]}" 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
@@ -105,7 +118,6 @@ configure_seerr() {
     # Keep existing connections in line with config.toml: search enabled and
     # the configured quality profile (older setups picked the first profile)
     sync_js_connections sonarr "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE" "$TV_DIR" 8989
-    sync_js_connections sonarr "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$SONARR_ANIME_PROFILE" "$ANIME_DIR" 8990
     sync_js_connections radarr "Radarr" "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE" "$MOVIES_DIR" 7878
 
     api POST "$SEERR_URL/api/v1/settings/initialize" "${JA[@]}" >/dev/null 2>&1 || true
@@ -136,12 +148,22 @@ sync_js_connections() {
     warn "$name: quality profile '$profile_name' doesn't exist there; keeping the connection's current profile"
     profile='{}'
   fi
+  local anime_profile='{}'
+  if [ "$kind" = "sonarr" ]; then
+    anime_profile=$(arr_profile "$url" "$key" "$SONARR_ANIME_PROFILE")
+    [ -n "$anime_profile" ] || anime_profile='{}'
+  fi
   updated=$(echo "$conn" | jq -c --argjson p "$profile" --arg want "$profile_name" --arg dir "$dir" \
-    --arg key "$key" --argjson port "$port" '
+    --arg key "$key" --argjson port "$port" --arg kind "$kind" \
+    --argjson ap "$anime_profile" --arg awant "$SONARR_ANIME_PROFILE" --arg adir "$ANIME_DIR" '
     .enableSearch = true
     | .hostname = "localhost" | .port = $port | .useSsl = false | .apiKey = $key
     | .activeDirectory = $dir
-    | if $p.name == $want then .activeProfileId = $p.id | .activeProfileName = $p.name else . end')
+    | if $p.name == $want then .activeProfileId = $p.id | .activeProfileName = $p.name else . end
+    | if $kind == "sonarr" then
+        .activeAnimeDirectory = $adir | .seriesType = "standard" | .animeSeriesType = "anime"
+        | if $ap.name == $awant then .activeAnimeProfileId = $ap.id | .activeAnimeProfileName = $ap.name else . end
+      else . end')
   if [ "$updated" != "$conn" ]; then
     id=$(echo "$conn" | jq -r '.id')
     # id is read-only in the request body

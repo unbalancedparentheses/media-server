@@ -46,7 +46,7 @@ jobs:
             mkdir -p "$dir/temp" "$dir/www"
             export NGINX_MIME_TYPES="$(dirname "$(dirname "$(command -v nginx)")")/conf/mime.types"
             export DASHBOARD_PORT=8080 ADMIN_HOST=127.0.0.1
-            for v in SONARR_KEY SONARR_ANIME_KEY RADARR_KEY JELLYFIN_API_KEY SEERR_KEY SABNZBD_KEY; do export "$v=0123456789abcdef"; done
+            for v in SONARR_KEY RADARR_KEY JELLYFIN_API_KEY SEERR_KEY SABNZBD_KEY; do export "$v=0123456789abcdef"; done
             SCRIPT_DIR=$PWD
             source scripts/setup-services.sh
             render_template templates/nginx.conf.tpl "$dir/nginx.conf"

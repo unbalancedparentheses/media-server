@@ -38,7 +38,7 @@ run_verification() {
   # Every later check needs these; a missing key must fail, not skip checks
   info "API keys..."
   local key_name key_value
-  for key_name in SONARR_KEY SONARR_ANIME_KEY RADARR_KEY PROWLARR_KEY SABNZBD_KEY SEERR_KEY; do
+  for key_name in SONARR_KEY RADARR_KEY PROWLARR_KEY SABNZBD_KEY SEERR_KEY; do
     key_value="${!key_name:-}"
     check "$key_name present" "$([ -n "$key_value" ] && echo true || echo false)"
   done
@@ -51,7 +51,6 @@ run_verification() {
   if [ -n "$QBIT_COOKIE_V" ]; then
     QBIT_CATS=$(curl -sf "$QBIT_URL/api/v2/torrents/categories" -b "$QBIT_COOKIE_V" 2>/dev/null || echo "{}")
     check "qBittorrent category: sonarr" "$(echo "$QBIT_CATS" | jq 'has("sonarr")' 2>/dev/null)"
-    check "qBittorrent category: sonarr-anime" "$(echo "$QBIT_CATS" | jq 'has("sonarr-anime")' 2>/dev/null)"
     check "qBittorrent category: radarr" "$(echo "$QBIT_CATS" | jq 'has("radarr")' 2>/dev/null)"
   fi
 
@@ -60,10 +59,6 @@ run_verification() {
     check "Sonarr → qBittorrent" "$(echo "$SONARR_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
   fi
 
-  if [ -n "$SONARR_ANIME_KEY" ]; then
-    SONARR_ANIME_DL=$(api GET "$SONARR_ANIME_URL/api/v3/downloadclient" -H "X-Api-Key: $SONARR_ANIME_KEY" || echo "[]")
-    check "Sonarr Anime → qBittorrent" "$(echo "$SONARR_ANIME_DL" | jq 'any(.[]; .name == "qBittorrent" and .enable == true)' 2>/dev/null)"
-  fi
 
   if [ -n "$RADARR_KEY" ]; then
     RADARR_DL=$(api GET "$RADARR_URL/api/v3/downloadclient" -H "X-Api-Key: $RADARR_KEY" || echo "[]")
@@ -76,7 +71,7 @@ run_verification() {
     check "$name → $dir" "$(api GET "$url/api/v3/rootfolder" -H "X-Api-Key: $key" | jq --arg d "$dir" 'any(.[]; .path == $d)' 2>/dev/null || echo false)"
   }
   [ -n "$SONARR_KEY" ] && check_root "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$TV_DIR"
-  [ -n "$SONARR_ANIME_KEY" ] && check_root "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$ANIME_DIR"
+  [ -n "$SONARR_KEY" ] && check_root "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$ANIME_DIR"
   [ -n "$RADARR_KEY" ] && check_root "Radarr" "$RADARR_URL" "$RADARR_KEY" "$MOVIES_DIR"
   [ -n "$RADARR_KEY" ] && check "Radarr → no stale root folders" "$(api GET "$RADARR_URL/api/v3/rootfolder" -H "X-Api-Key: $RADARR_KEY" | jq --arg d "$MOVIES_DIR" '[.[] | .path] | all(. == $d)' 2>/dev/null || echo false)"
 
@@ -85,7 +80,7 @@ run_verification() {
     PH="X-Api-Key: $PROWLARR_KEY"
     PROWLARR_APPS=$(api GET "$PROWLARR_URL/api/v1/applications" -H "$PH" || echo "[]")
     check "Prowlarr → Sonarr connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Sonarr")' 2>/dev/null)"
-    check "Prowlarr → Sonarr Anime connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Sonarr Anime")' 2>/dev/null)"
+    check "Prowlarr → no leftover Sonarr Anime app" "$(echo "$PROWLARR_APPS" | jq 'all(.[]; .name != "Sonarr Anime")' 2>/dev/null)"
     check "Prowlarr → Radarr connected" "$(echo "$PROWLARR_APPS" | jq 'any(.[]; .name == "Radarr")' 2>/dev/null)"
 
     INDEXER_COUNT=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" | jq '[.[] | select(.enable == true)] | length' 2>/dev/null || echo "0")
@@ -131,7 +126,6 @@ run_verification() {
     check "$name → Jellyfin notification" "$(echo "$NOTIF" | jq 'any(.[]; .name == "Jellyfin")' 2>/dev/null)"
   }
   [ -n "$SONARR_KEY" ] && check_jellyfin_notification "Sonarr" "$SONARR_URL" "$SONARR_KEY"
-  [ -n "$SONARR_ANIME_KEY" ] && check_jellyfin_notification "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
   [ -n "$RADARR_KEY" ] && check_jellyfin_notification "Radarr" "$RADARR_URL" "$RADARR_KEY"
 
   info "Seerr..."
@@ -150,8 +144,10 @@ run_verification() {
           (.[0] | .port == \$port and .activeDirectory == \$d and .activeProfileName == \$p and .enableSearch == true and $extra)" \
         <<< "$conns" 2>/dev/null || echo false)"
     }
-    check_seerr_conn "Sonarr" "$JS_SONARR_V" "Sonarr" 8989 "$TV_DIR" "$SONARR_PROFILE" '(.seriesType // "standard") != "anime"'
-    check_seerr_conn "Sonarr Anime" "$JS_SONARR_V" "Sonarr Anime" 8990 "$ANIME_DIR" "$SONARR_ANIME_PROFILE" '.seriesType == "anime"'
+    # Anime requests go to the same Sonarr, into the anime folder
+    check_seerr_conn "Sonarr" "$JS_SONARR_V" "Sonarr" 8989 "$TV_DIR" "$SONARR_PROFILE" \
+      "(.seriesType // \"standard\") != \"anime\" and .animeSeriesType == \"anime\" and .activeAnimeDirectory == \"$ANIME_DIR\" and .activeAnimeProfileName == \"$SONARR_ANIME_PROFILE\""
+    check "Seerr → only one Sonarr connection" "$(jq 'length == 1' <<< "$JS_SONARR_V" 2>/dev/null || echo false)"
     check_seerr_conn "Radarr" "$JS_RADARR_V" "Radarr" 7878 "$MOVIES_DIR" "$RADARR_PROFILE"
 
     JS_JELLYFIN_V=$(api GET "$SEERR_URL/api/v1/settings/jellyfin" -H "$JH" || echo "{}")
@@ -170,7 +166,6 @@ run_verification() {
     check "$name → Unknown quality allowed" "$UNKNOWN"
   }
   [ -n "$SONARR_KEY" ] && check_unknown_quality "Sonarr" "$SONARR_URL" "$SONARR_KEY"
-  [ -n "$SONARR_ANIME_KEY" ] && check_unknown_quality "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
   [ -n "$RADARR_KEY" ] && check_unknown_quality "Radarr" "$RADARR_URL" "$RADARR_KEY"
 
   info "Authentication..."
@@ -183,7 +178,6 @@ run_verification() {
     check "$name → auth configured" "$([ -n "$AUTH_USER" ] && echo true || echo false)"
   }
   [ -n "$SONARR_KEY" ] && check_arr_auth "Sonarr" "$SONARR_URL" "$SONARR_KEY"
-  [ -n "$SONARR_ANIME_KEY" ] && check_arr_auth "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
   [ -n "$RADARR_KEY" ] && check_arr_auth "Radarr" "$RADARR_URL" "$RADARR_KEY"
   [ -n "$PROWLARR_KEY" ] && check_arr_auth "Prowlarr" "$PROWLARR_URL" "$PROWLARR_KEY" "v1"
 
@@ -220,7 +214,6 @@ run_verification() {
     check "$name → no health errors" "$([ "$errors" = "0" ] && echo true || echo false)"
   }
   [ -n "$SONARR_KEY" ] && check_arr_health "Sonarr" "$SONARR_URL" "$SONARR_KEY"
-  [ -n "$SONARR_ANIME_KEY" ] && check_arr_health "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY"
   [ -n "$RADARR_KEY" ] && check_arr_health "Radarr" "$RADARR_URL" "$RADARR_KEY"
 
   info "Landing page..."
@@ -235,7 +228,6 @@ run_verification() {
   check "Landing page → qBittorrent proxy" "$(echo "$QBT_PROXY" | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
 
   check "Proxy → Sonarr calendar" "$(curl -sf "$DASHBOARD_URL/api/sonarr/calendar" 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-  check "Proxy → Sonarr Anime calendar" "$(curl -sf "$DASHBOARD_URL/api/sonarr-anime/calendar" 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
   check "Proxy → Radarr calendar" "$(curl -sf "$DASHBOARD_URL/api/radarr/calendar" 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
   check "Proxy → Jellyfin latest" "$(curl -sf "$DASHBOARD_URL"'/api/jellyfin/Items?SortBy=DateCreated&SortOrder=Descending&Limit=3&Recursive=true&IncludeItemTypes=Movie,Series' 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
   check "Proxy → Seerr requests" "$(curl -sf "$DASHBOARD_URL/api/seerr/request" 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
@@ -261,15 +253,16 @@ run_verification() {
 
   info "Junk-release filters..."
   check_junk_filter() {
-    local name="$1" url="$2" key="$3" profile="$4" cfs profiles
+    local name="$1" url="$2" key="$3" profile="$4" cfs profiles cf
     cfs=$(api GET "$url/api/v3/customformat" -H "X-Api-Key: $key" || echo "[]")
     profiles=$(api GET "$url/api/v3/qualityprofile" -H "X-Api-Key: $key" || echo "[]")
-    check "$name → BR-DISK blocked in $profile" "$(jq --argjson cfs "$cfs" --arg p "$profile" '
-      ([$cfs[] | select(.name == "BR-DISK") | .id][0]) as $id
-      | [.[] | select(.name == $p)][0] | (.minFormatScore >= 0) and any(.formatItems[]; .format == $id and .score <= -10000)' <<< "$profiles" 2>/dev/null || echo false)"
+    for cf in "BR-DISK" "Foreign Subtitles"; do
+      check "$name → $cf blocked in $profile" "$(jq --argjson cfs "$cfs" --arg p "$profile" --arg cf "$cf" '
+        ([$cfs[] | select(.name == $cf) | .id][0]) as $id
+        | [.[] | select(.name == $p)][0] | (.minFormatScore >= 0) and any(.formatItems[]; .format == $id and .score <= -10000)' <<< "$profiles" 2>/dev/null || echo false)"
+    done
   }
   [ -n "$SONARR_KEY" ] && check_junk_filter "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE"
-  [ -n "$SONARR_ANIME_KEY" ] && check_junk_filter "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$SONARR_ANIME_PROFILE"
   [ -n "$RADARR_KEY" ] && check_junk_filter "Radarr" "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE"
 
   info "Moonfin..."
