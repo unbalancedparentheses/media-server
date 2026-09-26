@@ -11,6 +11,7 @@ IFS=$'\n\t'
 #        nix run .#logs -- <service>          Follow a service's log
 #        nix run .#restart -- [service]       Restart one or all services
 #        nix run .#test                       Run verification only
+#        nix run .#e2e [-- --keep]            Download → import → Jellyfin test
 #        nix run .#backup                     Back up configs
 #        nix run .#restore -- <file>          Restore configs from a backup
 #        nix run .#update                     Back up, git pull, re-run setup
@@ -48,6 +49,8 @@ MAX_BACKUPS=10
 . "$SCRIPT_DIR/scripts/verify.sh"
 # shellcheck source=scripts/maintenance.sh
 . "$SCRIPT_DIR/scripts/maintenance.sh"
+# shellcheck source=scripts/e2e.sh
+. "$SCRIPT_DIR/scripts/e2e.sh"
 for step in "$SCRIPT_DIR"/scripts/steps/*.sh; do
   # shellcheck source=/dev/null
   . "$step"
@@ -67,7 +70,8 @@ MODE_ARG=""
 NON_INTERACTIVE=false
 DRY_RUN=false
 PURGE=false
-USAGE="Usage: setup.sh [--yes] [--dry-run] [--preflight|--check-config|--test|--status|--logs <service>|--restart [service]|--update|--backup|--restore <file>|--uninstall [--purge]]"
+E2E_KEEP=false
+USAGE="Usage: setup.sh [--yes] [--dry-run] [--preflight|--check-config|--test|--e2e [--keep]|--status|--logs <service>|--restart [service]|--update|--backup|--restore <file>|--uninstall [--purge]]"
 set_mode() {
   [ -n "$MODE" ] && err "Only one mode can be used at a time"
   MODE="$1"
@@ -77,7 +81,8 @@ while [ "$#" -gt 0 ]; do
     --yes|-y) NON_INTERACTIVE=true ;;
     --dry-run) DRY_RUN=true ;;
     --purge) PURGE=true ;;
-    --preflight|--check-config|--test|--status|--update|--backup|--uninstall)
+    --keep) E2E_KEEP=true ;;
+    --preflight|--check-config|--test|--e2e|--status|--update|--backup|--uninstall)
       MODE_NAME="${1#--}"
       set_mode "${MODE_NAME//-/_}"
       ;;
@@ -186,7 +191,7 @@ case "$MODE" in
 esac
 
 # The remaining modes need a valid config
-if [ "$MODE" = "test" ] || [ "$MODE" = "status" ]; then
+if [ "$MODE" = "test" ] || [ "$MODE" = "status" ] || [ "$MODE" = "e2e" ]; then
   [ -f "$CONFIG_FILE" ] || err "$CONFIG_FILE not found — run 'nix run .#install' first"
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
   validate_required_config
@@ -195,13 +200,24 @@ if [ "$MODE" = "test" ] || [ "$MODE" = "status" ]; then
   read_setup_config
   read_api_keys
   if [ "$MODE" = "status" ]; then do_status; exit 0; fi
+  if [ "$MODE" = "e2e" ]; then
+    E2E_EXIT=0
+    do_e2e || E2E_EXIT=$?
+    exit "$E2E_EXIT"
+  fi
   VERIFY_EXIT=0
   run_verification || VERIFY_EXIT=$?
   exit "$VERIFY_EXIT"
 fi
 
 run_setup
-# Failed checks are reported, not fatal; the function also relies on errexit
-# being off inside it (as it is when called from a || list)
-run_verification || true
+# Called from a || list: run_verification relies on errexit being off inside
+VERIFY_FAILED=0
+run_verification || VERIFY_FAILED=$?
+if [ "$VERIFY_FAILED" -gt 0 ]; then
+  printf "\n\033[1;31m  Setup finished, but %s verification check(s) failed (see above).\033[0m\n" "$VERIFY_FAILED"
+  echo "  Fix the cause and re-run 'nix run .#install', or check again with 'nix run .#test'."
+  echo ""
+  exit 1
+fi
 print_summary

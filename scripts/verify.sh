@@ -31,8 +31,17 @@ run_verification() {
       sleep 5
       HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
     fi
-    check "$name responds ($HTTP_CODE)" "$([ -n "$HTTP_CODE" ] && [ "$HTTP_CODE" != "000" ] && echo true || echo false)"
+    # Only 2xx/3xx count: a 404 or 500 means the service is up but broken
+    check "$name responds ($HTTP_CODE)" "$(case "$HTTP_CODE" in 2??|3??) echo true ;; *) echo false ;; esac)"
   done <<< "$SERVICE_HEALTH_ENDPOINTS"
+
+  # Every later check needs these; a missing key must fail, not skip checks
+  info "API keys..."
+  local key_name key_value
+  for key_name in SONARR_KEY SONARR_ANIME_KEY RADARR_KEY PROWLARR_KEY SABNZBD_KEY SEERR_KEY; do
+    key_value="${!key_name:-}"
+    check "$key_name present" "$([ -n "$key_value" ] && echo true || echo false)"
+  done
 
   info "Download clients..."
   QBIT_COOKIE_V=$(curl -sf -c - "$QBIT_URL/api/v2/auth/login" \
@@ -132,22 +141,18 @@ run_verification() {
   if [ -n "${SEERR_KEY:-}" ]; then
     JH="X-Api-Key: $SEERR_KEY"
     JS_SONARR_V=$(api GET "$SEERR_URL/api/v1/settings/sonarr" -H "$JH" || echo "[]")
-    JS_SONARR_COUNT=$(echo "$JS_SONARR_V" | jq 'length' 2>/dev/null || echo "0")
-    check "Seerr → Sonarr connections ($JS_SONARR_COUNT)" "$([ "$JS_SONARR_COUNT" -gt 0 ] && echo true || echo false)"
-    JS_SONARR_SEARCH=$(echo "$JS_SONARR_V" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)
-    check "Seerr → Sonarr enableSearch" "$JS_SONARR_SEARCH"
-
     JS_RADARR_V=$(api GET "$SEERR_URL/api/v1/settings/radarr" -H "$JH" || echo "[]")
-    JS_RADARR_COUNT=$(echo "$JS_RADARR_V" | jq 'length' 2>/dev/null || echo "0")
-    check "Seerr → Radarr connections ($JS_RADARR_COUNT)" "$([ "$JS_RADARR_COUNT" -gt 0 ] && echo true || echo false)"
-    JS_RADARR_SEARCH=$(echo "$JS_RADARR_V" | jq 'all(.[]; .enableSearch == true)' 2>/dev/null)
-    check "Seerr → Radarr enableSearch" "$JS_RADARR_SEARCH"
-
-    # Requests fail unless each connection's folder is a real root folder there
-    check "Seerr → Sonarr folders ($TV_DIR, $ANIME_DIR)" "$(jq --arg tv "$TV_DIR" --arg anime "$ANIME_DIR" \
-      'length > 0 and all(.[]; .activeDirectory == $tv or .activeDirectory == $anime)' <<< "$JS_SONARR_V" 2>/dev/null || echo false)"
-    check "Seerr → Radarr folder ($MOVIES_DIR)" "$(jq --arg d "$MOVIES_DIR" \
-      'length > 0 and all(.[]; .activeDirectory == $d)' <<< "$JS_RADARR_V" 2>/dev/null || echo false)"
+    # Each expected connection exactly: right port, folder, profile, search on
+    check_seerr_conn() {
+      local label="$1" conns="$2" name="$3" port="$4" dir="$5" profile="$6" extra="${7:-true}"
+      check "Seerr → $label (port $port, $(basename "$dir"), $profile)" "$(jq --arg n "$name" --argjson port "$port" \
+        --arg d "$dir" --arg p "$profile" "[.[] | select(.name == \$n)] | length == 1 and
+          (.[0] | .port == \$port and .activeDirectory == \$d and .activeProfileName == \$p and .enableSearch == true and $extra)" \
+        <<< "$conns" 2>/dev/null || echo false)"
+    }
+    check_seerr_conn "Sonarr" "$JS_SONARR_V" "Sonarr" 8989 "$TV_DIR" "$SONARR_PROFILE" '(.seriesType // "standard") != "anime"'
+    check_seerr_conn "Sonarr Anime" "$JS_SONARR_V" "Sonarr Anime" 8990 "$ANIME_DIR" "$SONARR_ANIME_PROFILE" '.seriesType == "anime"'
+    check_seerr_conn "Radarr" "$JS_RADARR_V" "Radarr" 7878 "$MOVIES_DIR" "$RADARR_PROFILE"
 
     JS_JELLYFIN_V=$(api GET "$SEERR_URL/api/v1/settings/jellyfin" -H "$JH" || echo "{}")
     JS_LIB_ENABLED=$(echo "$JS_JELLYFIN_V" | jq '[.libraries[] | select(.enabled == true)] | length' 2>/dev/null || echo "0")
@@ -256,7 +261,7 @@ run_verification() {
     profiles=$(api GET "$url/api/v3/qualityprofile" -H "X-Api-Key: $key" || echo "[]")
     check "$name → BR-DISK blocked in $profile" "$(jq --argjson cfs "$cfs" --arg p "$profile" '
       ([$cfs[] | select(.name == "BR-DISK") | .id][0]) as $id
-      | any(.[] | select(.name == $p) | .formatItems[]; .format == $id and .score <= -10000)' <<< "$profiles" 2>/dev/null || echo false)"
+      | [.[] | select(.name == $p)][0] | (.minFormatScore >= 0) and any(.formatItems[]; .format == $id and .score <= -10000)' <<< "$profiles" 2>/dev/null || echo false)"
   }
   [ -n "$SONARR_KEY" ] && check_junk_filter "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE"
   [ -n "$SONARR_ANIME_KEY" ] && check_junk_filter "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$SONARR_ANIME_PROFILE"
@@ -309,9 +314,7 @@ run_verification() {
   fi
   echo ""
 
-  if [ "$MODE" = "test" ]; then
-    return "$TESTS_FAILED"
-  fi
-
-  return 0
+  # Number of failed checks (capped: exit codes stop at 255)
+  [ "$TESTS_FAILED" -gt 100 ] && return 100
+  return "$TESTS_FAILED"
 }

@@ -63,7 +63,7 @@ start_services() {
   for name in $SERVICE_NAMES; do
     if svc_loaded "$name"; then
       if printf '%s\n' "$changed" | grep -qx "$name"; then
-        svc_stop "$name"
+        svc_stop "$name" || err "Could not stop $name to apply its new settings"
         launchctl bootstrap "$LAUNCHD_DOMAIN" "$(svc_plist "$name")"
         ok "$name (restarted with new settings)"
       else
@@ -88,16 +88,22 @@ wait_for_bootout() {
 # `launchctl kickstart -k`, which would leave Bazarr's server running
 svc_restart() {
   svc_loaded "$1" || return 1
-  svc_stop "$1"
+  svc_stop "$1" || return 1
   launchctl bootstrap "$LAUNCHD_DOMAIN" "$(svc_plist "$1")"
 }
 
+# Returns non-zero if the service is still loaded or its processes survive
 svc_stop() {
   if svc_loaded "$1"; then
     launchctl bootout "$LAUNCHD_DOMAIN/$(svc_label "$1")" 2>/dev/null || true
     wait_for_bootout "$1"
   fi
   kill_leftovers "$1"
+  if svc_loaded "$1" || pgrep -f "$CONFIG_DIR/$1([/ ]|\$)" >/dev/null 2>&1; then
+    warn "$1 did not stop"
+    return 1
+  fi
+  return 0
 }
 
 # Some services (Bazarr) run their server as a child that outlives the
@@ -111,11 +117,15 @@ kill_leftovers() {
     i=$((i + 1))
   done
   pkill -9 -f "$pattern" 2>/dev/null || true
+  sleep 1
+  return 0
 }
 
+# Stops every service; returns non-zero if any of them didn't stop
 stop_services() {
-  local name
-  for name in $SERVICE_NAMES; do svc_stop "$name"; done
+  local name failed=0
+  for name in $SERVICE_NAMES; do svc_stop "$name" || failed=1; done
+  return "$failed"
 }
 
 # Start agents that already exist (after stop_services), without rewriting them

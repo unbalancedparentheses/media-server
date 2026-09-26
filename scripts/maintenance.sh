@@ -9,14 +9,23 @@ do_backup() {
   [ -d "$CONFIG_DIR" ] || err "Config directory not found: $CONFIG_DIR"
   mkdir -p "$BACKUP_DIR"
 
-  local backup_file backup_size backup_count f was_running=false
+  local backup_file backup_size backup_count f name
   backup_file="$BACKUP_DIR/media-server_$(date +%Y%m%d_%H%M%S).tar.gz"
 
   info "Backing up service configs..."
-  if svc_loaded jellyfin; then
-    was_running=true
+  # Stop every running service so no database is copied mid-write, and put
+  # back exactly the ones that were running — also if tar fails or you
+  # interrupt the backup
+  BACKUP_WAS_RUNNING=""
+  for name in $SERVICE_NAMES; do
+    svc_loaded "$name" && BACKUP_WAS_RUNNING="$BACKUP_WAS_RUNNING$name"$'\n'
+  done
+  if [ -n "$BACKUP_WAS_RUNNING" ]; then
     info "Stopping services for a consistent snapshot..."
-    stop_services
+    trap 'restart_backed_up_services; exit 130' INT TERM
+    for name in $BACKUP_WAS_RUNNING; do
+      svc_stop "$name" || { restart_backed_up_services; err "Could not stop $name; backup aborted (nothing was archived)"; }
+    done
   fi
 
   # Logs and caches are large and recreated on start
@@ -24,15 +33,11 @@ do_backup() {
       --exclude='config/*/logs' --exclude='config/jellyfin/log' --exclude='config/jellyfin/cache' \
       --exclude='config/nginx/temp' \
       -C "$MEDIA_DIR" config "$(basename "$CONFIG_FILE")"); then
-    [ "$was_running" = "true" ] && resume_services
+    restart_backed_up_services
     rm -f "$backup_file"
     err "Backup failed"
   fi
-
-  if [ "$was_running" = "true" ]; then
-    resume_services
-    ok "Services restarted"
-  fi
+  restart_backed_up_services
 
   backup_size=$(du -sh "$backup_file" | cut -f1)
   ok "Created: $backup_file ($backup_size)"
@@ -54,6 +59,19 @@ do_backup() {
   echo "  Backups contain passwords and API keys; keep a copy on another disk."
   echo "  Restore with: nix run .#restore -- $backup_file"
   echo ""
+}
+
+# Start the services that were running before do_backup stopped them
+restart_backed_up_services() {
+  local name
+  trap - INT TERM
+  [ -n "${BACKUP_WAS_RUNNING:-}" ] || return 0
+  for name in $BACKUP_WAS_RUNNING; do
+    svc_loaded "$name" || launchctl bootstrap "$LAUNCHD_DOMAIN" "$(svc_plist "$name")" 2>/dev/null || \
+      warn "Could not restart $name (nix run .#restart -- $name)"
+  done
+  ok "Services restarted: $(printf '%s ' $BACKUP_WAS_RUNNING)"
+  BACKUP_WAS_RUNNING=""
 }
 
 # ─── Restore ─────────────────────────────────────────────────────
@@ -80,7 +98,7 @@ do_restore() {
   [ -d "$extract/config" ] || { rm -rf "$extract"; err "Not a media-server backup (no config/ inside)"; }
 
   info "Stopping services..."
-  stop_services
+  stop_services || { rm -rf "$extract"; err "Some services didn't stop; restore aborted (nothing was changed)"; }
 
   [ -d "$CONFIG_DIR" ] && mv "$CONFIG_DIR" "$CONFIG_DIR.pre-restore-$timestamp"
   mv "$extract/config" "$CONFIG_DIR"
@@ -129,15 +147,19 @@ do_update() {
 # (movies, tv, anime), downloads and backups are never deleted.
 do_uninstall() {
   info "Stopping and removing services..."
-  local plist name
+  local plist name failed=""
   for plist in "$HOME/Library/LaunchAgents/$LABEL_PREFIX".*.plist; do
     [ -e "$plist" ] || continue
     name=$(basename "$plist" .plist)
     name="${name#"$LABEL_PREFIX".}"
-    svc_stop "$name"
-    rm -f "$plist"
-    ok "$name removed"
+    if svc_stop "$name"; then
+      rm -f "$plist"
+      ok "$name removed"
+    else
+      failed="$failed $name"
+    fi
   done
+  [ -z "$failed" ] || err "Could not stop:$failed (the others were removed). Configs and Tailscale were left alone; check 'nix run .#status' and re-run uninstall"
   rm -f "$STATE_DIR/gcroot"
 
   remove_tailscale_serve

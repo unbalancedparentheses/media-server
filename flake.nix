@@ -244,6 +244,7 @@
         logs = app pkgs [ "--logs" ];
         restart = app pkgs [ "--restart" ];
         test = app pkgs [ "--test" ];
+        e2e = app pkgs [ "--e2e" ];
         backup = app pkgs [ "--backup" ];
         restore = app pkgs [ "--restore" ];
         update = app pkgs [ "--update" ];

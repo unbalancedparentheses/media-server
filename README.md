@@ -57,6 +57,7 @@ nix run .#status                  # Is everything running and healthy?
 nix run .#logs -- sonarr          # Follow a service's log (~/media/logs)
 nix run .#restart [-- sonarr]     # Restart one or all services
 nix run .#test                    # Run the verification checks
+nix run .#e2e [-- --keep]         # Real download → import → Jellyfin test (see below)
 nix run .#backup                  # Back up configs and config.toml
 nix run .#restore -- <file>       # Restore a backup
 nix run .#update                  # Back up, git pull, re-run setup
@@ -115,12 +116,23 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 - **Dashboard widgets:** they go through nginx, which adds the API keys, but only for the read-only endpoints the widgets use, and only for `GET`.
 - **Byparr:** it has no login, so it only listens on `127.0.0.1`.
 - **Firewall prompts:** with the macOS firewall on, the first start may ask whether each service may accept incoming connections. Allow Jellyfin and Seerr at least.
-- **Sleep:** the Mac must be awake to serve. Enable System Settings → Energy → "Prevent automatic sleeping when the display is off".
+- **Sleep and login:** the Mac must be awake to serve. Enable System Settings → Energy → "Prevent automatic sleeping when the display is off". The services are launchd *user* agents, so after a reboot they start when you log in. A locked screen is fine, but for unattended recovery after power loss, turn on automatic login (System Settings → Users & Groups).
+
+## Testing
+
+`nix run .#test` checks every service, connection, folder, profile, login and filter (about 90 checks). Setup runs it at the end and exits non-zero if any check fails.
+
+`nix run .#e2e` proves the automatic path end to end, with no manual step and no public indexers:
+
+1. **Movie:** requests Blender's Creative Commons film *Tears of Steel* in Seerr. Radarr gets a correctly named release, qBittorrent completes it, Radarr imports it, Jellyfin adds it, and Seerr marks it available.
+2. **TV:** gives Sonarr an episode of the free series *Pioneer One*, which is imported and appears in Jellyfin.
+
+The film (372 MB) is downloaded once from download.blender.org into `~/media/.state/e2e`. The test builds its own torrents with the data already in place, so they complete instantly. Radarr's automatic indexer search is paused for the minute the test runs, so a public release can't race it. Everything it adds is removed afterwards (`--keep` leaves it for inspection). Results are logged to `~/media/logs/e2e-*.log`.
 
 ## Updates, backups, uninstall
 
 - **Updates:** versions are pinned in `flake.lock`; Renovate opens a weekly PR to refresh it. `nix run .#update` backs up, pulls this repo and re-runs setup, which points the services at the new versions.
-- **Backups:** `nix run .#backup` stops the services for a consistent snapshot of `~/media/config` and `config.toml`, then starts them again. It keeps the last 10 in `~/media/backups`. Backups contain passwords and API keys, so keep a copy on another disk.
+- **Backups:** `nix run .#backup` stops the running services for a consistent snapshot of `~/media/config` and `config.toml`, then starts exactly those again, also if the backup fails or is interrupted. It keeps the last 10 in `~/media/backups`. Backups contain passwords and API keys, so keep a copy on another disk.
 - **Uninstall:** `nix run .#uninstall` stops the services and removes their launchd agents, the Tailscale HTTPS entries setup added, and the Nix GC root. `--purge` also deletes configs, logs and state (including Byparr's browser in `~/Library/Caches/invisible-playwright`). Your library, downloads and backups are never deleted. Run `nix-collect-garbage` afterwards to free the Nix store.
 
 ## Directory structure

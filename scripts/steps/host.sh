@@ -84,6 +84,10 @@ configure_tailscale() {
 create_directories() {
   info "Creating directory structure..."
   mkdir -p "$MOVIES_DIR" "$TV_DIR" "$ANIME_DIR"
+  # Jellyfin doesn't watch an empty library folder for new files, so the
+  # first show in an empty TV library would only appear at the next
+  # scheduled scan; a hidden file keeps each folder non-empty
+  touch "$MOVIES_DIR/.jellyfin-watch" "$TV_DIR/.jellyfin-watch" "$ANIME_DIR/.jellyfin-watch"
   # Per-category folders too: Sonarr/Radarr flag a download client whose
   # folder doesn't exist yet (qBittorrent only creates it on first download)
   mkdir -p "$DOWNLOADS_DIR"/{torrents,usenet}/incomplete \
@@ -120,8 +124,13 @@ XML
     chmod 600 "$file"
     ok "$name: config.xml (port $port)"
   else
+    local before
+    before=$(cat "$file")
     sed_inplace "s|<Port>[^<]*</Port>|<Port>$port</Port>|; s|<BindAddress>[^<]*</BindAddress>|<BindAddress>$bind</BindAddress>|" "$file"
+    # A running service only reads config.xml at start
+    [ "$(cat "$file")" != "$before" ] && CONFIG_CHANGED="$CONFIG_CHANGED$name"$'\n'
   fi
+  return 0
 }
 
 # qBittorrent stores the Web UI password as PBKDF2-SHA512; writing it up
@@ -194,6 +203,7 @@ write_nginx_config() {
 
 write_service_configs() {
   info "Writing service configs..."
+  CONFIG_CHANGED=""
   seed_arr_config sonarr 8989
   seed_arr_config sonarr-anime 8990
   seed_arr_config radarr 7878
@@ -208,7 +218,8 @@ start_stack() {
   info "Starting services..."
   local changed
   changed=$(write_launch_agents)
-  start_services "$changed"
+  # Also restart services whose config file changed (e.g. a new admin_bind)
+  start_services "$changed"$'\n'"${CONFIG_CHANGED:-}"
   # Keep this version's Nix store paths from being garbage-collected while
   # the agents point at them
   nix-store --add-root "$STATE_DIR/gcroot" --realise "$MEDIA_SERVICES_JSON" >/dev/null 2>&1 || \

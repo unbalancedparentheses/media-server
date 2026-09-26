@@ -100,7 +100,7 @@ configure_arrs() {
 
 # Junk-release filters: create the TRaSH custom formats in custom-formats/<app>
 # (updating ones that already exist) and score them -10000 in every quality
-# profile. Profiles require a score of at least 0, so matches are rejected.
+# profile, whose minimum score is kept at 0 or above, so matches are rejected.
 JUNK_SCORE=-10000
 apply_junk_filters() {
   local label="$1" url="$2" key="$3" app="$4" H f payload name existing id ids="" profiles
@@ -130,6 +130,8 @@ apply_junk_filters() {
     [ -n "$profile" ] || continue
     updated=$(jq -c --arg ids "$ids" --argjson score "$JUNK_SCORE" '
       ($ids | split(" ") | map(select(. != "") | tonumber)) as $junk
+      # Rejection relies on the profile requiring a score of at least 0
+      | .minFormatScore = ([.minFormatScore // 0, 0] | max)
       | [.formatItems[].format] as $have
       | .formatItems = ([.formatItems[] | if (.format as $f | $junk | index($f)) then .score = $score else . end]
           + [$junk[] | select(. as $j | $have | index($j) | not) | {format: ., score: $score}])' <<< "$profile")

@@ -55,8 +55,12 @@ configure_seerr() {
         return
       fi
       PROFILE=$(arr_profile "$url" "$key" "$profile_name")
-      PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
-      PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
+      if [ -z "$PROFILE" ]; then
+        warn "$name: quality profile '$profile_name' doesn't exist there; not connecting (fix [quality] in $CONFIG_FILE)"
+        return 0
+      fi
+      PID=$(echo "$PROFILE" | jq '.id')
+      PNAME=$(echo "$PROFILE" | jq -r '.name')
       JS_SONARR_JSON=$(jq -nc \
         --arg name "$name" --argjson port "$port" --arg key "$key" \
         --argjson pid "$PID" --arg pname "$PNAME" --arg dir "$dir" \
@@ -79,8 +83,11 @@ configure_seerr() {
     if [ "$EXISTING_JS_RADARR" = "0" ] || [ -z "$EXISTING_JS_RADARR" ]; then
       [ -n "$RADARR_KEY" ] && {
         PROFILE=$(arr_profile "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE")
-        PID=$(echo "$PROFILE" | jq '.id // 1' 2>/dev/null || echo 1)
-        PNAME=$(echo "$PROFILE" | jq -r '.name // "Any"' 2>/dev/null || echo "Any")
+        if [ -z "$PROFILE" ]; then
+          warn "Radarr: quality profile '$RADARR_PROFILE' doesn't exist there; not connecting (fix [quality] in $CONFIG_FILE)"
+        else
+        PID=$(echo "$PROFILE" | jq '.id')
+        PNAME=$(echo "$PROFILE" | jq -r '.name')
         JS_RADARR_JSON=$(jq -nc \
           --arg key "$RADARR_KEY" --argjson pid "$PID" --arg pname "$PNAME" --arg dir "$MOVIES_DIR" \
           '{name:"Radarr", hostname:"localhost", port:7878, useSsl:false, apiKey:$key,
@@ -89,6 +96,7 @@ configure_seerr() {
             enableSearch:true}')
         api POST "$SEERR_URL/api/v1/settings/radarr" "${JA[@]}" -d "$JS_RADARR_JSON" >/dev/null 2>&1 && \
           ok "Radarr connected (profile: $PNAME)" || warn "Could not add Radarr"
+        fi
       }
     else
       ok "Radarr already connected"
@@ -96,9 +104,9 @@ configure_seerr() {
 
     # Keep existing connections in line with config.toml: search enabled and
     # the configured quality profile (older setups picked the first profile)
-    sync_js_connections sonarr "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE" "$TV_DIR"
-    sync_js_connections sonarr "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$SONARR_ANIME_PROFILE" "$ANIME_DIR"
-    sync_js_connections radarr "Radarr" "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE" "$MOVIES_DIR"
+    sync_js_connections sonarr "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE" "$TV_DIR" 8989
+    sync_js_connections sonarr "Sonarr Anime" "$SONARR_ANIME_URL" "$SONARR_ANIME_KEY" "$SONARR_ANIME_PROFILE" "$ANIME_DIR" 8990
+    sync_js_connections radarr "Radarr" "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE" "$MOVIES_DIR" 7878
 
     api POST "$SEERR_URL/api/v1/settings/initialize" "${JA[@]}" >/dev/null 2>&1 || true
     ok "Setup finalized"
@@ -107,24 +115,31 @@ configure_seerr() {
   fi
 }
 
-# Quality profile {id,name} named $3 in the *arr at $1, else its first profile
+# Quality profile {id,name} named $3 in the *arr at $1; empty if there's no
+# such profile (never a substitute: a wrong profile means wrong downloads)
 arr_profile() {
   local url="$1" key="$2" name="$3"
   api GET "$url/api/v3/qualityprofile" -H "X-Api-Key: $key" 2>/dev/null | \
-    jq -c --arg n "$name" '(map(select(.name == $n)) + .)[0] | {id, name}' 2>/dev/null || echo "{}"
+    jq -c --arg n "$name" 'map(select(.name == $n))[0] // empty | {id, name}' 2>/dev/null || true
 }
 
-# Set enableSearch, the root folder and the configured profile on an existing Seerr
+# Set address, API key, root folder, configured profile and search on an existing Seerr
 # connection (kind: sonarr|radarr, matched by connection name)
 sync_js_connections() {
-  local kind="$1" name="$2" url="$3" key="$4" profile_name="$5" dir="$6" conn id updated profile
+  local kind="$1" name="$2" url="$3" key="$4" profile_name="$5" dir="$6" port="$7" conn id updated profile
   [ -n "$key" ] || return 0
   conn=$(api GET "$SEERR_URL/api/v1/settings/$kind" "${JA[@]}" 2>/dev/null | \
     jq -c --arg n "$name" 'map(select(.name == $n))[0] // empty' 2>/dev/null || echo "")
   [ -n "$conn" ] || return 0
   profile=$(arr_profile "$url" "$key" "$profile_name")
-  updated=$(echo "$conn" | jq -c --argjson p "$profile" --arg want "$profile_name" --arg dir "$dir" '
+  if [ -z "$profile" ]; then
+    warn "$name: quality profile '$profile_name' doesn't exist there; keeping the connection's current profile"
+    profile='{}'
+  fi
+  updated=$(echo "$conn" | jq -c --argjson p "$profile" --arg want "$profile_name" --arg dir "$dir" \
+    --arg key "$key" --argjson port "$port" '
     .enableSearch = true
+    | .hostname = "localhost" | .port = $port | .useSsl = false | .apiKey = $key
     | .activeDirectory = $dir
     | if $p.name == $want then .activeProfileId = $p.id | .activeProfileName = $p.name else . end')
   if [ "$updated" != "$conn" ]; then

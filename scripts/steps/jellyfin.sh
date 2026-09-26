@@ -84,6 +84,11 @@ configure_jellyfin() {
         -d "$UPDATED_SYS" >/dev/null 2>&1 && \
         ok "Library monitor delay: 15s" || warn "Could not set monitor delay"
     fi
+
+    # Jellyfin only starts watching a library for new files after it has
+    # been scanned once; libraries are created above without a scan
+    api POST "$JELLYFIN_URL/Library/Refresh" -H "$(jf_auth "$JELLYFIN_TOKEN")" >/dev/null && \
+      ok "Library scan started (enables real-time monitoring)" || warn "Could not start a library scan"
   else
     warn "Could not authenticate"
   fi
