@@ -27,12 +27,16 @@ providers = [
   "supersubtitles",    # Broad coverage
   "subtitlecat",       # Large catalog (some machine-translated)
   "embeddedsubtitles", # Uses subs already in the file (most anime releases)
+  "subtitulamostv",    # English and Spanish TV subtitles
+  "subtis",            # Spanish movie subtitles, matched by file
   # Need an account or API key: add it in Bazarr (Settings → Providers),
   # then uncomment. Enabled without one, Bazarr pauses them for 12 hours.
   # "opensubtitlescom",  # Largest database (free account at opensubtitles.com)
   # "subdl",             # Large database (free API key at subdl.com)
   # "jimaku",            # Anime, Japanese and English (free API key at jimaku.cc)
   # "addic7ed",          # Curated TV subtitles
+  # "subx",              # Largest Spanish/Latin American catalog, ex-Subdivx (free API key)
+  # "animetosho",        # Anime subs from fansub releases (needs an AniDB API client in Bazarr → Settings → Anime)
 ]
 
 # ─── Quality ───────────────────────────────────────────────────
