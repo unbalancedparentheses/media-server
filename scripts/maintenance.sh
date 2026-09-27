@@ -240,11 +240,17 @@ remove_tailscale_serve() {
   ours=$(jq -nc --arg dash "$dash" --argjson rec "$(cat "$routes" 2>/dev/null || echo '{}')" '
     {"443": ["http://127.0.0.1:\($dash)"], "8096": ["http://127.0.0.1:8096"], "5055": ["http://127.0.0.1:5055"]} as $now
     | reduce ($rec | to_entries[]) as $r ($now; .[$r.key] += [$r.value])')
-  for port in $("$ts_cli" serve status --json 2>/dev/null | jq -r --argjson ours "$ours" '
+  local status
+  # Can't tell what's published: keep the record and report it
+  status=$("$ts_cli" serve status --json 2>/dev/null) && jq -e 'type == "object"' <<< "$status" >/dev/null 2>&1 || {
+    warn "Couldn't read Tailscale's published routes; nothing removed (record kept in $routes)"
+    return 1
+  }
+  for port in $(jq -r --argjson ours "$ours" '
       .Web // {} | to_entries[]
       | (.key | split(":") | last) as $port
       | select($ours[$port] != null and any(.value.Handlers[]?; .Proxy as $p | $ours[$port] | index($p)))
-      | $port' 2>/dev/null || true); do
+      | $port' <<< "$status"); do
     if run_timeout 10 "$ts_cli" serve --https="$port" off </dev/null >/dev/null 2>&1; then
       ok "Tailscale HTTPS :$port removed"
     else

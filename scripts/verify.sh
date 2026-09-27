@@ -342,6 +342,11 @@ run_verification() {
     [ -n "$RADARR_KEY" ] && check "Radarr → English audio preferred ($RADARR_PROFILE)" "$([ "$(cf_score "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE" "Prefer English Audio")" = "50" ] && echo true || echo false)"
   fi
 
+  if [ "$(cfg_bool .quality.rename_files true)" = true ]; then
+    [ -n "$SONARR_KEY" ] && check "Sonarr → renames files" "$(api GET "$SONARR_URL/api/v3/config/naming" -H "X-Api-Key: $SONARR_KEY" | jq '.renameEpisodes' 2>/dev/null || echo false)"
+    [ -n "$RADARR_KEY" ] && check "Radarr → renames files" "$(api GET "$RADARR_URL/api/v3/config/naming" -H "X-Api-Key: $RADARR_KEY" | jq '.renameMovies' 2>/dev/null || echo false)"
+  fi
+
   info "Disk space..."
   local free_gb mm_min
   free_gb=$(( $(df -Pk "$MEDIA_DIR" | awk 'NR == 2 { print $4 }') / 1024 / 1024 ))
@@ -363,6 +368,8 @@ run_verification() {
   if [ -n "${JF_TOKEN_V:-}" ]; then
     check "Intro Skipper $INTRO_SKIPPER_VERSION loaded" "$([ "$(api GET "$JELLYFIN_URL/Plugins" -H "$(jf_auth "$JF_TOKEN_V")" | \
       jq -r --arg g "$INTRO_SKIPPER_GUID" '.[] | select((.Id | ascii_downcase | gsub("-"; "")) == ($g | gsub("-"; ""))) | "\(.Version) \(.Status)"' 2>/dev/null)" = "$INTRO_SKIPPER_VERSION Active" ] && echo true || echo false)"
+    check "Intro Skipper on for the TV and Anime libraries" "$(api GET "$JELLYFIN_URL/Library/VirtualFolders" -H "$(jf_auth "$JF_TOKEN_V")" | \
+      jq '[.[] | select(.CollectionType == "tvshows")] | length > 0 and all(.[]; (.LibraryOptions.MediaSegmentProviderOrder // []) | index("Intro Skipper"))' 2>/dev/null || echo false)"
     check "Jellyfin → hardware transcoding ($(cfg_bool .playback.hardware_acceleration true))" "$(api GET "$JELLYFIN_URL/System/Configuration/encoding" -H "$(jf_auth "$JF_TOKEN_V")" | \
       jq --argjson on "$(cfg_bool .playback.hardware_acceleration true)" '(.HardwareAccelerationType == "videotoolbox") == $on' 2>/dev/null || echo false)"
   fi

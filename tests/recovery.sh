@@ -387,6 +387,80 @@ test_paused_indexers_kept_until_restored() {
   [ ! -f "$(e2e_paused_file)" ] || fail "record kept after restoring"
 }
 
+# ─── Recovery edge cases ─────────────────────────────────────────
+
+# Tailscale's status can't be read: nothing counts as removed, record kept
+test_tailscale_status_failure_keeps_record() {
+  echo 'timezone = "UTC"' > "$CONFIG_FILE"
+  echo '{"8096": "http://127.0.0.1:8096"}' > "$STATE_DIR/tailscale-routes.json"
+  detect_tailscale_cli() { echo fake_tailscale; }
+  fake_tailscale() { return 1; }
+  remove_tailscale_serve >/dev/null 2>&1 && fail "reported success without reading the routes"
+  [ -f "$STATE_DIR/tailscale-routes.json" ] || fail "route record dropped"
+}
+
+# A corrupted paused-indexer record is kept and reported, never "restored"
+test_corrupt_paused_indexer_record_kept() {
+  RADARR_KEY=r
+  mkdir -p "$STATE_DIR/e2e"
+  echo '{not json' > "$(e2e_paused_file)"
+  api() { touch "$FAKE/api_called"; return 22; }
+  api_status() { echo 200; }
+  e2e_resume_radarr_indexers >/dev/null 2>&1 && fail "a corrupted record counted as restored"
+  [ -f "$(e2e_paused_file)" ] || fail "corrupted record deleted"
+}
+
+# Interrupted between Sonarr adding the series and the progress being
+# saved: the next run finishes it instead of taking it for yours
+test_migration_adopts_series_added_before_crash() {
+  SONARR_KEY=s SONARR_ANIME_PROFILE=HD-1080p
+  mkdir -p "$CONFIG_DIR/sonarr-anime"
+  sqlite3 "$CONFIG_DIR/sonarr-anime/sonarr.db" "CREATE TABLE Series (Id, TvdbId, Path, Monitored, Seasons); INSERT INTO Series VALUES (7, 111, '/a/Show', 1, '[]');"
+  echo '{"adding":["111"],"added":{},"done":[]}' > "$STATE_DIR/sonarr-anime-migration.json"
+  api() {
+    case "$1 $2" in
+      "GET "*/api/v3/series) echo '[{"id":77,"tvdbId":111}]' ;;
+      "GET "*/qualityprofile) echo '[{"id":4,"name":"Anime"}]' ;;
+      "POST "*/api/v3/series) touch "$FAKE/added_again" ;;
+      *) return 22 ;;
+    esac
+  }
+  migrate_monitoring() { echo "$3" > "$FAKE/finished"; }
+  migrate_anime_sonarr >/dev/null
+  expect_eq "$(cat "$FAKE/finished" 2>/dev/null)" 77 "monitoring copied for the series Sonarr already added"
+  [ ! -f "$FAKE/added_again" ] || fail "added the series a second time"
+  [ -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "not marked complete"
+}
+
+# SABnzbd accepts the request but the server stays on: not reported as disabled
+test_usenet_disable_checks_sabnzbd_reply() {
+  SABNZBD_KEY=k
+  CONFIG_JSON='{"usenet_providers":[{"name":"prov","enable":false}]}'
+  curl() {
+    case "$*" in
+      *section=servers*get_config*|*get_config*section=servers*) echo '{"config":{"servers":[{"name":"prov","enable":1}]}}' ;;
+      *) echo '{"status":false,"error":"nope"}' ;;
+    esac
+  }
+  local out
+  out=$(configure_usenet_providers 2>&1)
+  grep -q "prov disabled" <<< "$out" && fail "reported disabled while SABnzbd still has it on"
+  grep -q "Could not disable prov" <<< "$out" || fail "no warning: $out"
+}
+
+# Jellyfin's repository list can't be read: nothing is written (a guessed
+# list would drop the other plugins' repositories)
+test_plugin_repository_not_overwritten_when_unreadable() {
+  api() {
+    case "$1 $2" in
+      "GET "*/Repositories) return 22 ;;
+      "POST "*/Repositories) touch "$FAKE/overwritten" ;;
+    esac
+  }
+  jellyfin_pin_repository "Authorization: x" "Moonbase" "https://example/manifest.json" "Moonfin" >/dev/null 2>&1 && fail "reported success"
+  [ ! -f "$FAKE/overwritten" ] || fail "overwrote Jellyfin's repository list"
+}
+
 echo "Failure-path tests"
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
   run_test "$t"

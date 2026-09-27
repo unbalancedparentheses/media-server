@@ -109,10 +109,12 @@ set_min_free_space() {
 # (as anime, keeping their folders, no search), copy its series, season and
 # episode monitoring exactly, and rescan so the existing files are picked
 # up. Its data folder is left in place.
-# Progress is kept per series in sonarr-anime-migration.json: "added" (id
-# in Sonarr) as soon as Sonarr accepts it, "done" once its monitoring is
-# copied and checked, so an interrupted run finishes the series it
-# started. Series that were already in Sonarr aren't touched.
+# Progress is kept per series in sonarr-anime-migration.json: "adding"
+# just before asking Sonarr, "added" (id in Sonarr) once it accepted,
+# "done" once its monitoring is copied and checked, so an interrupted run
+# finishes the series it started, even one interrupted between Sonarr
+# adding it and the progress being saved. Series that were already in
+# Sonarr aren't touched.
 migrate_anime_sonarr() {
   local db="$CONFIG_DIR/sonarr-anime/sonarr.db" marker="$STATE_DIR/sonarr-anime-migrated"
   local progress="$STATE_DIR/sonarr-anime-migration.json"
@@ -122,8 +124,11 @@ migrate_anime_sonarr() {
   rows=$(sqlite3 -json "file:$db?mode=ro" 'SELECT Id, TvdbId, Path, Monitored, Seasons FROM Series' 2>/dev/null) || {
     warn "Could not read $db; its series were not moved (setup retries next run)"; return 0; }
   have=$(api GET "$SONARR_URL/api/v3/series" -H "$H") || { warn "Could not list Sonarr series"; return 0; }
-  state='{"added":{},"done":[]}'
-  [ -f "$progress" ] && state=$(jq -c '{added: (.added // {}), done: (.done // [])}' "$progress" 2>/dev/null || echo "$state")
+  state='{"adding":[],"added":{},"done":[]}'
+  if [ -f "$progress" ]; then
+    state=$(jq -c '{adding: (.adding // []), added: (.added // {}), done: (.done // [])}' "$progress" 2>/dev/null) || {
+      warn "Can't read $progress; the migration waits until it's fixed or removed"; return 0; }
+  fi
   profile_id=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "$H" | \
     jq -r --arg a "$ANIME_PROFILE" --arg n "$SONARR_ANIME_PROFILE" '([.[] | select(.name == $a) | .id][0]) // ([.[] | select(.name == $n) | .id][0]) // .[0].id')
   while IFS= read -r row; do
@@ -133,6 +138,12 @@ migrate_anime_sonarr() {
     new_id=$(jq -r --arg t "$tvdb" '.added[$t] // empty' <<< "$state")
     # Added by an earlier, interrupted run: still there?
     [ -n "$new_id" ] && ! jq -e --argjson id "$new_id" 'any(.[]; .id == $id)' <<< "$have" >/dev/null && new_id=""
+    # Sonarr has it, and this migration was adding it: it's ours to finish
+    if [ -z "$new_id" ] && jq -e --arg t "$tvdb" '.adding | index($t)' <<< "$state" >/dev/null; then
+      new_id=$(jq -r --argjson t "$tvdb" '[.[] | select(.tvdbId == $t) | .id][0] // empty' <<< "$have")
+      [ -n "$new_id" ] && state=$(jq -c --arg t "$tvdb" --argjson id "$new_id" '.added[$t] = $id' <<< "$state") && \
+        migration_progress_save "$progress" "$state"
+    fi
     if [ -z "$new_id" ]; then
       if jq -e --argjson t "$tvdb" 'any(.[]; .tvdbId == $t)' <<< "$have" >/dev/null; then
         # Already in Sonarr before the migration: leave it as it is
@@ -141,6 +152,10 @@ migrate_anime_sonarr() {
         continue
       fi
       lookup=$(api GET "$SONARR_URL/api/v3/series/lookup?term=tvdb:$tvdb" -H "$H" | jq -c '.[0] // empty') || lookup=""
+      # Recorded before asking Sonarr, so an interruption right after it
+      # adds the series doesn't make it look like one you already had
+      state=$(jq -c --arg t "$tvdb" '.adding = ((.adding + [$t]) | unique)' <<< "$state")
+      migration_progress_save "$progress" "$state"
       # Added unmonitored with "skip" (Sonarr leaves episode monitoring
       # alone); the old choices are applied below
       new=""
@@ -223,11 +238,39 @@ migrate_monitoring() {  # db old-series-id new-series-id old-row
     { warn "Episode monitoring of series $new_id didn't match the old Sonarr's"; return 1; }
 }
 
+# File names Sonarr/Radarr give imports ([quality] rename_files): with it
+# off, files keep their release names, and ones without a season number
+# ("Show E01 …") leave Jellyfin without season/episode numbers. Turning it
+# on also renames what's already in the library, once. Library files are
+# hard links, so seeding is unaffected.
+set_renaming() {  # label url key kind(series|movie)
+  local label="$1" url="$2" H="X-Api-Key: $3" kind="$4" naming field want ids command
+  field=$([ "$kind" = series ] && echo renameEpisodes || echo renameMovies)
+  want=$(cfg_bool .quality.rename_files true)
+  naming=$(api GET "$url/api/v3/config/naming" -H "$H") || { warn "$label: could not read its naming settings"; return 0; }
+  [ "$(jq -r ".$field" <<< "$naming")" = "$want" ] && { ok "$label: rename files $want"; return 0; }
+  api PUT "$url/api/v3/config/naming" -H "$H" -d "$(jq -c --argjson w "$want" ".$field = \$w" <<< "$naming")" >/dev/null || \
+    { warn "$label: could not change its file naming"; return 0; }
+  ok "$label: rename files $want"
+  [ "$want" = true ] || return 0
+  if [ "$kind" = series ]; then
+    ids=$(api GET "$url/api/v3/series" -H "$H" | jq -c '[.[].id]') command=RenameSeries
+    [ "$ids" != "[]" ] && api POST "$url/api/v3/command" -H "$H" -d "$(jq -nc --argjson ids "$ids" '{name: "RenameSeries", seriesIds: $ids}')" >/dev/null
+  else
+    ids=$(api GET "$url/api/v3/movie" -H "$H" | jq -c '[.[].id]') command=RenameMovie
+    [ "$ids" != "[]" ] && api POST "$url/api/v3/command" -H "$H" -d "$(jq -nc --argjson ids "$ids" '{name: "RenameMovie", movieIds: $ids}')" >/dev/null
+  fi
+  [ "$ids" != "[]" ] && ok "$label: renaming the files already in the library ($command)"
+  return 0
+}
+
 configure_arrs() {
   # One Sonarr for TV and anime: Seerr sends anime to the anime folder
   [ -n "$SONARR_KEY" ]       && configure_arr "sonarr"       "$SONARR_URL"       "$SONARR_KEY"       "$TV_DIR"$'\n'"$ANIME_DIR" "tvCategory"
   [ -n "$RADARR_KEY" ]       && configure_arr "radarr"       "$RADARR_URL"       "$RADARR_KEY"       "$MOVIES_DIR" "movieCategory"
   [ -n "$SONARR_KEY" ]       && set_min_free_space "Sonarr" "$SONARR_URL" "$SONARR_KEY"
+  [ -n "$SONARR_KEY" ]       && set_renaming "Sonarr" "$SONARR_URL" "$SONARR_KEY" series
+  [ -n "$RADARR_KEY" ]       && set_renaming "Radarr" "$RADARR_URL" "$RADARR_KEY" movie
   [ -n "$SONARR_KEY" ]       && migrate_anime_sonarr
   [ -n "$RADARR_KEY" ]       && set_min_free_space "Radarr" "$RADARR_URL" "$RADARR_KEY"
 

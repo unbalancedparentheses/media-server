@@ -81,17 +81,6 @@ moonbase_plugin_id() {
     jq -r --arg g "$MOONBASE_GUID" '.[] | select((.Id | ascii_downcase | gsub("-"; "")) == ($g | gsub("-"; ""))) | .Id' | head -1 || true
 }
 
-# Jellyfin's repository list: the pinned Moonbase manifest, and no other
-# Moonbase entry (such as the moving master manifest older versions added,
-# which Jellyfin's plugin updates would follow)
 moonbase_pin_repository() {  # jellyfin-auth-header
-  local repos updated
-  repos=$(api GET "$JELLYFIN_URL/Repositories" -H "$1" || echo "[]")
-  updated=$(jq -c --arg u "$MOONBASE_REPO_URL" '
-    [.[] | select((.Url | test("Moonfin-Client/Plugin")) | not)] + [{Name: "Moonbase", Url: $u, Enabled: true}]' <<< "$repos")
-  if [ "$(jq -c 'sort_by(.Url)' <<< "$updated")" = "$(jq -c 'sort_by(.Url)' <<< "$repos")" ]; then
-    return 0
-  fi
-  api POST "$JELLYFIN_URL/Repositories" -H "$1" -d "$updated" >/dev/null || { warn "Could not set the Moonbase plugin repository"; return 1; }
-  ok "Plugin repository pinned (Moonbase $MOONBASE_VERSION)"
+  jellyfin_pin_repository "$1" "Moonbase $MOONBASE_VERSION" "$MOONBASE_REPO_URL" "Moonfin-Client/Plugin"
 }

@@ -106,6 +106,11 @@ e2e_resume_radarr_indexers() {
   local H="X-Api-Key: $RADARR_KEY" entry idx f left="[]" current
   f=$(e2e_paused_file)
   [ -f "$f" ] || return 0
+  # An unreadable record must not count as "nothing to restore"
+  jq -e 'type == "array" and all(.[]; (.id | type) == "number")' "$f" >/dev/null 2>&1 || {
+    warn "Can't read $f; re-enable automatic search on Radarr's indexers by hand (Settings → Indexers), then delete it"
+    return 1
+  }
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     idx=$(jq -r .id <<< "$entry")
@@ -138,7 +143,7 @@ e2e_own() {
   f=$(e2e_owned_file)
   [ -f "$f" ] || echo '{}' > "$f"
   jq --arg k "$1" --arg v "$2" \
-    'if $k == "hashes" or $k == "paths" then .[$k] = ((.[$k] // []) + [$v] | unique) else .[$k] = $v end' \
+    'if $k == "hashes" or $k == "paths" or $k == "library_paths" then .[$k] = ((.[$k] // []) + [$v] | unique) else .[$k] = $v end' \
     "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
@@ -199,16 +204,17 @@ e2e_cleanup() {
     case "$path" in "$DL_COMPLETE"/*) rm -rf "$path" ;; esac
   done < <(jq -r '(.paths // [])[]' "$f")
 
-  # Jellyfin must forget the test's files (named with the tag) before Seerr
+  # Jellyfin must forget the test's files (recorded paths, or named with the tag) before Seerr
   if [ -n "${JELLYFIN_TOKEN:-}" ]; then
     local JA
     JA=$(jf_auth "$JELLYFIN_TOKEN")
     api POST "$JELLYFIN_URL/Library/Refresh" -H "$JA" >/dev/null || true
     jellyfin_clean() {
       api GET "$JELLYFIN_URL/Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path" -H "$JA" | \
-        jq -e --arg tag "$E2E_TAG" '[.Items[] | select((.Path // "") | contains($tag))] | length == 0'
+        jq -e --arg tag "$E2E_TAG" --argjson paths "$(jq -c '.library_paths // []' "$f")" \
+          '[.Items[] | (.Path // "") as $p | select(($p | contains($tag)) or ($paths | index($p)))] | length == 0'
     }
-    wait_until 120 jellyfin_clean || { warn "Jellyfin still lists a test item"; failed=1; }
+    wait_until 300 jellyfin_clean || { warn "Jellyfin still lists a test item"; failed=1; }
   fi
   # Deleting the media also deletes its requests; a request recorded
   # without media (Seerr answered but never added it) is deleted directly
@@ -334,6 +340,9 @@ do_e2e() {
 
     movie_has_file() { [ "$(api GET "$RADARR_URL/api/v3/movie/$movie_id" -H "$H_RADARR" | jq -r .hasFile)" = "true" ]; }
     if wait_until 300 movie_has_file; then
+      # Recorded so cleanup can confirm Jellyfin dropped it (Radarr renames
+      # imports, so the file doesn't carry the test tag)
+      e2e_own library_paths "$(api GET "$RADARR_URL/api/v3/movie/$movie_id" -H "$H_RADARR" | jq -r '.movieFile.path')"
       e2e_pass "qBittorrent → Radarr: imported automatically ($(api GET "$RADARR_URL/api/v3/movie/$movie_id" -H "$H_RADARR" | jq -r '.movieFile.relativePath'))"
     else
       e2e_fail "Radarr did not import it within 5 minutes: $(api GET "$RADARR_URL/api/v3/queue" -H "$H_RADARR" | jq -c '[.records[]? | {trackedDownloadState, msg: [.statusMessages[]?.messages[]?]}]')"
@@ -426,7 +435,10 @@ do_e2e() {
     [ "$pushed" = "approved" ] && e2e_pass "Sonarr approved the release" || e2e_fail "Sonarr: $pushed"
 
     episode_has_file() { [ "$(api GET "$SONARR_URL/api/v3/episode/$episode_id" -H "$H_SONARR" | jq -r .hasFile)" = "true" ]; }
+    local episode_path=""
     if wait_until 300 episode_has_file; then
+      episode_path=$(api GET "$SONARR_URL/api/v3/episodefile?seriesId=$series_id" -H "$H_SONARR" | jq -r '.[0].path')
+      e2e_own library_paths "$episode_path"
       e2e_pass "qBittorrent → Sonarr: imported automatically ($(api GET "$SONARR_URL/api/v3/episodefile?seriesId=$series_id" -H "$H_SONARR" | jq -r '.[0].relativePath'))"
     else
       e2e_fail "Sonarr did not import it within 5 minutes: $(api GET "$SONARR_URL/api/v3/queue" -H "$H_SONARR" | jq -c '[.records[]? | {trackedDownloadState, msg: [.statusMessages[]?.messages[]?]}]')"
@@ -434,8 +446,8 @@ do_e2e() {
 
     # Episodes are titled by name ("Earthfall"), so match on the file path
     jellyfin_has_episode() {
-      api GET "$JELLYFIN_URL/Items?Recursive=true&IncludeItemTypes=Episode&Fields=Path" -H "$JA" | \
-        jq -e --arg tag "$E2E_TAG" 'any(.Items[]; (.Path // "") | contains($tag))'
+      [ -n "$episode_path" ] && api GET "$JELLYFIN_URL/Items?Recursive=true&IncludeItemTypes=Episode&Fields=Path" -H "$JA" | \
+        jq -e --arg p "$episode_path" 'any(.Items[]; .Path == $p)'
     }
     if wait_until 180 jellyfin_has_episode; then
       e2e_pass "Sonarr → Jellyfin: episode in the library"

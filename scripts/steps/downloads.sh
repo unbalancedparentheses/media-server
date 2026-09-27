@@ -175,7 +175,14 @@ configure_usenet_providers() {
     name=$(cfg ".usenet_providers[$i].name")
     if [ "$(cfg ".usenet_providers[$i].enable")" != "true" ]; then
       if jq -e --arg n "$name" 'any(.[]; .name == $n and .enable == 1)' <<< "$servers" >/dev/null; then
-        sab_set servers enable 0 "$name" && ok "$name disabled" || warn "Could not disable $name in SABnzbd"
+        # SABnzbd answers errors with HTTP 200 too: check the server really is off
+        if sab_set servers enable 0 "$name" && \
+           curl -sf "$SABNZBD_URL/api?mode=get_config&section=servers&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | \
+             jq -e --arg n "$name" 'any(.config.servers[]?; .name == $n and .enable == 0)' >/dev/null; then
+          ok "$name disabled"
+        else
+          warn "Could not disable $name in SABnzbd (retried next run)"
+        fi
       fi
       continue
     fi

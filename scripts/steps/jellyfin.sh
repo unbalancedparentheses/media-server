@@ -191,3 +191,18 @@ set_jellyfin_encoding() {
     warn "Could not set Jellyfin's transcoding settings"
   fi
 }
+
+# Pin a plugin's repository in Jellyfin's list: add <url>, drop other
+# entries matching <pattern> (older or moving manifests), keep everything
+# else. If the list can't be read, nothing is written: saving a guessed
+# list would drop the other repositories.
+jellyfin_pin_repository() {  # auth-header name url pattern
+  local repos updated
+  repos=$(api GET "$JELLYFIN_URL/Repositories" -H "$1") && jq -e 'type == "array"' <<< "$repos" >/dev/null 2>&1 || \
+    { warn "Could not read Jellyfin's plugin repositories; $2's wasn't changed"; return 1; }
+  updated=$(jq -c --arg name "$2" --arg u "$3" --arg pat "$4" \
+    '[.[] | select((.Url | test($pat)) | not)] + [{Name: $name, Url: $u, Enabled: true}]' <<< "$repos")
+  [ "$(jq -c 'sort_by(.Url)' <<< "$updated")" = "$(jq -c 'sort_by(.Url)' <<< "$repos")" ] && return 0
+  api POST "$JELLYFIN_URL/Repositories" -H "$1" -d "$updated" >/dev/null || { warn "Could not set $2's plugin repository"; return 1; }
+  ok "Plugin repository pinned ($2)"
+}
