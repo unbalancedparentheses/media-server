@@ -360,6 +360,12 @@ run_verification() {
       jq -e --arg u "$MOONBASE_REPO_URL" '[.[] | select(.Url | test("Moonfin-Client/Plugin"))] == [.[] | select(.Url == $u)] and any(.[]; .Url == $u)' <<< "$repos" >/dev/null && \
         [ "$version" = "$MOONBASE_VERSION" ] && echo true || echo false)"
   fi
+  if [ -n "${JF_TOKEN_V:-}" ]; then
+    check "Intro Skipper $INTRO_SKIPPER_VERSION loaded" "$([ "$(api GET "$JELLYFIN_URL/Plugins" -H "$(jf_auth "$JF_TOKEN_V")" | \
+      jq -r --arg g "$INTRO_SKIPPER_GUID" '.[] | select((.Id | ascii_downcase | gsub("-"; "")) == ($g | gsub("-"; ""))) | "\(.Version) \(.Status)"' 2>/dev/null)" = "$INTRO_SKIPPER_VERSION Active" ] && echo true || echo false)"
+    check "Jellyfin → hardware transcoding ($(cfg_bool .playback.hardware_acceleration true))" "$(api GET "$JELLYFIN_URL/System/Configuration/encoding" -H "$(jf_auth "$JF_TOKEN_V")" | \
+      jq --argjson on "$(cfg_bool .playback.hardware_acceleration true)" '(.HardwareAccelerationType == "videotoolbox") == $on' 2>/dev/null || echo false)"
+  fi
   check "Moonfin web app (/Moonfin/Web/)" "$(case "$(http_code "$JELLYFIN_URL/Moonfin/Web/")" in 2*|3*) echo true ;; *) echo false ;; esac)"
 
   info "Services (launchd)..."

@@ -43,7 +43,7 @@ The first run builds a few services that aren't prebuilt for macOS (Seerr, Sonar
 1. Writes each service's config (ports, API keys, passwords) under `~/media/config`
 2. Starts every service as a launchd agent (`~/Library/LaunchAgents/org.media-server.*`)
 3. Wires them together: download clients, indexers, subtitles, Seerr, Jellyfin libraries
-4. Installs the Moonbase plugin so Jellyfin serves the Moonfin web app and connects it to Seerr
+4. Installs the Moonbase plugin so Jellyfin serves the Moonfin web app and connects it to Seerr, and Intro Skipper for "Skip intro/credits" (both pinned to a version)
 5. Blocks junk releases in Sonarr/Radarr
 6. Runs the verification checks
 
@@ -79,7 +79,7 @@ Log in with a Jellyfin user. Create one per family member in Jellyfin (Dashboard
 
 | Service | Port | What it does |
 |---------|------|-------------|
-| **[Jellyfin](https://jellyfin.org)** + **[Moonbase](https://github.com/Moonfin-Client/Plugin)** | 8096 | Media server; Moonbase serves the Moonfin web app and links it to Seerr |
+| **[Jellyfin](https://jellyfin.org)** + **[Moonbase](https://github.com/Moonfin-Client/Plugin)** + **[Intro Skipper](https://github.com/intro-skipper/intro-skipper)** | 8096 | Media server, with hardware video conversion (VideoToolbox); Moonbase serves the Moonfin web app and links it to Seerr; Intro Skipper finds intros and credits so players show "Skip" |
 | **[Seerr](https://github.com/seerr-team/seerr)** | 5055 | Browse and request movies and shows |
 | **[Sonarr](https://sonarr.tv)** | 8989 | Downloads and organizes TV shows and anime (anime goes to `~/media/anime`) |
 | **[Radarr](https://radarr.video)** | 7878 | Downloads and organizes movies |
@@ -107,7 +107,8 @@ The dashboard at `http://localhost` (or `http://<mac-ip>`) links to everything; 
 - **Indexers:** `[[indexers]]` public torrent and anime indexers (Nyaa, SubsPlease, Mikan, Bangumi); `flaresolverr = true` routes one through Byparr. All of them sync to Sonarr and Radarr.
 - **Usenet:** public torrent sites are often thin (few or no seeders). Usenet is faster and more reliable, but needs two paid accounts: a **provider** (e.g. Newshosting, Eweka, Frugal Usenet) under `[[usenet_providers]]`, and an **indexer** (e.g. NZBgeek, DrunkenSlug, NZBFinder) under `[[indexers]]` with its API key (see the NZBgeek example in `config.toml.example`). Set `enable = true` on both and re-run install; Sonarr and Radarr then use SABnzbd automatically.
 - **Stuck downloads:** `[cleanuparr]` Cleanuparr checks the queue every 5 minutes. A public torrent with no progress for `stalled_strikes` checks (default 6, about 30 minutes), one that never gets metadata, or one that fails to import 3 times is removed, blocklisted, and searched for again. `enabled = false` turns it off.
-- **Playback:** `[playback]` sets the Jellyfin user's defaults: subtitles always on in English (Jellyfin falls back to another language when a file has no English), and Japanese audio when a file has it, so dual-audio anime plays in Japanese; everything else plays its default track. Setup re-applies these on every install.
+- **Playback:** `[playback]` sets the Jellyfin user's defaults: subtitles always on in English (Jellyfin falls back to another language when a file has no English), and Japanese audio when a file has it, so dual-audio anime plays in Japanese; everything else plays its default track. Setup re-applies these on every install. `hardware_acceleration` (on by default) has Jellyfin convert video with Apple's VideoToolbox when a TV or phone can't play a file directly, including 10-bit HEVC and AV1, instead of the CPU.
+- **Skip intro/credits:** Intro Skipper analyzes episodes (the existing library once after install, then new episodes as they arrive) and marks intros and credits; Jellyfin players that support media segments show a "Skip" button.
 - **Anime release groups:** anime releases are ranked by the TRaSH Guides tiers, Blu-ray groups above web groups (`anime_release_groups = false` turns the ranking off). Raw releases without subtitles and low-quality anime groups are always blocked. Matching goes by release name and group, so it makes Japanese audio and full subtitles very likely, not certain.
 - **Uploads:** `[downloads] upload_limit_kib` caps qBittorrent's upload speed (default 100 KiB/s; 0 = no limit).
 - **Disk space:** `[disk] warn_free_gb` (default 50) shows a macOS notification when the media disk runs low; below `min_free_gb` (default 10) Sonarr and Radarr stop importing so the disk never fills completely. `nix run .#status` shows free space.

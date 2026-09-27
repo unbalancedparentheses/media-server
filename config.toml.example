@@ -70,6 +70,7 @@ anime_release_groups = true   # anime: prefer well-rated release groups (TRaSH t
 subtitle_mode = "Always"
 subtitle_language = "eng"
 audio_language = "jpn"
+hardware_acceleration = true   # convert video with Apple's hardware (VideoToolbox) when a device needs it
 
 # ─── Network ────────────────────────────────────────────────────
 # admin_bind: address the admin UIs (Sonarr, Radarr, Prowlarr, Bazarr,

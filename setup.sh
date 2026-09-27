@@ -128,6 +128,7 @@ run_setup() {
   configure_sabnzbd_auth
   configure_seerr
   configure_moonbase
+  configure_intro_skipper
   configure_unpackerr
   configure_cleanuparr
   write_api_proxy

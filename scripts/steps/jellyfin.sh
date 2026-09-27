@@ -103,6 +103,7 @@ configure_jellyfin() {
     done
 
     set_jellyfin_playback
+    set_jellyfin_encoding
 
     # Reduce library monitor delay to 15 seconds for faster content detection
     SYS_CONFIG=$(api GET "$JELLYFIN_URL/System/Configuration" -H "$(jf_auth "$JELLYFIN_TOKEN")" 2>/dev/null || echo "")
@@ -162,5 +163,31 @@ set_jellyfin_playback() {
     ok "Playback: subtitles $(jq -r .SubtitleMode <<< "$want") ($(jq -r .SubtitleLanguagePreference <<< "$want")), audio $(jq -r '.AudioLanguagePreference // "default track"' <<< "$want") (updated)"
   else
     warn "Could not set the Jellyfin user's playback settings"
+  fi
+}
+
+# Hardware video conversion ([playback] hardware_acceleration): Apple's
+# VideoToolbox encodes and decodes (H.264, HEVC, VP9, AV1) when a TV or
+# phone can't play a file directly, instead of the CPU; it also does
+# HDR-to-SDR tone mapping. Off: Jellyfin's default (software).
+set_jellyfin_encoding() {
+  local conf want on
+  on=$(cfg_bool .playback.hardware_acceleration true)
+  conf=$(api GET "$JELLYFIN_URL/System/Configuration/encoding" -H "$(jf_auth "$JELLYFIN_TOKEN")") || { warn "Could not read Jellyfin's transcoding settings"; return 0; }
+  want=$(jq -c --argjson on "$on" '
+    if $on then
+      .HardwareAccelerationType = "videotoolbox" | .EnableHardwareEncoding = true
+      | .HardwareDecodingCodecs = ["h264", "hevc", "vp9", "av1"]
+      | .EnableDecodingColorDepth10Hevc = true | .EnableDecodingColorDepth10Vp9 = true
+      | .EnableVideoToolboxTonemapping = true
+    else
+      .HardwareAccelerationType = "none"
+    end' <<< "$conf")
+  if [ "$want" = "$conf" ]; then
+    ok "Transcoding: $([ "$on" = true ] && echo "hardware (VideoToolbox)" || echo software)"
+  elif api POST "$JELLYFIN_URL/System/Configuration/encoding" -H "$(jf_auth "$JELLYFIN_TOKEN")" -d "$want" >/dev/null; then
+    ok "Transcoding: $([ "$on" = true ] && echo "hardware (VideoToolbox)" || echo software) (updated)"
+  else
+    warn "Could not set Jellyfin's transcoding settings"
   fi
 }
