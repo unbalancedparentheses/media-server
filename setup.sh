@@ -115,6 +115,8 @@ run_setup() {
   creds_load
   wait_for_services
   load_api_keys
+  # Radarr indexers an interrupted e2e test left paused
+  e2e_resume_radarr_indexers || true
   configure_qbittorrent
   configure_jellyfin
   configure_sabnzbd

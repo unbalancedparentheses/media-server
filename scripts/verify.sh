@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# True if an enabled indexer goes through Byparr (flaresolverr = true)
+byparr_needed() {
+  [ "$(cfg '[.indexers[]? | select(.enable == true and .flaresolverr == true)] | length')" != "0" ]
+}
+
 run_verification() {
   # shellcheck source=/dev/null
   . "$SCRIPT_DIR/scripts/service_registry.sh"
@@ -32,8 +37,7 @@ run_verification() {
       HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
     fi
     # Byparr is only needed by indexers with flaresolverr = true
-    if [ "$name" = "Byparr" ] && ! [[ "$HTTP_CODE" =~ ^[23] ]] && \
-       [ "$(cfg '[.indexers[]? | select(.enable == true and .flaresolverr == true)] | length')" = "0" ]; then
+    if [ "$name" = "Byparr" ] && ! [[ "$HTTP_CODE" =~ ^[23] ]] && ! byparr_needed; then
       skip "Byparr responds ($HTTP_CODE; no enabled indexer needs it)"
       continue
     fi
@@ -349,12 +353,25 @@ run_verification() {
   done
 
   info "Moonfin..."
+  if [ -n "${JF_TOKEN_V:-}" ]; then
+    check "Moonbase pinned ($MOONBASE_VERSION, manifest at ${MOONBASE_COMMIT:0:12})" "$(
+      repos=$(api GET "$JELLYFIN_URL/Repositories" -H "$(jf_auth "$JF_TOKEN_V")" || echo "[]")
+      version=$(api GET "$JELLYFIN_URL/Plugins" -H "$(jf_auth "$JF_TOKEN_V")" | jq -r '.[] | select(.Name == "Moonbase") | .Version' 2>/dev/null)
+      jq -e --arg u "$MOONBASE_REPO_URL" '[.[] | select(.Url | test("Moonfin-Client/Plugin"))] == [.[] | select(.Url == $u)] and any(.[]; .Url == $u)' <<< "$repos" >/dev/null && \
+        [ "$version" = "$MOONBASE_VERSION" ] && echo true || echo false)"
+  fi
   check "Moonfin web app (/Moonfin/Web/)" "$(case "$(http_code "$JELLYFIN_URL/Moonfin/Web/")" in 2*|3*) echo true ;; *) echo false ;; esac)"
 
   info "Services (launchd)..."
-  local svc
+  local svc state
   for svc in $SERVICE_NAMES; do
-    check "Service: $svc ($(svc_state "$svc"))" "$(case "$(svc_state "$svc")" in running*) echo true ;; *) echo false ;; esac)"
+    state=$(svc_state "$svc")
+    # Byparr only matters when an enabled indexer goes through it
+    if [ "$svc" = byparr ] && [[ "$state" != running* ]] && ! byparr_needed; then
+      skip "Service: byparr ($state; no enabled indexer needs it)"
+      continue
+    fi
+    check "Service: $svc ($state)" "$(case "$state" in running*) echo true ;; *) echo false ;; esac)"
   done
 
   info "Tailscale..."

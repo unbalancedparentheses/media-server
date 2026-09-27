@@ -62,8 +62,11 @@ configure_tailscale() {
     return 0
   elif [ "$(cfg_bool .network.tailscale_https true)" != "true" ]; then
     # Take down what an earlier run published
-    remove_tailscale_serve
-    ok "Tailscale HTTPS disabled (network.tailscale_https = false)"
+    if remove_tailscale_serve; then
+      ok "Tailscale HTTPS disabled (network.tailscale_https = false)"
+    else
+      warn "Tailscale HTTPS is disabled in config.toml, but some routes are still published (see above)"
+    fi
   elif ! "$TS_CLI" status &>/dev/null; then
     warn "Tailscale is not connected; open it from the menu bar to enable remote access"
   else
@@ -78,10 +81,13 @@ configure_tailscale() {
         # Already published to the same place (not just the same port)?
         if jq -e --arg p ":$port" --arg t "$target" \
             'any(.Web // {} | to_entries[]; (.key | endswith($p)) and .value.Handlers["/"].Proxy == $t)' <<< "$serve" >/dev/null 2>&1; then
+          record_tailscale_route "$port" "$target"
           ok "HTTPS :$port → $label"
+        elif run_timeout 10 "$TS_CLI" serve --bg --yes --https="$port" "$target" </dev/null >/dev/null 2>&1; then
+          record_tailscale_route "$port" "$target"
+          ok "HTTPS :$port → $label (published)"
         else
-          run_timeout 10 "$TS_CLI" serve --bg --yes --https="$port" "$target" </dev/null >/dev/null 2>&1 && \
-            ok "HTTPS :$port → $label (published)" || warn "Failed to publish HTTPS :$port"
+          warn "Failed to publish HTTPS :$port"
         fi
       done
     fi
@@ -174,7 +180,12 @@ write_nginx_config() {
   NGINX_MIME_TYPES=$(jq -r '.nginxMimeTypes' "$MEDIA_SERVICES_JSON")
   ADMIN_HOST=$(admin_host)
   export NGINX_MIME_TYPES DASHBOARD_PORT ADMIN_HOST
+  local before=""
+  [ -f "$conf" ] && before=$(cat "$conf")
   render_template "$SCRIPT_DIR/templates/nginx.conf.tpl" "$conf"
+  # nginx only reads it at start (e.g. a new dashboard_port): restart it
+  # with the others, before setup waits for the dashboard
+  [ -n "$before" ] && [ "$(cat "$conf")" != "$before" ] && CONFIG_CHANGED="$CONFIG_CHANGED"nginx$'\n'
   # Placeholder until the API keys are known (write_api_proxy)
   [ -f "$proxy" ] || : > "$proxy"
   cp "$SCRIPT_DIR/landing.html" "$CONFIG_DIR/nginx/www/index.html"

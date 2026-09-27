@@ -109,33 +109,61 @@ set_min_free_space() {
 # (as anime, keeping their folders, no search), copy its series, season and
 # episode monitoring exactly, and rescan so the existing files are picked
 # up. Its data folder is left in place.
+# Progress is kept per series in sonarr-anime-migration.json: "added" (id
+# in Sonarr) as soon as Sonarr accepts it, "done" once its monitoring is
+# copied and checked, so an interrupted run finishes the series it
+# started. Series that were already in Sonarr aren't touched.
 migrate_anime_sonarr() {
   local db="$CONFIG_DIR/sonarr-anime/sonarr.db" marker="$STATE_DIR/sonarr-anime-migrated"
-  local H="X-Api-Key: $SONARR_KEY" rows row old_id tvdb path have profile_id lookup new failed=0 added=0
+  local progress="$STATE_DIR/sonarr-anime-migration.json"
+  local H="X-Api-Key: $SONARR_KEY" rows row old_id tvdb path have profile_id lookup new new_id state failed=0 added=0
   [ -f "$db" ] && [ ! -f "$marker" ] || return 0
   info "Moving the old anime Sonarr's series into Sonarr..."
   rows=$(sqlite3 -json "file:$db?mode=ro" 'SELECT Id, TvdbId, Path, Monitored, Seasons FROM Series' 2>/dev/null) || {
     warn "Could not read $db; its series were not moved (setup retries next run)"; return 0; }
-  have=$(api GET "$SONARR_URL/api/v3/series" -H "$H" | jq -c '[.[].tvdbId]') || { warn "Could not list Sonarr series"; return 0; }
+  have=$(api GET "$SONARR_URL/api/v3/series" -H "$H") || { warn "Could not list Sonarr series"; return 0; }
+  state='{"added":{},"done":[]}'
+  [ -f "$progress" ] && state=$(jq -c '{added: (.added // {}), done: (.done // [])}' "$progress" 2>/dev/null || echo "$state")
   profile_id=$(api GET "$SONARR_URL/api/v3/qualityprofile" -H "$H" | \
     jq -r --arg a "$ANIME_PROFILE" --arg n "$SONARR_ANIME_PROFILE" '([.[] | select(.name == $a) | .id][0]) // ([.[] | select(.name == $n) | .id][0]) // .[0].id')
   while IFS= read -r row; do
     [ -n "$row" ] || continue
     old_id=$(jq -r .Id <<< "$row"); tvdb=$(jq -r .TvdbId <<< "$row"); path=$(jq -r .Path <<< "$row")
-    jq -e --argjson t "$tvdb" 'index($t)' <<< "$have" >/dev/null && continue
-    lookup=$(api GET "$SONARR_URL/api/v3/series/lookup?term=tvdb:$tvdb" -H "$H" | jq -c '.[0] // empty') || lookup=""
-    # Added unmonitored with "skip" (Sonarr leaves episode monitoring alone);
-    # the old choices are applied below
-    new=""
-    [ -n "$lookup" ] && new=$(api POST "$SONARR_URL/api/v3/series" -H "$H" -d "$(jq -c \
-        --arg path "$path" --argjson pid "$profile_id" \
-        '. + {path:$path, qualityProfileId:$pid, monitored:false, seriesType:"anime", seasonFolder:true,
-              addOptions:{searchForMissingEpisodes:false, monitor:"skip"}}' <<< "$lookup")") || new=""
-    if [ -n "$new" ] && migrate_monitoring "$db" "$old_id" "$(jq -r .id <<< "$new")" "$row"; then
-      ok "Moved: $(jq -r .title <<< "$new")"
+    jq -e --arg t "$tvdb" '.done | index($t)' <<< "$state" >/dev/null && continue
+    new_id=$(jq -r --arg t "$tvdb" '.added[$t] // empty' <<< "$state")
+    # Added by an earlier, interrupted run: still there?
+    [ -n "$new_id" ] && ! jq -e --argjson id "$new_id" 'any(.[]; .id == $id)' <<< "$have" >/dev/null && new_id=""
+    if [ -z "$new_id" ]; then
+      if jq -e --argjson t "$tvdb" 'any(.[]; .tvdbId == $t)' <<< "$have" >/dev/null; then
+        # Already in Sonarr before the migration: leave it as it is
+        state=$(jq -c --arg t "$tvdb" '.done += [$t]' <<< "$state")
+        migration_progress_save "$progress" "$state"
+        continue
+      fi
+      lookup=$(api GET "$SONARR_URL/api/v3/series/lookup?term=tvdb:$tvdb" -H "$H" | jq -c '.[0] // empty') || lookup=""
+      # Added unmonitored with "skip" (Sonarr leaves episode monitoring
+      # alone); the old choices are applied below
+      new=""
+      [ -n "$lookup" ] && new=$(api POST "$SONARR_URL/api/v3/series" -H "$H" -d "$(jq -c \
+          --arg path "$path" --argjson pid "$profile_id" \
+          '. + {path:$path, qualityProfileId:$pid, monitored:false, seriesType:"anime", seasonFolder:true,
+                addOptions:{searchForMissingEpisodes:false, monitor:"skip"}}' <<< "$lookup")") || new=""
+      new_id=$(jq -r '.id // empty' <<< "$new" 2>/dev/null || true)
+      if [ -z "$new_id" ]; then
+        warn "Could not add the series at $path (TVDB $tvdb); retried next run"
+        failed=1
+        continue
+      fi
+      state=$(jq -c --arg t "$tvdb" --argjson id "$new_id" '.added[$t] = $id' <<< "$state")
+      migration_progress_save "$progress" "$state"
       added=$((added + 1))
+    fi
+    if migrate_monitoring "$db" "$old_id" "$new_id" "$row"; then
+      state=$(jq -c --arg t "$tvdb" '.done += [$t]' <<< "$state")
+      migration_progress_save "$progress" "$state"
+      ok "Moved: ${path##*/}"
     else
-      warn "Could not move the series at $path (TVDB $tvdb)"
+      warn "Series at $path is in Sonarr, but its monitoring wasn't copied yet; retried next run"
       failed=1
     fi
   done < <(jq -c '.[]' <<< "${rows:-[]}")
@@ -144,6 +172,12 @@ migrate_anime_sonarr() {
     touch "$marker"
     ok "Old anime Sonarr's series are in Sonarr; you can delete $CONFIG_DIR/sonarr-anime"
   fi
+}
+
+migration_progress_save() {  # file json
+  local tmp="$1.tmp.$$"
+  mkdir -p "$(dirname "$1")"
+  printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1"
 }
 
 # Wait until Sonarr has finished adding a series: its episodes are listed

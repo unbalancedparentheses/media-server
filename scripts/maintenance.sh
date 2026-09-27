@@ -7,7 +7,15 @@
 # ~/media/.state (applied logins, migration marker, e2e test ownership),
 # which describe these databases and must travel with them. Services are
 # stopped while archiving so their SQLite databases are consistent.
-STATE_RECORDS=".state/credentials.json .state/sonarr-anime-migrated .state/e2e/owned.json"
+# An array: setup splits words only on newlines and tabs (IFS)
+STATE_RECORDS=(
+  .state/credentials.json
+  .state/sonarr-anime-migrated
+  .state/sonarr-anime-migration.json
+  .state/e2e/owned.json
+  .state/e2e/paused-indexers.json
+  .state/tailscale-routes.json
+)
 do_backup() {
   [ -d "$CONFIG_DIR" ] || err "Config directory not found: $CONFIG_DIR"
   mkdir -p "$BACKUP_DIR"
@@ -32,7 +40,7 @@ do_backup() {
   fi
 
   local records=() record
-  for record in $STATE_RECORDS; do [ -e "$MEDIA_DIR/$record" ] && records+=("$record"); done
+  for record in "${STATE_RECORDS[@]}"; do [ -e "$MEDIA_DIR/$record" ] && records+=("$record"); done
   # Logs and caches are large and recreated on start
   if ! (umask 077 && tar czf "$backup_file" \
       --exclude='config/*/logs' --exclude='config/jellyfin/log' --exclude='config/jellyfin/cache' \
@@ -128,7 +136,7 @@ do_restore() {
 # and the e2e test forgets items that aren't in the restored databases.
 restore_state_records() {  # extract-dir timestamp
   local extract="$1" aside="$STATE_DIR/pre-restore-$2" record moved=false
-  for record in $STATE_RECORDS; do
+  for record in "${STATE_RECORDS[@]}"; do
     if [ -e "$MEDIA_DIR/$record" ]; then
       mkdir -p "$aside/$(dirname "${record#.state/}")"
       mv "$MEDIA_DIR/$record" "$aside/${record#.state/}"
@@ -191,7 +199,7 @@ do_uninstall() {
   [ -z "$failed" ] || err "Could not stop:$failed (the others were removed). Configs and Tailscale were left alone; check 'nix run .#status' and re-run uninstall"
   rm -f "$STATE_DIR/gcroot"
 
-  remove_tailscale_serve
+  remove_tailscale_serve || warn "Some Tailscale HTTPS routes are still published (see above)"
 
   if [ "$PURGE" = "true" ]; then
     echo ""
@@ -218,23 +226,44 @@ do_uninstall() {
   echo ""
 }
 
-# Undo the `tailscale serve` entries setup adds: only HTTPS ports whose
-# handler proxies to this stack (dashboard, Jellyfin, Seerr on 127.0.0.1)
+# Undo the `tailscale serve` entries setup adds: HTTPS ports whose handler
+# proxies to what setup published there, either recorded when publishing
+# (tailscale-routes.json, e.g. an old dashboard port) or what the current
+# config would publish. Returns non-zero if a removal failed.
 remove_tailscale_serve() {
-  local ts_cli port dash="${DASHBOARD_PORT:-80}"
+  local ts_cli port dash="${DASHBOARD_PORT:-80}" routes ours failed=0
   ts_cli="$(detect_tailscale_cli)"
   [ -n "$ts_cli" ] || return 0
   [ -f "$CONFIG_FILE" ] && dash=$(load_config_json "$CONFIG_FILE" | jq -r '.network.dashboard_port // 80' 2>/dev/null || echo 80)
-  for port in $("$ts_cli" serve status --json 2>/dev/null | jq -r --arg dash "$dash" '
-      {"443": "http://127.0.0.1:\($dash)", "8096": "http://127.0.0.1:8096", "5055": "http://127.0.0.1:5055"} as $ours
-      | .Web // {} | to_entries[]
+  routes="$STATE_DIR/tailscale-routes.json"
+  # port → list of targets that count as ours
+  ours=$(jq -nc --arg dash "$dash" --argjson rec "$(cat "$routes" 2>/dev/null || echo '{}')" '
+    {"443": ["http://127.0.0.1:\($dash)"], "8096": ["http://127.0.0.1:8096"], "5055": ["http://127.0.0.1:5055"]} as $now
+    | reduce ($rec | to_entries[]) as $r ($now; .[$r.key] += [$r.value])')
+  for port in $("$ts_cli" serve status --json 2>/dev/null | jq -r --argjson ours "$ours" '
+      .Web // {} | to_entries[]
       | (.key | split(":") | last) as $port
-      | select($ours[$port] != null and any(.value.Handlers[]?; .Proxy == $ours[$port]))
+      | select($ours[$port] != null and any(.value.Handlers[]?; .Proxy as $p | $ours[$port] | index($p)))
       | $port' 2>/dev/null || true); do
-    run_timeout 10 "$ts_cli" serve --https="$port" off </dev/null >/dev/null 2>&1 && \
-      ok "Tailscale HTTPS :$port removed" || true
+    if run_timeout 10 "$ts_cli" serve --https="$port" off </dev/null >/dev/null 2>&1; then
+      ok "Tailscale HTTPS :$port removed"
+    else
+      warn "Couldn't remove Tailscale HTTPS :$port (remove it with: tailscale serve --https=$port off)"
+      failed=1
+    fi
   done
-  return 0
+  [ "$failed" = 0 ] && rm -f "$routes"
+  return "$failed"
+}
+
+# Remember a route setup published, so it can be removed even after the
+# config changes
+record_tailscale_route() {  # port target
+  local routes="$STATE_DIR/tailscale-routes.json" tmp
+  tmp="$routes.tmp.$$"
+  mkdir -p "$STATE_DIR"
+  jq --arg p "$1" --arg t "$2" '.[$p] = $t' "$routes" 2>/dev/null > "$tmp" || jq -n --arg p "$1" --arg t "$2" '{($p): $t}' > "$tmp"
+  mv -f "$tmp" "$routes"
 }
 
 # ─── Status / logs / restart ─────────────────────────────────────

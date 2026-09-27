@@ -139,7 +139,8 @@ PY
 
 # Turn off "no login for local addresses" (which also covers the LAN).
 # Runs before the services start, so Cleanuparr never listens on a wider
-# address with it on; again during configuration for new installs.
+# address with it on; if it can't be turned off, setup stops rather than
+# start Cleanuparr unprotected.
 cleanuparr_require_login() {
   local db="$CONFIG_DIR/cleanuparr/cleanuparr.db" key general
   [ -f "$db" ] || return 0
@@ -153,8 +154,10 @@ cleanuparr_require_login() {
         { ok "Cleanuparr: login required again"; return 0; }
     fi
     # Not answering: stop it and change the setting on disk
-    svc_stop cleanuparr || { warn "Cleanuparr didn't stop; check that its login is required"; return 0; }
+    svc_stop cleanuparr || err "Cleanuparr didn't stop, so its login requirement couldn't be turned on; stopping here (stop it with 'nix run .#restart -- cleanuparr' and re-run)"
   fi
   sqlite3 "$db" 'UPDATE general_configs SET auth_disable_auth_for_local_addresses = 0 WHERE auth_disable_auth_for_local_addresses = 1' 2>/dev/null || \
-    warn "Could not turn on Cleanuparr's login requirement"
+    err "Couldn't turn on Cleanuparr's login requirement in $db; stopping here so it doesn't start without one"
+  [ "$(sqlite3 "$db" 'SELECT COUNT(*) FROM general_configs WHERE auth_disable_auth_for_local_addresses = 1' 2>/dev/null)" = "0" ] || \
+    err "Cleanuparr's login requirement is still off in $db; stopping here"
 }

@@ -34,8 +34,10 @@ sandbox() {
   for f in lib.sh service_registry.sh launchd.sh maintenance.sh e2e.sh; do . "$ROOT/scripts/$f"; done
   # shellcheck source=/dev/null
   for f in "$ROOT"/scripts/steps/*.sh; do . "$f"; done
-  trap - ERR
-  set +e
+  # The shell settings setup.sh runs with (its ERR trap comes from lib.sh):
+  # word splitting on newlines/tabs only, stop on errors
+  set -Eeo pipefail
+  IFS=$'\n\t'
   init_service_registry
   FAKE="$MEDIA_DIR/fake"
   mkdir -p "$FAKE"
@@ -172,6 +174,29 @@ test_backup_and_restore_keep_records_together() {
   expect_eq "$(jq -r .services.jellyfin.password "$STATE_DIR/credentials.json")" current "restored credentials"
 }
 
+# Backup and restore through setup.sh itself (its real shell settings and
+# argument handling), against a scratch ~/media and launchd names that
+# match no real service
+test_entry_point_backup_and_restore() {
+  local env=(MEDIA_DIR="$MEDIA_DIR" MEDIA_SERVICES_JSON="$FAKE/services.json" MEDIA_LABEL_PREFIX="test.media-server.$$")
+  echo '{}' > "$FAKE/services.json"
+  echo 'timezone = "UTC"' > "$CONFIG_FILE"
+  echo db > "$CONFIG_DIR/sonarr.db"
+  make_state_records
+  env "${env[@]}" bash "$ROOT/setup.sh" --backup >/dev/null 2>&1 || fail "setup.sh --backup failed"
+  local backup
+  backup=$(ls "$BACKUP_DIR"/media-server_*.tar.gz)
+  for record in credentials.json sonarr-anime-migrated e2e/owned.json; do
+    tar tzf "$backup" | grep -qx ".state/$record" || fail "backup is missing .state/$record"
+  done
+
+  rm -f "$STATE_DIR/sonarr-anime-migrated"
+  echo '{"version":2,"services":{}}' > "$STATE_DIR/credentials.json"
+  env "${env[@]}" bash "$ROOT/setup.sh" --restore "$backup" --yes >/dev/null 2>&1 || fail "setup.sh --restore failed"
+  [ -e "$STATE_DIR/sonarr-anime-migrated" ] || fail "migration marker not restored"
+  expect_eq "$(jq -r .services.jellyfin.password "$STATE_DIR/credentials.json")" current "restored credentials"
+}
+
 # ─── e2e cleanup and pre-checks ──────────────────────────────────
 
 e2e_fakes() {
@@ -222,6 +247,144 @@ test_clean_slate_stops_when_radarr_is_down() {
   local out
   out=$(e2e_require_clean_slate 2>&1) && fail "went ahead without checking Radarr"
   grep -q "Couldn't reach Radarr" <<< "$out" || fail "unexpected message: $out"
+}
+
+# ─── Interrupted anime migration ─────────────────────────────────
+
+# A series is added, but copying its monitoring fails: the migration isn't
+# marked complete, and the next run finishes that series (not skips it)
+test_migration_finishes_interrupted_series() {
+  SONARR_KEY=s SONARR_ANIME_PROFILE=HD-1080p
+  mkdir -p "$CONFIG_DIR/sonarr-anime"
+  command -v sqlite3 >/dev/null || fail "sqlite3 is needed"
+  sqlite3 "$CONFIG_DIR/sonarr-anime/sonarr.db" "CREATE TABLE Series (Id, TvdbId, Path, Monitored, Seasons); INSERT INTO Series VALUES (7, 111, '/a/Show', 1, '[]');"
+  echo '[]' > "$FAKE/series"
+  api() {
+    case "$1 $2" in
+      "GET "*/api/v3/series) cat "$FAKE/series" ;;
+      "GET "*/qualityprofile) echo '[{"id":4,"name":"Anime"}]' ;;
+      "GET "*/series/lookup*) echo '[{"title":"Show","tvdbId":111}]' ;;
+      "POST "*/api/v3/series) echo '[{"id":50,"tvdbId":111}]' > "$FAKE/series"; echo '{"id":50}' ;;
+      "POST "*/command) ;;
+      *) return 22 ;;
+    esac
+  }
+  # Copying monitoring fails the first time, works the second
+  migrate_monitoring() { [ -f "$FAKE/monitoring_ok" ] && echo "$3" > "$FAKE/finished"; }
+
+  migrate_anime_sonarr >/dev/null
+  [ ! -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "marked complete after a failure"
+  expect_eq "$(jq -r '.added["111"]' "$STATE_DIR/sonarr-anime-migration.json")" 50 "series recorded as added"
+
+  touch "$FAKE/monitoring_ok"
+  migrate_anime_sonarr >/dev/null
+  expect_eq "$(cat "$FAKE/finished" 2>/dev/null)" 50 "monitoring copied for the series added earlier"
+  [ -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "not marked complete after finishing"
+}
+
+# A series that was already in Sonarr before the migration is left alone
+test_migration_leaves_existing_series_alone() {
+  SONARR_KEY=s SONARR_ANIME_PROFILE=HD-1080p
+  mkdir -p "$CONFIG_DIR/sonarr-anime"
+  sqlite3 "$CONFIG_DIR/sonarr-anime/sonarr.db" "CREATE TABLE Series (Id, TvdbId, Path, Monitored, Seasons); INSERT INTO Series VALUES (7, 111, '/a/Show', 1, '[]');"
+  api() {
+    case "$1 $2" in
+      "GET "*/api/v3/series) echo '[{"id":9,"tvdbId":111}]' ;;
+      "GET "*/qualityprofile) echo '[{"id":4,"name":"Anime"}]' ;;
+      *) return 22 ;;
+    esac
+  }
+  migrate_monitoring() { touch "$FAKE/touched"; }
+  migrate_anime_sonarr >/dev/null
+  [ ! -f "$FAKE/touched" ] || fail "changed a series that was already in Sonarr"
+  [ -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "not marked complete"
+}
+
+# ─── Cleanuparr's login safeguard ────────────────────────────────
+
+cleanuparr_db() {
+  mkdir -p "$CONFIG_DIR/cleanuparr"
+  sqlite3 "$CONFIG_DIR/cleanuparr/cleanuparr.db" "CREATE TABLE general_configs (auth_disable_auth_for_local_addresses INTEGER); INSERT INTO general_configs VALUES (1);"
+  sqlite3 "$CONFIG_DIR/cleanuparr/users.db" "CREATE TABLE users (api_key TEXT); INSERT INTO users VALUES ('k');"
+}
+
+# Not running: the login requirement is turned on in its database
+test_cleanuparr_login_turned_on_while_stopped() {
+  cleanuparr_db
+  cleanuparr_require_login >/dev/null
+  expect_eq "$(sqlite3 "$CONFIG_DIR/cleanuparr/cleanuparr.db" 'SELECT auth_disable_auth_for_local_addresses FROM general_configs')" 0 "bypass"
+}
+
+# Running, not answering, and won't stop: setup must stop, not carry on
+test_cleanuparr_safeguard_stops_setup() {
+  cleanuparr_db
+  svc_loaded() { [ "$1" = cleanuparr ]; }
+  svc_stop() { return 1; }
+  api() { return 22; }
+  ( cleanuparr_require_login >/dev/null 2>&1; echo "carried on" ) | grep -q "carried on" && fail "setup carried on with the login bypass on"
+  return 0
+}
+
+# ─── Tailscale ───────────────────────────────────────────────────
+
+# A route published for an old dashboard port is still removed
+test_tailscale_removes_route_for_old_dashboard_port() {
+  echo 'timezone = "UTC"
+[network]
+dashboard_port = 80' > "$CONFIG_FILE"
+  echo '{"443": "http://127.0.0.1:8080"}' > "$STATE_DIR/tailscale-routes.json"
+  detect_tailscale_cli() { echo fake_tailscale; }
+  fake_tailscale() {
+    local IFS=' '  # "$*" joins with IFS's first character (setup's is a newline)
+    case "$*" in
+      "serve status --json") echo '{"Web":{"mac.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8080"}}}}}' ;;
+      "serve --https=443 off") touch "$FAKE/removed-443" ;;
+    esac
+  }
+  run_timeout() { shift; "$@"; }
+  remove_tailscale_serve >/dev/null || fail "reported a failure"
+  [ -f "$FAKE/removed-443" ] || fail "old dashboard route left published"
+  [ ! -f "$STATE_DIR/tailscale-routes.json" ] || fail "route record kept after removal"
+}
+
+# A removal that fails is reported and the record kept
+test_tailscale_removal_failure_is_reported() {
+  echo 'timezone = "UTC"' > "$CONFIG_FILE"
+  echo '{"8096": "http://127.0.0.1:8096"}' > "$STATE_DIR/tailscale-routes.json"
+  detect_tailscale_cli() { echo fake_tailscale; }
+  fake_tailscale() {
+    local IFS=' '  # "$*" joins with IFS's first character (setup's is a newline)
+    case "$*" in
+      "serve status --json") echo '{"Web":{"mac.ts.net:8096":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8096"}}}}}' ;;
+      *) return 1 ;;
+    esac
+  }
+  run_timeout() { shift; "$@"; }
+  remove_tailscale_serve >/dev/null 2>&1 && fail "a failed removal was reported as success"
+  [ -f "$STATE_DIR/tailscale-routes.json" ] || fail "record dropped after a failed removal"
+}
+
+# ─── e2e: Radarr indexers ────────────────────────────────────────
+
+# Restoring fails for one indexer: it stays recorded for the next run
+test_paused_indexers_kept_until_restored() {
+  RADARR_KEY=r
+  mkdir -p "$STATE_DIR/e2e"
+  echo '[{"id":1,"enableAutomaticSearch":true,"enableRss":true},{"id":2,"enableAutomaticSearch":true,"enableRss":false}]' > "$(e2e_paused_file)"
+  api_status() { echo 200; }
+  api() {
+    case "$1 $2" in
+      "GET "*/indexer/*) echo '{"enableAutomaticSearch":false,"enableRss":false}' ;;
+      "PUT "*/indexer/1*) return 0 ;;
+      "PUT "*/indexer/2*) [ -f "$FAKE/radarr_ok" ] ;;
+      *) return 22 ;;
+    esac
+  }
+  e2e_resume_radarr_indexers >/dev/null 2>&1 && fail "reported restored while one indexer failed"
+  expect_eq "$(jq -c '[.[].id]' "$(e2e_paused_file)")" "[2]" "still-paused record"
+  touch "$FAKE/radarr_ok"
+  e2e_resume_radarr_indexers >/dev/null || fail "restore failed"
+  [ ! -f "$(e2e_paused_file)" ] || fail "record kept after restoring"
 }
 
 echo "Failure-path tests"

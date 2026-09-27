@@ -21,12 +21,18 @@ jobs:
 
       - name: Bash Syntax
         run: |
-          for f in setup.sh install.sh scripts/*.sh scripts/steps/*.sh; do
+          for f in setup.sh install.sh scripts/*.sh scripts/steps/*.sh tests/*.sh; do
             bash -n "$f"
           done
 
       - name: ShellCheck
-        run: nix develop -c shellcheck -x -S warning setup.sh install.sh scripts/*.sh scripts/steps/*.sh
+        run: nix develop -c shellcheck -x -S warning setup.sh install.sh scripts/*.sh scripts/steps/*.sh tests/*.sh
+
+      # Interrupted password changes, backup/restore (through setup.sh), e2e
+      # cleanup when services don't answer; run with setup's shell settings,
+      # no services needed
+      - name: Failure-path tests
+        run: nix run .#unit
 
       # The example ships with password "changeme", which setup rejects on
       # purpose, so validate a copy with real-looking passwords.

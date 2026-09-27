@@ -345,6 +345,7 @@
                 gawk
                 jq
                 python3
+                sqlite
               ];
               text = "exec bash ${self}/tests/recovery.sh";
             }

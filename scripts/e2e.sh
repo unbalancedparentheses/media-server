@@ -14,7 +14,10 @@
 #
 # The releases are torrents built here whose data is already in the download
 # folder, so qBittorrent completes them instantly without peers or public
-# indexers. Everything the test adds is removed afterwards unless --keep.
+# indexers. The TV "episode" is the same film file under an episode name.
+# So this proves the integration (request → grab → import → library →
+# subtitles → Seerr), not searching indexers or downloading from peers.
+# Everything the test adds is removed afterwards unless --keep.
 # Results go to ~/media/logs/e2e-<timestamp>.log.
 
 E2E_MOVIE_TMDB=133701
@@ -77,30 +80,53 @@ print(hashlib.sha1(enc(info)).hexdigest())
 PY
 }
 
-# Indexers whose automatic search/RSS the test switched off, as JSON
-E2E_PAUSED_INDEXERS=""
+# Indexers whose automatic search/RSS the test switched off, with their
+# previous settings, saved before anything changes so a crash can't lose
+# them. An entry is removed only once its indexer is back on; what's left
+# is restored at the next test run or install.
+e2e_paused_file() { printf '%s' "$STATE_DIR/e2e/paused-indexers.json"; }
 e2e_pause_radarr_indexers() {
-  local H="X-Api-Key: $RADARR_KEY" idx
-  E2E_PAUSED_INDEXERS=$(api GET "$RADARR_URL/api/v3/indexer" -H "$H" | \
-    jq -c '[.[] | select(.enableAutomaticSearch or .enableRss) | {id, enableAutomaticSearch, enableRss}]')
-  for idx in $(jq -r '.[].id' <<< "$E2E_PAUSED_INDEXERS"); do
+  local H="X-Api-Key: $RADARR_KEY" idx f paused
+  f=$(e2e_paused_file)
+  # A previous run that never restored them
+  e2e_resume_radarr_indexers || err "Radarr indexers paused by an earlier test couldn't be re-enabled; fix that first (record: $f)"
+  paused=$(api GET "$RADARR_URL/api/v3/indexer" -H "$H" | \
+    jq -c '[.[] | select(.enableAutomaticSearch or .enableRss) | {id, enableAutomaticSearch, enableRss}]') || \
+    err "Couldn't read Radarr's indexers"
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$paused" > "$f"
+  for idx in $(jq -r '.[].id' <<< "$paused"); do
     api PUT "$RADARR_URL/api/v3/indexer/$idx?forceSave=true" -H "$H" \
-      -d "$(api GET "$RADARR_URL/api/v3/indexer/$idx" -H "$H" | jq -c '.enableAutomaticSearch = false | .enableRss = false')" >/dev/null
+      -d "$(api GET "$RADARR_URL/api/v3/indexer/$idx" -H "$H" | jq -c '.enableAutomaticSearch = false | .enableRss = false')" >/dev/null || true
   done
-  e2e_step "Paused automatic search on $(jq length <<< "$E2E_PAUSED_INDEXERS") Radarr indexers for the test"
+  e2e_step "Paused automatic search on $(jq length <<< "$paused") Radarr indexers for the test"
 }
+# Returns non-zero (and keeps the record) if any indexer couldn't be restored
 e2e_resume_radarr_indexers() {
-  [ -n "$E2E_PAUSED_INDEXERS" ] || return 0
-  local H="X-Api-Key: $RADARR_KEY" entry idx
+  local H="X-Api-Key: $RADARR_KEY" entry idx f left="[]" current
+  f=$(e2e_paused_file)
+  [ -f "$f" ] || return 0
   while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
     idx=$(jq -r .id <<< "$entry")
-    api PUT "$RADARR_URL/api/v3/indexer/$idx?forceSave=true" -H "$H" \
-      -d "$(api GET "$RADARR_URL/api/v3/indexer/$idx" -H "$H" | jq -c --argjson e "$entry" \
-        '.enableAutomaticSearch = $e.enableAutomaticSearch | .enableRss = $e.enableRss')" >/dev/null || \
-      warn "Could not re-enable Radarr indexer $idx; turn its search back on in Radarr"
-  done < <(jq -c '.[]' <<< "$E2E_PAUSED_INDEXERS")
-  E2E_PAUSED_INDEXERS=""
-  e2e_step "Radarr indexers restored"
+    case "$(api_status GET "$RADARR_URL/api/v3/indexer/$idx" -H "$H")" in
+      404) continue ;;  # deleted since: nothing to restore
+      200) ;;
+      *) left=$(jq -c --argjson e "$entry" '. + [$e]' <<< "$left"); continue ;;
+    esac
+    current=$(api GET "$RADARR_URL/api/v3/indexer/$idx" -H "$H") && \
+      api PUT "$RADARR_URL/api/v3/indexer/$idx?forceSave=true" -H "$H" -d "$(jq -c --argjson e "$entry" \
+        '.enableAutomaticSearch = $e.enableAutomaticSearch | .enableRss = $e.enableRss' <<< "$current")" >/dev/null || \
+      left=$(jq -c --argjson e "$entry" '. + [$e]' <<< "$left")
+  done < <(jq -c '.[]' "$f" 2>/dev/null)
+  if [ "$left" = "[]" ]; then
+    rm -f "$f"
+    e2e_step "Radarr indexers restored"
+    return 0
+  fi
+  printf '%s\n' "$left" > "$f"
+  warn "$(jq length <<< "$left") Radarr indexer(s) still paused; retried at the next test or install (record: $f)"
+  return 1
 }
 
 # Ownership: everything the test creates (Radarr movie, Sonarr series, Seerr
@@ -262,7 +288,7 @@ do_e2e() {
   # On any exit (failure, Ctrl-C): stop the server, restore the indexers
   # and remove what the test created, unless --keep
   E2E_KEEP_ON_EXIT="$keep"
-  trap 'kill "$E2E_SERVER_PID" 2>/dev/null || true; e2e_resume_radarr_indexers; [ "$E2E_KEEP_ON_EXIT" = "true" ] || e2e_cleanup || true; cleanup' EXIT
+  trap 'kill "$E2E_SERVER_PID" 2>/dev/null || true; e2e_resume_radarr_indexers || true; [ "$E2E_KEEP_ON_EXIT" = "true" ] || e2e_cleanup || true; cleanup' EXIT
 
   # ── Movie ──────────────────────────────────────────────────────
   info "Movie: Tears of Steel (2012)"
@@ -418,7 +444,7 @@ do_e2e() {
     fi
   fi
 
-  e2e_resume_radarr_indexers
+  e2e_resume_radarr_indexers || e2e_fail "Radarr's indexers couldn't all be re-enabled (retried at the next run)"
 
   # ── Cleanup ────────────────────────────────────────────────────
   if [ "$keep" = "true" ]; then

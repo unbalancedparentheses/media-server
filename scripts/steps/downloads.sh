@@ -159,47 +159,54 @@ configure_sabnzbd() {
   fi
 }
 
+# Usenet providers ([[usenet_providers]]) as SABnzbd servers. set_config on
+# the servers section creates or updates one (SABnzbd answers "not
+# implemented" to name=set_server). enable = false switches an existing
+# server off rather than skipping it.
 configure_usenet_providers() {
   PROVIDER_COUNT=$(cfg '.usenet_providers | length' 2>/dev/null || echo "0")
   [[ "$PROVIDER_COUNT" =~ ^[0-9]+$ ]] || PROVIDER_COUNT=0
-  if [ "$PROVIDER_COUNT" -gt 0 ] && [ -n "$SABNZBD_KEY" ]; then
-    info "Configuring SABnzbd usenet providers..."
-
-    for i in $(seq 0 $((PROVIDER_COUNT - 1))); do
-      PROV_ENABLED=$(cfg ".usenet_providers[$i].enable")
-      [ "$PROV_ENABLED" != "true" ] && continue
-
-      PROV_NAME=$(cfg ".usenet_providers[$i].name")
-      PROV_HOST=$(cfg ".usenet_providers[$i].host")
-      PROV_PORT=$(cfg ".usenet_providers[$i].port")
-      PROV_SSL=$(cfg ".usenet_providers[$i].ssl")
-      PROV_USER=$(cfg ".usenet_providers[$i].username")
-      PROV_PASS=$(cfg ".usenet_providers[$i].password")
-      PROV_CONN=$(cfg ".usenet_providers[$i].connections")
-
-      [ "$PROV_SSL" = "true" ] && SSL_VAL=1 || SSL_VAL=0
-
-      # SABnzbd server config via API
-      curl -sf -o /dev/null "$SABNZBD_URL/api" \
-        --data-urlencode "mode=config" \
-        --data-urlencode "name=set_server" \
-        --data-urlencode "apikey=$SABNZBD_KEY" \
-        --data-urlencode "output=json" \
-        --data-urlencode "keyword=$PROV_NAME" \
-        --data-urlencode "host=$PROV_HOST" \
-        --data-urlencode "port=$PROV_PORT" \
-        --data-urlencode "ssl=$SSL_VAL" \
-        --data-urlencode "username=$PROV_USER" \
-        --data-urlencode "password=$PROV_PASS" \
-        --data-urlencode "connections=$PROV_CONN" \
-        --data-urlencode "enable=1" 2>/dev/null && \
-        ok "$PROV_NAME ($PROV_HOST:$PROV_PORT)" || warn "Could not add $PROV_NAME"
-    done
-  fi
+  [ "$PROVIDER_COUNT" -gt 0 ] && [ -n "$SABNZBD_KEY" ] || return 0
+  info "Configuring SABnzbd usenet providers..."
+  local servers i name resp
+  servers=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=servers&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | \
+    jq -c '[.config.servers[]? | {name, enable}]' 2>/dev/null || echo "[]")
+  for i in $(seq 0 $((PROVIDER_COUNT - 1))); do
+    name=$(cfg ".usenet_providers[$i].name")
+    if [ "$(cfg ".usenet_providers[$i].enable")" != "true" ]; then
+      if jq -e --arg n "$name" 'any(.[]; .name == $n and .enable == 1)' <<< "$servers" >/dev/null; then
+        sab_set servers enable 0 "$name" && ok "$name disabled" || warn "Could not disable $name in SABnzbd"
+      fi
+      continue
+    fi
+    resp=$(api_retry curl -sf "$SABNZBD_URL/api" \
+      --data-urlencode "mode=set_config" --data-urlencode "section=servers" \
+      --data-urlencode "keyword=$name" \
+      --data-urlencode "host=$(cfg ".usenet_providers[$i].host")" \
+      --data-urlencode "port=$(cfg ".usenet_providers[$i].port")" \
+      --data-urlencode "ssl=$([ "$(cfg ".usenet_providers[$i].ssl")" = true ] && echo 1 || echo 0)" \
+      --data-urlencode "username=$(cfg ".usenet_providers[$i].username")" \
+      --data-urlencode "password=$(cfg ".usenet_providers[$i].password")" \
+      --data-urlencode "connections=$(cfg ".usenet_providers[$i].connections")" \
+      --data-urlencode "enable=1" \
+      --data-urlencode "apikey=$SABNZBD_KEY" --data-urlencode "output=json" 2>/dev/null || true)
+    if jq -e --arg n "$name" 'any(.config.servers[]?; .name == $n and .enable == 1)' <<< "$resp" >/dev/null 2>&1; then
+      ok "$name ($(cfg ".usenet_providers[$i].host"):$(cfg ".usenet_providers[$i].port"))"
+    else
+      warn "Could not add $name to SABnzbd ($(jq -r '.error // "no answer"' <<< "$resp" 2>/dev/null || echo "no answer"))"
+    fi
+  done
 }
 
 # One SABnzbd setting via its API, retried; non-zero if it never took
-sab_set() {  # section keyword value
+sab_set() {  # section keyword value [server-name]
+  if [ -n "${4:-}" ]; then
+    # A server's setting: the server is the keyword, the setting a field
+    api_retry curl -sf -o /dev/null "$SABNZBD_URL/api" --data-urlencode "mode=set_config" \
+      --data-urlencode "section=$1" --data-urlencode "keyword=$4" --data-urlencode "$2=$3" \
+      --data-urlencode "apikey=$SABNZBD_KEY" --data-urlencode "output=json" 2>/dev/null
+    return
+  fi
   api_retry curl -sf -o /dev/null "$SABNZBD_URL/api" --data-urlencode "mode=set_config" \
     --data-urlencode "section=$1" --data-urlencode "keyword=$2" --data-urlencode "value=$3" \
     --data-urlencode "apikey=$SABNZBD_KEY" --data-urlencode "output=json" 2>/dev/null

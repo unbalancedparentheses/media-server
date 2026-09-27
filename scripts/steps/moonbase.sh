@@ -2,7 +2,12 @@
 # Moonbase: the Jellyfin plugin behind the Moonfin apps. It serves the Moonfin
 # web app at /Moonfin/Web/ and connects Moonfin to Seerr for requests.
 
-MOONBASE_REPO_URL="https://raw.githubusercontent.com/Moonfin-Client/Plugin/refs/heads/master/manifest.json"
+# Pinned: the manifest at a fixed commit (it lists each version's download
+# and checksum, which Jellyfin verifies), and the version to install. To
+# update, point both at a newer commit/version of Moonfin-Client/Plugin.
+MOONBASE_COMMIT="06a4c18112330a34a27912805b421396cf319b70"
+MOONBASE_VERSION="2.3.0.0"
+MOONBASE_REPO_URL="https://raw.githubusercontent.com/Moonfin-Client/Plugin/$MOONBASE_COMMIT/manifest.json"
 MOONBASE_GUID="8c5d0e91-4f2a-4b6d-9e3f-1a7c8d9e0f2b"
 
 configure_moonbase() {
@@ -16,14 +21,9 @@ configure_moonbase() {
 
   plugin_id=$(moonbase_plugin_id)
   if [ -z "$plugin_id" ]; then
-    repos=$(api GET "$JELLYFIN_URL/Repositories" -H "$JT" || echo "[]")
-    if ! jq -e --arg u "$MOONBASE_REPO_URL" 'any(.[]; .Url == $u)' <<< "$repos" >/dev/null; then
-      repos=$(jq -c --arg u "$MOONBASE_REPO_URL" '. + [{Name: "Moonbase", Url: $u, Enabled: true}]' <<< "$repos")
-      api POST "$JELLYFIN_URL/Repositories" -H "$JT" -d "$repos" >/dev/null || { warn "Could not add the Moonbase plugin repository"; return 0; }
-      ok "Plugin repository added"
-    fi
-    api POST "$JELLYFIN_URL/Packages/Installed/Moonbase?assemblyGuid=$MOONBASE_GUID&repositoryUrl=$(urlencode "$MOONBASE_REPO_URL")" -H "$JT" >/dev/null || \
-      { warn "Could not install Moonbase"; return 0; }
+    moonbase_pin_repository "$JT" || return 0
+    api POST "$JELLYFIN_URL/Packages/Installed/Moonbase?assemblyGuid=$MOONBASE_GUID&version=$MOONBASE_VERSION&repositoryUrl=$(urlencode "$MOONBASE_REPO_URL")" -H "$JT" >/dev/null || \
+      { warn "Could not install Moonbase $MOONBASE_VERSION"; return 0; }
 
     # Installation is asynchronous; the plugin loads on the next restart
     local i=0
@@ -42,6 +42,11 @@ configure_moonbase() {
     [ -n "$plugin_id" ] || { warn "Moonbase didn't load after restart (see $LOG_DIR/jellyfin.log)"; return 0; }
   fi
   ok "Moonbase loaded"
+  # Existing installs: replace the moving repository with the pinned one
+  moonbase_pin_repository "$JT" || true
+  local installed
+  installed=$(api GET "$JELLYFIN_URL/Plugins" -H "$JT" | jq -r --arg id "$plugin_id" '.[] | select(.Id == $id) | .Version' 2>/dev/null || true)
+  [ "$installed" = "$MOONBASE_VERSION" ] || warn "Moonbase $installed is installed; setup pins $MOONBASE_VERSION"
 
   # Point Moonfin's requests at Seerr (Moonbase proxies to it server-side)
   local conf updated
@@ -74,4 +79,19 @@ configure_moonbase() {
 moonbase_plugin_id() {
   api GET "$JELLYFIN_URL/Plugins" -H "$(jf_auth "$JELLYFIN_TOKEN")" | \
     jq -r --arg g "$MOONBASE_GUID" '.[] | select((.Id | ascii_downcase | gsub("-"; "")) == ($g | gsub("-"; ""))) | .Id' | head -1 || true
+}
+
+# Jellyfin's repository list: the pinned Moonbase manifest, and no other
+# Moonbase entry (such as the moving master manifest older versions added,
+# which Jellyfin's plugin updates would follow)
+moonbase_pin_repository() {  # jellyfin-auth-header
+  local repos updated
+  repos=$(api GET "$JELLYFIN_URL/Repositories" -H "$1" || echo "[]")
+  updated=$(jq -c --arg u "$MOONBASE_REPO_URL" '
+    [.[] | select((.Url | test("Moonfin-Client/Plugin")) | not)] + [{Name: "Moonbase", Url: $u, Enabled: true}]' <<< "$repos")
+  if [ "$(jq -c 'sort_by(.Url)' <<< "$updated")" = "$(jq -c 'sort_by(.Url)' <<< "$repos")" ]; then
+    return 0
+  fi
+  api POST "$JELLYFIN_URL/Repositories" -H "$1" -d "$updated" >/dev/null || { warn "Could not set the Moonbase plugin repository"; return 1; }
+  ok "Plugin repository pinned (Moonbase $MOONBASE_VERSION)"
 }

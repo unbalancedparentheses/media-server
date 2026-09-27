@@ -267,7 +267,9 @@
       sec[2].forEach(function(s){
         var ico=icons[s[1]]||'\u25CF';
         // s = [port, name, description, optional path]
-        var url='http://'+h+':'+s[0]+(s[3]||'');
+        // Over HTTPS (Tailscale), Jellyfin and Seerr are published on HTTPS too
+        var https=location.protocol==='https:'&&(s[0]===8096||s[0]===5055);
+        var url=(https?'https://':'http://')+h+':'+s[0]+(s[3]||'');
         // Admin UIs listening on the Mac only can't be opened from here
         var off=adminOffHere&&s[0]!==8096&&s[0]!==5055;
         var tag=off?'div':'a';
