@@ -6,7 +6,7 @@ A self-hosted media server for macOS, set up with one command. Request a movie o
 bash <(curl -fsSL https://raw.githubusercontent.com/unbalancedparentheses/media-server/main/install.sh)
 ```
 
-Everything runs natively from [Nix](https://nixos.org): no Docker, no VM. Each service is a macOS launchd agent, and one command removes them all.
+It needs [Nix](https://determinate.systems/nix-installer/) first (see [Install](#install)). Everything runs natively from Nix: no Docker, no VM. Each service is a macOS launchd agent, and one command removes them all.
 
 **What you get**
 
@@ -28,7 +28,7 @@ Everything runs natively from [Nix](https://nixos.org): no Docker, no VM. Each s
 
 ## Install
 
-**You need:** a Mac (Apple silicon recommended) that stays on, about 10 GB free for the apps (they take about 5 GB once built) plus space for your library, and an internet connection.
+**You need:** a Mac that stays on (Apple silicon recommended; developed and tested on an M-series Mac with macOS 26), about 10 GB free for the apps (they take about 5 GB once built) plus space for your library, and an internet connection.
 
 1. **Install Nix** (skip if you have it):
 
@@ -82,6 +82,7 @@ To find your Mac's address, run `ipconfig getifaddr en0` or look in System Setti
   - Bazarr fetches subtitles; new episodes of monitored shows are grabbed as they air.
 - **Seeing progress:** the dashboard shows downloads in progress. Seerr shows each request's status. For details, open Sonarr (`:8989`) or Radarr (`:7878`) → Activity.
 - **Something is wrong with a file** (wrong language, bad quality): in Sonarr or Radarr, open the title, use the interactive search (the person icon), and pick another release. Unwanted downloads can be removed with "Blocklist release" so they're never picked again.
+- **Deleting something:** in Sonarr (shows) or Radarr (movies), open the title → Delete, with "Delete files" ticked. Jellyfin and Seerr follow. Deleting only in Jellyfin would leave Sonarr/Radarr to download it again.
 - **Running out of space:** you get a macOS notification when the disk drops below 50 GB free. Imports stop below 10 GB so the disk never fills completely. Delete things in Sonarr or Radarr, with "Delete files" ticked.
 - **Away from home:** install [Tailscale](https://tailscale.com) on the Mac and your devices. Setup then publishes Moonfin, Seerr and the dashboard over HTTPS on your private tailnet (for example `https://<mac-name>.<tailnet>.ts.net:8096`). Invite family to the tailnet to share.
 
@@ -133,6 +134,7 @@ nix run .#logs -- sonarr      # follow one service's log (also ~/media/logs)
 - **Setup stopped with an error.** It says what failed and where to look. Fix it and run `nix run .#install` again; it picks up where things stand.
 - **The dashboard doesn't load on port 80.** Something else uses the port: set `[network] dashboard_port` to another one, such as 8088.
 - **After a reboot nothing works.** The services start when you log in. For recovery after a power cut without anyone logging in, turn on automatic login (System Settings → Users & Groups).
+- **Forgot a password.** They're in `~/media/config.toml` (`[jellyfin]` is the login for Moonfin, Jellyfin and every admin page; `[qbittorrent]` for qBittorrent).
 - **Starting over.** `nix run .#uninstall -- --purge`, then `nix run .#install`. Your media stays.
 
 ## Reference
@@ -195,25 +197,106 @@ You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr �
 
 ### Configuration
 
-`~/media/config.toml`, created from [`config.toml.example`](config.toml.example) on the first run. Re-run `nix run .#install` after editing.
+`~/media/config.toml`, created from [`config.toml.example`](config.toml.example) on the first run (every setting is commented there too). Re-run `nix run .#install` after editing.
 
-- **Credentials:** `[jellyfin]` and `[qbittorrent]`. The Jellyfin login is shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd and Cleanuparr. To change a password, edit it here and re-run install: every service gets it, Jellyfin included. Short passwords work everywhere (Cleanuparr and qBittorrent refuse them through their APIs, so setup writes them directly). Setup records each service's login in `~/media/.state/credentials.json` only after logging in with it, so a change that fails part-way is retried on the next run. Renaming the Jellyfin user has to be done in Jellyfin itself.
-- **Quality:** `[quality]` picks the Sonarr/Radarr profiles requests use (built-in profiles: `HD-1080p`, `Ultra-HD`, …). Anime requests go to `~/media/anime` (Jellyfin's Anime library) with Sonarr's **Anime** profile, a copy of `sonarr_anime_profile` that setup creates.
-- **Audio:** anime comes with Japanese audio and English subtitles: English-dub-only releases are never grabbed for anime (`anime_block_dubs`; dual audio is fine). Movies and TV prefer releases with English audio (`prefer_english_audio`), without blocking films that have no English release.
-- **Release filters:** BR-DISK images, known-bad release groups, upscales, extras-only, 3D, and releases tagged with non-English subtitles (VOSTFR, BIG5, CHS, …; common with anime) are scored -10000 in every profile, so they're never grabbed. See [`custom-formats/`](custom-formats/README.md). HEVC (x265) releases get +100, so the smaller file wins when several are acceptable (`prefer_h265 = false` to turn off).
-- **Anime release groups:** anime releases are ranked by the TRaSH Guides tiers, Blu-ray groups above web groups (`anime_release_groups = false` turns the ranking off). Raw releases without subtitles and low-quality anime groups are always blocked. Matching goes by release name and group, so it makes Japanese audio and full subtitles very likely, not certain.
-- **File names:** `rename_files` (on by default) has Sonarr/Radarr name imports `Show - S01E01 - Title` and `Movie (Year)`, so Jellyfin always gets season and episode numbers (release names like `Show E01` leave it without). Turning it on renames the existing library once; library files are hard links, so seeding is unaffected.
-- **Subtitles:** `[subtitles]` languages and providers. With `want = "first"` (default) a title gets the first language found in list order (English, or Spanish when there's no English); `want = "all"` gets every language. The defaults need no account (including SubtitulamosTV and Subtis for Spanish); OpenSubtitles.com, SubDL, Jimaku and AnimeTosho (anime), SubX (Spanish) and Addic7ed are listed commented out, to enable after adding their login or API key in Bazarr. Most anime releases already carry English subtitles in the file, which the `embeddedsubtitles` provider recognizes.
-- **Playback:** `[playback]` sets the Jellyfin user's defaults: subtitles always on in English (Jellyfin falls back to another language when a file has no English), and Japanese audio when a file has it, so dual-audio anime plays in Japanese; everything else plays its default track. Setup re-applies these on every install. `hardware_acceleration` (on by default) has Jellyfin convert video with Apple's VideoToolbox when a TV or phone can't play a file directly, including 10-bit HEVC and AV1, instead of the CPU.
-- **Skip intro/credits:** Intro Skipper is turned on for the TV and Anime libraries (Jellyfin 12 enables segment providers per library). It analyzes the existing library once after install, then new episodes, and marks intros and credits; Jellyfin players that support media segments show a "Skip" button.
-- **Indexers:** `[[indexers]]` public torrent and anime indexers (Nyaa, SubsPlease, Mikan, Bangumi, …); `flaresolverr = true` routes one through Byparr. All of them sync to Sonarr and Radarr. `enable = false` disables one that's already added.
-- **Usenet:** public torrent sites are often thin (few or no seeders). Usenet is faster and more reliable, but needs two paid accounts: a **provider** (e.g. Newshosting, Eweka, Frugal Usenet) under `[[usenet_providers]]`, and an **indexer** (e.g. NZBgeek, DrunkenSlug, NZBFinder) under `[[indexers]]` with its API key (see the NZBgeek example in `config.toml.example`). Set `enable = true` on both and re-run install; Sonarr and Radarr then use SABnzbd automatically.
-- **Stuck downloads:** `[cleanuparr]` Cleanuparr checks the queue every 5 minutes. A public torrent with no progress for `stalled_strikes` checks (default 6, about 30 minutes), one that never gets metadata, or one that fails to import 3 times is removed, blocklisted, and searched for again. `enabled = false` turns it off.
-- **Uploads:** `[downloads] upload_limit_kib` caps qBittorrent's upload speed (default 100 KiB/s; 0 = no limit). `seeding_ratio` and `seeding_time_minutes` decide when finished torrents stop seeding.
-- **Disk space:** `[disk] warn_free_gb` (default 50) shows a macOS notification when the media disk runs low; below `min_free_gb` (default 10) Sonarr and Radarr stop importing so the disk never fills completely. `nix run .#status` shows free space.
-- **Network:** `[network] admin_bind` restricts where the admin UIs listen (`"0.0.0.0"` = every interface, `"127.0.0.1"` = this Mac only); `dashboard_port` moves the dashboard off port 80; `tailscale_https` publishes over Tailscale.
+**General**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `timezone` | `"America/New_York"` | Time zone for the services' schedules and logs. Must come before the first `[section]`. |
+
+**`[jellyfin]` and `[qbittorrent]`: logins**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `jellyfin.username` / `password` | `admin` / asked at setup | The login for Moonfin and Jellyfin, shared by Seerr, Sonarr, Radarr, Prowlarr, Bazarr, SABnzbd and Cleanuparr |
+| `qbittorrent.username` / `password` | `admin` / asked at setup | qBittorrent's own login |
+
+To change a password, edit it here and re-run install: every service gets it, Jellyfin included. Short passwords work everywhere (Cleanuparr and qBittorrent refuse them through their APIs, so setup writes them directly). Each service's login is recorded in `~/media/.state/credentials.json` only after setup has logged in with it, so a change that fails part-way is retried next time. Renaming the Jellyfin user has to be done in Jellyfin itself.
+
+**`[downloads]`**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `seeding_ratio` | `2` | Stop seeding a finished torrent after uploading this many times its size… |
+| `seeding_time_minutes` | `10080` (7 days) | …or after this long, whichever comes first |
+| `upload_limit_kib` | `100` | qBittorrent's upload speed cap in KiB/s (`0` = no limit) |
+
+**`[subtitles]`**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `languages` | `["en", "es"]` | Subtitle languages, in order of preference |
+| `want` | `"first"` | `"first"`: the first language found, in order (English, or Spanish when there's no English). `"all"`: every language. |
+| `providers` | 8 free providers | Where Bazarr looks. The defaults need no account (including SubtitulamosTV and Subtis for Spanish, and `embeddedsubtitles` for subtitles already inside the file). OpenSubtitles.com, SubDL, Jimaku and AnimeTosho (anime), SubX (Spanish) and Addic7ed are listed commented out: add their login or API key in Bazarr first, then uncomment. |
+
+**`[quality]`**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `sonarr_profile` / `radarr_profile` | `"HD-1080p"` | Quality profile for TV and movie requests (built in: `SD`, `HD-720p`, `HD-1080p`, `Ultra-HD`, `HD - 720p/1080p`, `Any`) |
+| `sonarr_anime_profile` | `"HD-1080p"` | Base of Sonarr's **Anime** profile, which setup creates for anime: anime requests go to `~/media/anime` with it |
+| `prefer_h265` | `true` | Prefer x265/HEVC releases (+100), so the smaller file wins when several are acceptable |
+| `prefer_english_audio` | `true` | Movies and TV: prefer releases with English audio (+50). A preference, not a block. |
+| `anime_block_dubs` | `true` | Anime: never grab English-dub-only releases (dual audio is fine) |
+| `anime_release_groups` | `true` | Anime: rank releases by the TRaSH Guides tiers, Blu-ray groups above web groups |
+| `rename_files` | `true` | Name imports `Show - S01E01 - Title` and `Movie (Year)`, so Jellyfin always gets season and episode numbers. Turning it on renames the existing library once; library files are hard links, so seeding is unaffected. |
+
+Always on: BR-DISK images, known-bad groups, upscales, extras-only, 3D, and releases tagged with non-English subtitles (VOSTFR, BIG5, CHS, …) are scored -10000, so they're never grabbed; for anime, raw releases without subtitles and low-quality groups too. See [`custom-formats/`](custom-formats/README.md). Release names and groups make Japanese audio and full subtitles very likely for anime, not certain.
+
+**`[playback]`: Jellyfin defaults for your user**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `subtitle_mode` | `"Always"` | `"Always"`, `"Smart"` (only when the audio isn't your language), `"OnlyForced"`, `"Default"` or `"None"` |
+| `subtitle_language` | `"eng"` | Preferred subtitle language (Jellyfin falls back to another when a file has none in it) |
+| `audio_language` | `"jpn"` | Audio track to use when a file has it (dual-audio anime plays in Japanese); other files play their default track. `""` = always the default track. |
+| `hardware_acceleration` | `true` | Convert video with Apple's VideoToolbox (H.264, HEVC, VP9, AV1 including 10-bit; HDR tone mapping) when a device can't play a file directly |
+
+Setup re-applies these on every install. Intro Skipper is always on for the TV and Anime libraries.
+
+**`[network]`**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `admin_bind` | `"0.0.0.0"` | Where the admin pages listen: `"0.0.0.0"` (every interface) or `"127.0.0.1"` (this Mac only). Moonfin, Seerr and the dashboard are always reachable. |
+| `dashboard_port` | `80` | The dashboard's port |
+| `tailscale_https` | `true` | If Tailscale is signed in, publish Moonfin, Seerr and the dashboard over HTTPS on your tailnet; `false` takes them down |
 
 There's no built-in VPN. If you use one, run its Mac app; torrent traffic follows the system connection.
+
+**`[disk]`**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `warn_free_gb` | `50` | Show a macOS notification (at most every 6 hours) when free space drops below this |
+| `min_free_gb` | `10` | Sonarr and Radarr stop importing below this, so the disk never fills completely |
+
+**`[cleanuparr]`: stuck downloads**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `enabled` | `true` | Check the queue every 5 minutes; remove public torrents that stalled, never got metadata (3 checks) or failed to import (3 times), blocklist them and search again |
+| `stalled_strikes` | `6` | Checks without progress before a torrent counts as stalled (6 × 5 minutes ≈ 30 minutes; at least 3) |
+
+**`[[indexers]]`: where to search**
+
+Each entry is one Prowlarr indexer, synced to Sonarr and Radarr:
+
+```toml
+[[indexers]]
+name = "Nyaa.si"            # shown in Prowlarr
+definitionName = "nyaasi"   # Prowlarr's indexer definition
+enable = true               # false disables one that's already added
+flaresolverr = false        # true: go through Byparr (Cloudflare-protected sites)
+fields = { apiKey = "…" }   # for indexers that need an account or API key
+```
+
+The defaults are 16 public ones: general (1337x, EZTV, The Pirate Bay, YTS, Knaben, LimeTorrents, Torrent Downloads, MegaPeer, KickassTorrents, Uindex) and anime (Nyaa, SubsPlease, Mikan, Bangumi Moe, Tokyo Toshokan, nekoBT). NZBgeek is included, disabled, as a Usenet example.
+
+**`[[usenet_providers]]`: Usenet (optional, paid)**
+
+Public torrents are often thinly shared; Usenet is faster and more reliable, but needs two paid accounts: a **provider** here (e.g. Newshosting, Eweka, Frugal Usenet) and an **indexer** under `[[indexers]]` with its API key (e.g. NZBgeek, DrunkenSlug, NZBFinder). Fill in `host`, `port`, `ssl`, `username`, `password`, `connections`, set `enable = true` on both, and re-run install; Sonarr and Radarr then use SABnzbd automatically. `enable = false` switches a provider off again.
 
 ### Access and security
 
@@ -248,6 +331,10 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 └── .state/              # Setup's records (applied logins, migration, test
                          # ownership, Tailscale routes), Byparr, Nix GC root
 ```
+
+### Legal
+
+This sets up software; what it downloads is up to you. Only download and share content you have the right to, and check the rules where you live. The automatic test uses Creative Commons works (*Tears of Steel*, *Pioneer One*).
 
 ### Extending
 
