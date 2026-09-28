@@ -373,6 +373,9 @@ run_verification() {
     check "Jellyfin → hardware transcoding ($(cfg_bool .playback.hardware_acceleration true))" "$(api GET "$JELLYFIN_URL/System/Configuration/encoding" -H "$(jf_auth "$JF_TOKEN_V")" | \
       jq --argjson on "$(cfg_bool .playback.hardware_acceleration true)" '(.HardwareAccelerationType == "videotoolbox") == $on' 2>/dev/null || echo false)"
   fi
+  check "Moonfin web app loads nothing from the internet (works offline)" "$(
+    idx=$(curl -sf "$JELLYFIN_URL/Moonfin/Web/" || true); boot=$(curl -sf "$JELLYFIN_URL/Moonfin/Web/flutter_bootstrap.js" || true)
+    ! grep -q '<script[^>]*src="https\?://' <<< "$idx" && grep -q 'canvasKitBaseUrl: "canvaskit/"' <<< "$boot" && echo true || echo false)"
   check "Moonfin web app (/Moonfin/Web/)" "$(case "$(http_code "$JELLYFIN_URL/Moonfin/Web/")" in 2*|3*) echo true ;; *) echo false ;; esac)"
 
   info "Services (launchd)..."

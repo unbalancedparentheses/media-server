@@ -247,10 +247,18 @@
             ];
           };
 
+          # Moonfin's web app loads hls.js from a CDN; setup serves this pinned
+          # copy instead, so it works without internet (e.g. on a flight)
+          moonfinHlsJs = pkgs.fetchurl {
+            url = "https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js";
+            hash = "sha256-SEBU6M0D0/bReB+39AK9wxjYpMUn+TOpXGJOJ8yalHA=";
+          };
+
           manifest = pkgs.writeText "media-server-services.json" (
             builtins.toJSON {
               inherit services;
               nginxMimeTypes = "${pkgs.nginx}/conf/mime.types";
+              moonfinHlsJs = "${moonfinHlsJs}";
             }
           );
 
