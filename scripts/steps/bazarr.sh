@@ -42,6 +42,11 @@ general.update(
     upgrade_subs=True, upgrade_frequency=12, days_to_upgrade_subs=7,
     # Prefer embedded subs (always correctly labeled)
     use_embedded_subs=True,
+    # ...but not picture-based ones (Blu-ray PGS, DVD VobSub): browsers
+    # can't show them, so Jellyfin burns them into the video, re-encoding
+    # every frame on the CPU. Ignoring them makes Bazarr fetch a text
+    # subtitle the player shows directly.
+    ignore_pgs_subs=True, ignore_vobsub_subs=True,
     # Listen where the other admin UIs do (network.admin_bind)
     ip=bind,
 )
@@ -78,10 +83,13 @@ PYEOF
       # update it when the list changed. Other profiles are kept as they are.
       local want_langs profiles_json
       want_langs=$(jq -Rc 'split(",") | map(select(. != ""))' <<< "$SUBTITLE_LANGS")
-      # subtitles.want = "first": done once any listed language is there
-      # (cutoff 65535 = "any"), searched in list order; "all": every language
+      # subtitles.want = "first": done once the first language is there
+      # (cutoff = its item id, 0). Until then the others are fetched too, as
+      # a fallback, and Bazarr keeps looking for the first; so a file with
+      # only Spanish still gets English when it exists. (65535, "any", would
+      # stop at whatever language happens to be there.) "all": every one.
       local cutoff=null
-      [ "$(cfg '.subtitles.want // "first"')" = first ] && cutoff=65535
+      [ "$(cfg '.subtitles.want // "first"')" = first ] && cutoff=0
       profiles_json=$(jq -c --argjson langs "$want_langs" --argjson cutoff "$cutoff" '
         ($langs | to_entries | map({id: .key, language: .value, hi: "False", forced: "False", audio_exclude: "False", audio_only_include: "False"})) as $items
         # Bazarr compares these flags as the strings "True"/"False"; booleans

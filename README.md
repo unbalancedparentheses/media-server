@@ -84,7 +84,7 @@ To find your Mac's address, run `ipconfig getifaddr en0` or look in System Setti
 - **Something is wrong with a file** (wrong language, bad quality): in Sonarr or Radarr, open the title, use the interactive search (the person icon), and pick another release. Unwanted downloads can be removed with "Blocklist release" so they're never picked again.
 - **Deleting something:** in Sonarr (shows) or Radarr (movies), open the title → Delete, with "Delete files" ticked. Jellyfin and Seerr follow. Deleting only in Jellyfin would leave Sonarr/Radarr to download it again.
 - **Running out of space:** you get a macOS notification when the disk drops below 50 GB free. Imports stop below 10 GB so the disk never fills completely. Delete things in Sonarr or Radarr, with "Delete files" ticked.
-- **Offline (on a flight):** everything plays from the Mac itself without internet. Open **`http://localhost:8096/web/`**, Jellyfin's own player (verified offline: login, libraries, artwork, playback, subtitles). Moonfin's web app is patched so it doesn't need the internet either (setup serves the renderer and player files it would download), but use the Jellyfin player if it doesn't load. Requests, new downloads, subtitle searches and Seerr need a connection. Phones and TVs need to reach the Mac over a network, so on a plane watch on the Mac.
+- **Offline (on a flight):** everything plays from the Mac itself without internet. Open **`http://localhost:8096/web/`**, Jellyfin's own player (verified offline: login, libraries, artwork, playback, subtitles). Moonfin's web app is patched so it doesn't need the internet either (setup serves the renderer and player files it would download), but use the Jellyfin player if it doesn't load. Requests, new downloads, subtitle searches and Seerr need a connection. Phones and TVs need to reach the Mac over a network, so on a plane watch on the Mac. Going offline doesn't cost you downloads: netwatch pauses Cleanuparr while there's no connection, and when you're back it re-tests the indexers and subtitle providers so downloads resume on their own.
 - **Away from home:** install [Tailscale](https://tailscale.com) on the Mac and your devices. Setup then publishes Moonfin, Seerr and the dashboard over HTTPS on your private tailnet (for example `https://<mac-name>.<tailnet>.ts.net:8096`). Invite family to the tailnet to share.
 
 ## Changing settings
@@ -195,6 +195,7 @@ You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr �
 | **[Cleanuparr](https://github.com/Cleanuparr/Cleanuparr)** | 11011 | Removes stalled, metadata-stuck and failed-import downloads; Sonarr/Radarr blocklist them and search again |
 | **[nginx](https://nginx.org)** | 80 | Dashboard with live download and calendar widgets |
 | **diskwatch** | — | Warns (macOS notification) when the media disk runs low |
+| **netwatch** | — | Notices the Mac going offline and back (every minute; offline after 3 failed checks). Offline: pauses Cleanuparr, which would otherwise remove every download as stalled. Back online: resumes it, re-tests the indexers (Prowlarr backs off for up to a day after failures) and clears Bazarr's provider throttling. Log: `~/media/logs/netwatch.log` |
 
 ### Configuration
 
@@ -228,8 +229,10 @@ To change a password, edit it here and re-run install: every service gets it, Je
 | Setting | Default | What it does |
 |---|---|---|
 | `languages` | `["en", "es"]` | Subtitle languages, in order of preference |
-| `want` | `"first"` | `"first"`: the first language found, in order (English, or Spanish when there's no English). `"all"`: every language. |
+| `want` | `"first"` | `"first"`: English (the first language); until English is found the others are fetched too as a fallback, and Bazarr keeps looking for English. `"all"`: every language. |
 | `providers` | 8 free providers | Where Bazarr looks. The defaults need no account (including SubtitulamosTV and Subtis for Spanish, and `embeddedsubtitles` for subtitles already inside the file). OpenSubtitles.com, SubDL, Jimaku and AnimeTosho (anime), SubX (Spanish) and Addic7ed are listed commented out: add their login or API key in Bazarr first, then uncomment. |
+
+Picture-based subtitles inside files (Blu-ray PGS, DVD VobSub) don't count: browsers can't show them, so Jellyfin would burn them into the video, re-encoding every frame on the CPU. Bazarr fetches a text subtitle for those files instead, which Jellyfin picks first.
 
 **`[quality]`**
 
