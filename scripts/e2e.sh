@@ -93,12 +93,19 @@ e2e_pause_radarr_indexers() {
   paused=$(api GET "$RADARR_URL/api/v3/indexer" -H "$H" | \
     jq -c '[.[] | select(.enableAutomaticSearch or .enableRss) | {id, enableAutomaticSearch, enableRss}]') || \
     err "Couldn't read Radarr's indexers"
-  mkdir -p "$(dirname "$f")"
-  printf '%s\n' "$paused" > "$f"
+  e2e_write_json "$f" "$paused"
+  local failed=0 current
   for idx in $(jq -r '.[].id' <<< "$paused"); do
-    api PUT "$RADARR_URL/api/v3/indexer/$idx?forceSave=true" -H "$H" \
-      -d "$(api GET "$RADARR_URL/api/v3/indexer/$idx" -H "$H" | jq -c '.enableAutomaticSearch = false | .enableRss = false')" >/dev/null || true
+    current=$(api GET "$RADARR_URL/api/v3/indexer/$idx" -H "$H") && \
+      api PUT "$RADARR_URL/api/v3/indexer/$idx?forceSave=true" -H "$H" \
+        -d "$(jq -c '.enableAutomaticSearch = false | .enableRss = false' <<< "$current")" >/dev/null || failed=1
   done
+  # A public release could win the race against the test's own: don't run
+  # with automatic search still on
+  if [ "$failed" = 1 ]; then
+    e2e_resume_radarr_indexers || true
+    err "Couldn't pause automatic search on Radarr's indexers; not running the test"
+  fi
   e2e_step "Paused automatic search on $(jq length <<< "$paused") Radarr indexers for the test"
 }
 # Returns non-zero (and keeps the record) if any indexer couldn't be restored
@@ -129,7 +136,7 @@ e2e_resume_radarr_indexers() {
     e2e_step "Radarr indexers restored"
     return 0
   fi
-  printf '%s\n' "$left" > "$f"
+  e2e_write_json "$f" "$left"
   warn "$(jq length <<< "$left") Radarr indexer(s) still paused; retried at the next test or install (record: $f)"
   return 1
 }
@@ -137,14 +144,21 @@ e2e_resume_radarr_indexers() {
 # Ownership: everything the test creates (Radarr movie, Sonarr series, Seerr
 # media, torrent hashes, download folders) is recorded here as it's created,
 # and cleanup removes only what's recorded. Nothing is matched by title.
+# Write a record atomically (temp file, then rename): an interruption leaves
+# the old or the new version, never half of one
+e2e_write_json() {  # file json
+  mkdir -p "$(dirname "$1")"
+  printf '%s\n' "$2" > "$1.tmp.$$" && mv -f "$1.tmp.$$" "$1"
+}
+
 e2e_owned_file() { printf '%s' "$STATE_DIR/e2e/owned.json"; }
 e2e_own() {
   local f
   f=$(e2e_owned_file)
-  [ -f "$f" ] || echo '{}' > "$f"
-  jq --arg k "$1" --arg v "$2" \
+  [ -f "$f" ] || e2e_write_json "$f" '{}'
+  e2e_write_json "$f" "$(jq --arg k "$1" --arg v "$2" \
     'if $k == "hashes" or $k == "paths" or $k == "library_paths" then .[$k] = ((.[$k] // []) + [$v] | unique) else .[$k] = $v end' \
-    "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    "$f")"
 }
 
 # Remove what the test owns, in dependency order: downloads, then

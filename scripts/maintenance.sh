@@ -15,6 +15,8 @@ STATE_RECORDS=(
   .state/e2e/owned.json
   .state/e2e/paused-indexers.json
   .state/tailscale-routes.json
+  .state/renamed-sonarr
+  .state/renamed-radarr
 )
 do_backup() {
   [ -d "$CONFIG_DIR" ] || err "Config directory not found: $CONFIG_DIR"

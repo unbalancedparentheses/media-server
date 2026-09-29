@@ -83,10 +83,19 @@ configure_cleanuparr() {
     ok "Rule: stalled for $stall_strikes checks"
   fi
 
-  local enabled want qc
+  local enabled want qc run_now
   enabled=$(cfg_bool .cleanuparr.enabled true)
+  # netwatch keeps the cleaner in line with this while online, and off
+  # while offline; it reads the intended state from here
+  mkdir -p "$STATE_DIR/netwatch"
+  printf '%s\n' "$enabled" > "$STATE_DIR/netwatch/cleanuparr-wanted"
+  run_now="$enabled"
+  if [ "$(cat "$STATE_DIR/netwatch/connection" 2>/dev/null)" = offline ]; then
+    run_now=false
+    [ "$enabled" = true ] && warn "Offline: Cleanuparr's queue cleaner stays paused until the connection is back (netwatch resumes it)"
+  fi
   qc=$(cleanuparr_api GET configuration/queue_cleaner || echo "{}")
-  want=$(jq -c --argjson on "$enabled" '
+  want=$(jq -c --argjson on "$run_now" '
     .enabled = $on
     # Also: metadata that never arrives (3 checks) and failed imports (3 tries)
     | .downloadingMetadataMaxStrikes = (if .downloadingMetadataMaxStrikes == 0 then 3 else .downloadingMetadataMaxStrikes end)

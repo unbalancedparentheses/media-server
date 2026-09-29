@@ -61,12 +61,14 @@ It needs [Nix](https://determinate.systems/nix-installer/) first (see [Install](
 
 You can run `nix run .#install` again at any time: it only changes what differs from `config.toml`.
 
+**All `nix run .#…` commands run from the media-server folder**: `cd ~/media-server` if you used the one-liner, or wherever you cloned it.
+
 ## First steps
 
 1. **Open Moonfin** at `http://localhost:8096/Moonfin/Web/` on the Mac, or `http://<mac-ip>:8096/Moonfin/Web/` from another device. Log in with the Jellyfin username and password you chose.
 2. **Request something.** Search for a movie or show in Moonfin (or in Seerr at `http://<mac-ip>:5055`) and press Request. It usually appears in the library within minutes to an hour, depending on how many people are sharing the release.
 3. **Install the apps.** Get **Moonfin** from the App Store, Google Play or Amazon on your TV, phone or tablet, enter `http://<mac-ip>:8096` as the server, and log in. LG and Samsung TVs can sideload Moonfin, or use Litefin.
-4. **Add your family.** In Jellyfin (`http://<mac-ip>:8096` → Dashboard → Users), create a user per person. Moonfin shows them as profiles, each with its own watch history. They can request too.
+4. **Add your family.** In Jellyfin (`http://<mac-ip>:8096` → Dashboard → Users), create a user per person. Moonfin shows them as profiles, each with its own watch history. They can request too, and their requests download right away (`[requests] auto_approve`; set it to `false` to approve them yourself in Seerr). The playback defaults (subtitles on, Japanese audio for anime) are set for your user only; others choose theirs in the player.
 5. **Look around the dashboard** at `http://localhost` (or `http://<mac-ip>`): current downloads, the upcoming-episodes calendar, recent requests and links to every service. `http://localhost/admin.html` lists the admin pages.
 
 To find your Mac's address, run `ipconfig getifaddr en0` or look in System Settings → Wi-Fi → Details.
@@ -74,7 +76,7 @@ To find your Mac's address, run `ipconfig getifaddr en0` or look in System Setti
 ## Everyday use
 
 - **Watching:** open Moonfin. Subtitles are on by default, in English, or Spanish when there's no English. Anime plays in Japanese when the file has it. "Skip intro" and "Skip credits" appear on episodes once Intro Skipper has analyzed them, which it does shortly after they arrive.
-- **Requesting:** request in Moonfin or Seerr. Anime goes to its own library with anime-specific rules (Japanese audio, well-rated release groups). Nothing needs to be approved; the request starts right away.
+- **Requesting:** request in Moonfin or Seerr. Anime goes to its own library with anime-specific rules (Japanese audio, well-rated release groups). Requests start right away, yours and (by default) everyone else's.
 - **What happens on its own:**
   - Sonarr and Radarr search for the best release that passes the filters, and keep watching for anything not found yet.
   - A download that stalls for about 30 minutes, or never starts, is removed and replaced with another release (Cleanuparr).
@@ -83,7 +85,7 @@ To find your Mac's address, run `ipconfig getifaddr en0` or look in System Setti
 - **Seeing progress:** the dashboard shows downloads in progress. Seerr shows each request's status. For details, open Sonarr (`:8989`) or Radarr (`:7878`) → Activity.
 - **Something is wrong with a file** (wrong language, bad quality): in Sonarr or Radarr, open the title, use the interactive search (the person icon), and pick another release. Unwanted downloads can be removed with "Blocklist release" so they're never picked again.
 - **Deleting something:** in Sonarr (shows) or Radarr (movies), open the title → Delete, with "Delete files" ticked. Jellyfin and Seerr follow. Deleting only in Jellyfin would leave Sonarr/Radarr to download it again.
-- **Running out of space:** you get a macOS notification when the disk drops below 50 GB free. Imports stop below 10 GB so the disk never fills completely. Delete things in Sonarr or Radarr, with "Delete files" ticked.
+- **Running out of space:** you get a macOS notification when the disk drops below 50 GB free. Sonarr and Radarr stop importing below 10 GB free; downloads already in progress can still use more, so free space before it gets that far. Delete things in Sonarr or Radarr, with "Delete files" ticked.
 - **Offline (on a flight):** everything plays from the Mac itself without internet. Open **`http://localhost:8096/web/`**, Jellyfin's own player (verified offline: login, libraries, artwork, playback, subtitles). Moonfin's web app is patched so it doesn't need the internet either (setup serves the renderer and player files it would download), but use the Jellyfin player if it doesn't load. Requests, new downloads, subtitle searches and Seerr need a connection. Phones and TVs need to reach the Mac over a network, so on a plane watch on the Mac. Going offline doesn't cost you downloads: netwatch pauses Cleanuparr while there's no connection, and when you're back it re-tests the indexers and subtitle providers so downloads resume on their own.
 - **Away from home:** install [Tailscale](https://tailscale.com) on the Mac and your devices. Setup then publishes Moonfin, Seerr and the dashboard over HTTPS on your private tailnet (for example `https://<mac-name>.<tailnet>.ts.net:8096`). Invite family to the tailnet to share.
 
@@ -109,12 +111,13 @@ Common changes:
 | Use Usenet | enable a provider under `[[usenet_providers]]` and an indexer under `[[indexers]]` (see [Usenet](#configuration)) |
 | Keep the admin pages on this Mac only | `[network] admin_bind = "127.0.0.1"` |
 | Stop publishing over Tailscale | `[network] tailscale_https = false` |
+| Approve family members' requests yourself | `[requests] auto_approve = false` |
 
 Every setting is explained in [`config.toml.example`](config.toml.example) and under [Configuration](#configuration).
 
 ## Updates, backups, uninstall
 
-- **Update:** `nix run .#update` backs up, pulls the latest version of this repo and re-runs setup. Service versions are pinned in `flake.lock`, and Renovate opens a pull request when there are updates.
+- **Update:** `nix run .#update` backs up, pulls the latest version of this repo and re-runs setup. Service versions are pinned in `flake.lock`, and Renovate opens a pull request when there are updates, once the [Renovate app](https://github.com/apps/renovate) is installed on the repository.
 - **Back up:** `nix run .#backup` saves all settings, accounts and watch history (not the media itself) to `~/media/backups`, keeping the last 10. The services are stopped for a moment so the databases are consistent. Backups contain passwords, so keep a copy on another disk.
 - **Restore:** `nix run .#restore -- ~/media/backups/<file>.tar.gz`, then `nix run .#install`. The current settings are kept next to it (`*.pre-restore-<time>`).
 - **Uninstall:** `nix run .#uninstall` stops and removes every service. `nix run .#uninstall -- --purge` also deletes settings, logs and state. Your movies, shows, downloads and backups are never deleted. Afterwards, `nix-collect-garbage` frees the disk space used by the apps.
@@ -195,7 +198,7 @@ You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr �
 | **[Cleanuparr](https://github.com/Cleanuparr/Cleanuparr)** | 11011 | Removes stalled, metadata-stuck and failed-import downloads; Sonarr/Radarr blocklist them and search again |
 | **[nginx](https://nginx.org)** | 80 | Dashboard with live download and calendar widgets |
 | **diskwatch** | — | Warns (macOS notification) when the media disk runs low |
-| **netwatch** | — | Notices the Mac going offline and back (every minute; offline after 3 failed checks). Offline: pauses Cleanuparr, which would otherwise remove every download as stalled. Back online: resumes it, re-tests the indexers (Prowlarr backs off for up to a day after failures) and clears Bazarr's provider throttling. Log: `~/media/logs/netwatch.log` |
+| **netwatch** | — | Checks the connection every minute (offline after 3 failed checks in a row) and keeps things in line each time, so a step that fails is retried: offline, Cleanuparr's queue cleaner is paused (it would otherwise remove every download as stalled); online, it's whatever `cleanuparr.enabled` says. Coming back also re-tests the indexers (Prowlarr backs off for up to a day after failures) and clears Bazarr's provider throttling. Nothing changes before its first successful check. Log: `~/media/logs/netwatch.log` |
 
 ### Configuration
 
@@ -259,6 +262,12 @@ Always on: BR-DISK images, known-bad groups, upscales, extras-only, 3D, and rele
 
 Setup re-applies these on every install. Intro Skipper is always on for the TV and Anime libraries.
 
+**`[requests]`**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `auto_approve` | `true` | Requests from other users (family members with their own Jellyfin account) download right away; `false`: they wait for an admin's approval in Seerr. Admins' requests are always approved. |
+
 **`[network]`**
 
 | Setting | Default | What it does |
@@ -274,7 +283,7 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 | Setting | Default | What it does |
 |---|---|---|
 | `warn_free_gb` | `50` | Show a macOS notification (at most every 6 hours) when free space drops below this |
-| `min_free_gb` | `10` | Sonarr and Radarr stop importing below this, so the disk never fills completely |
+| `min_free_gb` | `10` | Sonarr and Radarr stop importing below this (downloads in progress can still use more space) |
 
 **`[cleanuparr]`: stuck downloads**
 
@@ -305,7 +314,7 @@ Public torrents are often thinly shared; Usenet is faster and more reliable, but
 ### Access and security
 
 - **Remote access:** if [Tailscale](https://tailscale.com) is installed and signed in, setup publishes Jellyfin/Moonfin (`:8096`), Seerr (`:5055`) and the dashboard over HTTPS on your tailnet. `tailscale_https = false` takes them down again.
-- **Logins:** every admin UI requires a login, checked by `nix run .#test` with the `config.toml` password.
+- **Logins:** every admin UI requires a login. `nix run .#test` logs in to each with the `config.toml` password, except qBittorrent, which skips its login for this Mac: its stored password hash is checked instead.
 - **Dashboard:** it needs no login and shows downloads, calendars, requests and recently added items (read-only) to anyone who can reach it. The API keys stay in nginx, which only allows the read-only endpoints the widgets use, and only `GET`. With `admin_bind = "127.0.0.1"`, admin cards say "Only on the Mac" when the dashboard is opened from another device.
 - **qBittorrent:** it skips its login only for requests from this Mac, which is how setup, the *arr apps and the dashboard reach it.
 - **Byparr:** it has no login, so it only listens on `127.0.0.1`.

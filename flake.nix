@@ -146,97 +146,11 @@
             done
           '';
 
-          # Notices the Mac going offline and coming back (checked every
-          # minute). Offline, e.g. on a flight: pauses Cleanuparr's queue
-          # cleaner, which would otherwise take every download for stalled
-          # and remove and blocklist it. Back online: resumes it, re-tests the
-          # indexers (Prowlarr backs off for up to a day after failures, and
-          # Sonarr/Radarr then fail too) and clears Bazarr's provider
-          # throttling.
+          # Keeps the stack sensible when the Mac goes offline and comes back
+          # (scripts/netwatch.sh explains what it does)
           netwatchStart = pkgs.writeShellScript "netwatch" ''
-            set -u
             export PATH=${pkgs.curl}/bin:${pkgs.jq}/bin:/usr/bin:/bin
-            cfg="$NETWATCH_CONFIG"
-            flag="$NETWATCH_STATE/cleanuparr-paused"
-            mkdir -p "$NETWATCH_STATE"
-            log() { echo "$(date '+%F %T') $*"; }
-            key() { sed -n 's:.*<ApiKey>\(.*\)</ApiKey>.*:\1:p' "$cfg/$1/config.xml" 2>/dev/null; }
-            online() {
-              # NETWATCH_SIMULATE_OFFLINE: a file whose presence means offline (tests)
-              if [ -n "''${NETWATCH_SIMULATE_OFFLINE:-}" ]; then
-                [ ! -e "$NETWATCH_SIMULATE_OFFLINE" ]
-                return
-              fi
-              curl -fsS -o /dev/null --connect-timeout 5 -m 10 https://www.gstatic.com/generate_204 2>/dev/null ||
-                curl -fsS -o /dev/null --connect-timeout 5 -m 10 https://cloudflare.com/cdn-cgi/trace 2>/dev/null
-            }
-            cleaner() {  # get | put <json>
-              k=$(sqlite3 "$cfg/cleanuparr/users.db" 'SELECT api_key FROM users LIMIT 1' 2>/dev/null)
-              [ -n "$k" ] || return 1
-              if [ "$1" = get ]; then
-                curl -fsS -m 15 http://127.0.0.1:11011/api/configuration/queue_cleaner -H "X-Api-Key: $k"
-              else
-                curl -fsS -m 15 -o /dev/null -X PUT http://127.0.0.1:11011/api/configuration/queue_cleaner \
-                  -H "X-Api-Key: $k" -H "Content-Type: application/json" -d "$2"
-              fi
-            }
-            went_offline() {
-              local conf
-              conf=$(cleaner get) || { log "offline; couldn't reach Cleanuparr to pause it"; return; }
-              if [ "$(jq -r .enabled <<< "$conf")" = true ] && cleaner put "$(jq -c '.enabled = false' <<< "$conf")"; then
-                touch "$flag"
-                log "offline: paused Cleanuparr's queue cleaner"
-              else
-                log "offline"
-              fi
-            }
-            came_back() {
-              local conf k
-              # Resume only what this paused
-              if [ -f "$flag" ] && conf=$(cleaner get) && cleaner put "$(jq -c '.enabled = true' <<< "$conf")"; then
-                rm -f "$flag"
-                log "online: resumed Cleanuparr's queue cleaner"
-              fi
-              # Re-testing clears an indexer's back-off when it passes. It
-              # can take minutes (slow indexers), so it runs in the
-              # background; the apps answer 400 when any indexer still fails,
-              # which is still a completed test.
-              retest() {  # name url key
-                [ -n "$3" ] || return 0
-                if curl -sS -m 900 -o /dev/null -X POST "$2" -H "X-Api-Key: $3"; then
-                  log "online: re-tested $1's indexers"
-                else
-                  log "online: couldn't re-test $1's indexers"
-                fi
-              }
-              (
-                retest Prowlarr http://127.0.0.1:9696/api/v1/indexer/testall "$(key prowlarr)"
-                retest Sonarr http://127.0.0.1:8989/api/v3/indexer/testall "$(key sonarr)" &
-                retest Radarr http://127.0.0.1:7878/api/v3/indexer/testall "$(key radarr)" &
-                wait
-              ) &
-              k=$(sed -n '/^auth:/,/^[^ ]/{s/^  apikey: *//p;}' "$cfg/bazarr/config/config.yaml" 2>/dev/null | head -1 | tr -d "'")
-              [ -n "$k" ] && curl -fsS -m 30 -o /dev/null -X POST "http://127.0.0.1:6767/api/providers?apikey=$k" -d action=reset &&
-                log "online: cleared Bazarr's provider throttling"
-            }
-            was="" misses=0 interval="''${NETWATCH_INTERVAL:-60}"
-            while :; do
-              # Offline only after 3 failed checks in a row, so a DNS or
-              # Wi-Fi blip doesn't pause anything; back online at once
-              if online; then now=online misses=0
-              else
-                misses=$((misses + 1))
-                if [ "$misses" -ge 3 ]; then now=offline; else now="''${was:-online}"; fi
-              fi
-              if [ "$now" != "$was" ]; then
-                # At start, only act on a pause left by an earlier run
-                if [ "$now" = offline ]; then went_offline
-                elif [ -n "$was" ] || [ -f "$flag" ]; then came_back
-                fi
-                was=$now
-              fi
-              sleep "$interval"
-            done
+            exec ${pkgs.bash}/bin/bash ${./scripts/netwatch.sh}
           '';
 
           # Placeholders filled in by setup.sh when it writes the launchd agents:

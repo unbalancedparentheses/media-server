@@ -121,6 +121,8 @@ configure_seerr() {
     sync_js_connections sonarr "Sonarr" "$SONARR_URL" "$SONARR_KEY" "$SONARR_PROFILE" "$TV_DIR" 8989
     sync_js_connections radarr "Radarr" "$RADARR_URL" "$RADARR_KEY" "$RADARR_PROFILE" "$MOVIES_DIR" 7878
 
+    set_seerr_auto_approve
+
     api POST "$SEERR_URL/api/v1/settings/initialize" "${JA[@]}" >/dev/null 2>&1 || true
     ok "Setup finalized"
   else
@@ -172,4 +174,31 @@ sync_js_connections() {
       ok "$name: search on, profile $(echo "$updated" | jq -r '.activeProfileName'), folder $dir" || warn "Could not update $name connection"
   fi
   return 0
+}
+
+# [requests] auto_approve: whether requests from other users (family members
+# signing in with their Jellyfin account) download right away or wait for
+# an admin's approval in Seerr. Admins' requests are always approved.
+# Seerr permission bits: REQUEST 32, AUTO_APPROVE 128, ADMIN 2.
+set_seerr_auto_approve() {
+  local on main want users user id perms new
+  on=$(cfg_bool .requests.auto_approve true)
+  main=$(api GET "$SEERR_URL/api/v1/settings/main" "${JA[@]}") || { warn "Could not read Seerr's settings"; return 0; }
+  want=$(jq --argjson on "$on" '(.defaultPermissions // 32) as $p | if $on then ($p | . + (if (. / 128 | floor) % 2 == 1 then 0 else 128 end)) else ($p | . - (if (. / 128 | floor) % 2 == 1 then 128 else 0 end)) end' <<< "$main")
+  if [ "$(jq '.defaultPermissions' <<< "$main")" != "$want" ]; then
+    api POST "$SEERR_URL/api/v1/settings/main" "${JA[@]}" -d "$(jq -c --argjson p "$want" '.defaultPermissions = $p | del(.apiKey)' <<< "$main")" >/dev/null || \
+      { warn "Could not set Seerr's default permissions"; return 0; }
+  fi
+  # Existing users who aren't admins follow the setting too
+  users=$(api GET "$SEERR_URL/api/v1/user?take=500" "${JA[@]}" | jq -c '.results[]?' 2>/dev/null || true)
+  while IFS= read -r user; do
+    [ -n "$user" ] || continue
+    id=$(jq -r .id <<< "$user"); perms=$(jq -r .permissions <<< "$user")
+    [ $(( (perms / 2) % 2 )) = 1 ] && continue  # admin
+    if [ "$on" = true ]; then new=$(( perms | 128 )); else new=$(( perms & ~128 )); fi
+    [ "$new" = "$perms" ] && continue
+    api POST "$SEERR_URL/api/v1/user/$id/settings/permissions" "${JA[@]}" -d "{\"permissions\":$new}" >/dev/null || \
+      warn "Could not update $(jq -r '.displayName // .jellyfinUsername // "a user"' <<< "$user")'s Seerr permissions"
+  done <<< "$users"
+  ok "Requests from other users: $([ "$on" = true ] && echo "approved automatically" || echo "wait for an admin's approval")"
 }

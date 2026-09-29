@@ -461,6 +461,126 @@ test_plugin_repository_not_overwritten_when_unreadable() {
   [ ! -f "$FAKE/overwritten" ] || fail "overwrote Jellyfin's repository list"
 }
 
+# ─── netwatch ────────────────────────────────────────────────────
+
+# Load netwatch's functions against a fake Cleanuparr whose queue cleaner
+# state lives in $FAKE/cleaner ("true"/"false"); $FAKE/put_fails makes
+# changing it fail, $FAKE/offline makes the connection check fail
+netwatch_fakes() {
+  mkdir -p "$CONFIG_DIR/cleanuparr"
+  sqlite3 "$CONFIG_DIR/cleanuparr/users.db" "CREATE TABLE users (api_key TEXT); INSERT INTO users VALUES ('k');"
+  NETWATCH_CONFIG="$CONFIG_DIR" NETWATCH_STATE="$STATE_DIR/netwatch" NETWATCH_LIB=1
+  # shellcheck source=/dev/null
+  . "$ROOT/scripts/netwatch.sh"
+  probe() { [ ! -e "$FAKE/offline" ]; }
+  after_reconnect() { touch "$FAKE/reconnected"; }
+  curl() {
+    local IFS=' '  # "$*" joins with IFS's first character (setup's is a newline)
+    case "$*" in
+      *"-X PUT"*)
+        [ -e "$FAKE/put_fails" ] && return 22
+        jq -r .enabled <<< "${*: -1}" > "$FAKE/cleaner" ;;
+      *queue_cleaner*) printf '{"enabled":%s}\n' "$(cat "$FAKE/cleaner")" ;;
+    esac
+  }
+  NW_STATE=unknown NW_MISSES=0
+}
+
+# Pausing fails the first time the Mac is seen offline: the next round
+# retries it (it used to be tried once per transition)
+test_netwatch_retries_failed_pause() {
+  netwatch_fakes
+  echo true > "$FAKE/cleaner"
+  netwatch_round >/dev/null   # online
+  touch "$FAKE/offline" "$FAKE/put_fails"
+  for _ in 1 2 3; do netwatch_round >/dev/null; done
+  expect_eq "$NW_STATE" offline "state after 3 failed checks"
+  expect_eq "$(cat "$FAKE/cleaner")" true "cleaner while pausing fails"
+  rm "$FAKE/put_fails"
+  netwatch_round >/dev/null
+  expect_eq "$(cat "$FAKE/cleaner")" false "cleaner once pausing works"
+}
+
+# Online, the cleaner follows config.toml (via setup's file), even "off":
+# a stale pause never turns it on against the setting
+test_netwatch_follows_config_when_online() {
+  netwatch_fakes
+  mkdir -p "$STATE_DIR/netwatch"
+  echo false > "$STATE_DIR/netwatch/cleanuparr-wanted"
+  echo true > "$FAKE/cleaner"
+  netwatch_round >/dev/null
+  expect_eq "$(cat "$FAKE/cleaner")" false "cleaner with cleanuparr.enabled = false"
+  echo true > "$STATE_DIR/netwatch/cleanuparr-wanted"
+  netwatch_round >/dev/null
+  expect_eq "$(cat "$FAKE/cleaner")" true "cleaner with cleanuparr.enabled = true"
+}
+
+# Restarted while offline, with the cleaner paused: nothing turns it on
+# before a check succeeds, and coming back online resumes it once
+test_netwatch_restart_offline_keeps_cleaner_paused() {
+  netwatch_fakes
+  echo false > "$FAKE/cleaner"
+  touch "$FAKE/offline"
+  for _ in 1 2; do
+    netwatch_round >/dev/null
+    expect_eq "$(cat "$FAKE/cleaner")" false "cleaner before the connection is known"
+  done
+  netwatch_round >/dev/null
+  expect_eq "$NW_STATE" offline "state"
+  rm "$FAKE/offline"
+  netwatch_round >/dev/null
+  expect_eq "$(cat "$FAKE/cleaner")" true "cleaner back online"
+  [ -f "$FAKE/reconnected" ] || fail "indexers not re-tested after reconnecting"
+}
+
+# ─── Smaller recovery cases ──────────────────────────────────────
+
+# Renaming the existing library: recorded only once Sonarr accepted it
+test_rename_retried_after_interruption() {
+  CONFIG_JSON='{}'
+  api() {
+    case "$1 $2" in
+      "GET "*/config/naming) echo '{"renameEpisodes":true}' ;;
+      "GET "*/api/v3/series) echo '[{"id":1}]' ;;
+      "POST "*/command) [ -f "$FAKE/command_ok" ] && touch "$FAKE/renamed" ;;
+    esac
+  }
+  set_renaming Sonarr http://s k series >/dev/null 2>&1
+  [ ! -f "$STATE_DIR/renamed-sonarr" ] || fail "recorded as renamed although the request failed"
+  touch "$FAKE/command_ok"
+  set_renaming Sonarr http://s k series >/dev/null 2>&1
+  [ -f "$FAKE/renamed" ] || fail "rename not retried"
+  [ -f "$STATE_DIR/renamed-sonarr" ] || fail "not recorded after renaming"
+}
+
+# SABnzbd's server list can't be read: disabling a provider is reported,
+# not silently skipped
+test_usenet_unreadable_server_list_reported() {
+  SABNZBD_KEY=k
+  CONFIG_JSON='{"usenet_providers":[{"name":"prov","enable":false}]}'
+  curl() { return 7; }
+  local out
+  out=$(configure_usenet_providers 2>&1)
+  grep -q "Couldn't read SABnzbd's servers" <<< "$out" || fail "no warning: $out"
+}
+
+# e2e: pausing an indexer fails, so the test doesn't run with automatic
+# search still on, and what it paused is restored
+test_e2e_stops_when_pausing_indexers_fails() {
+  RADARR_KEY=r
+  api() {
+    case "$1 $2" in
+      "GET "*/api/v3/indexer) echo '[{"id":1,"enableAutomaticSearch":true,"enableRss":true}]' ;;
+      "GET "*/indexer/1) echo '{"id":1,"enableAutomaticSearch":true,"enableRss":true}' ;;
+      "PUT "*) [ -f "$FAKE/restoring" ] || { touch "$FAKE/restoring"; return 22; } ;;
+    esac
+  }
+  api_status() { echo 200; }
+  ( e2e_pause_radarr_indexers >/dev/null 2>&1; echo "ran on" ) | grep -q "ran on" && fail "carried on with search still on"
+  [ ! -f "$(e2e_paused_file)" ] || fail "paused-indexer record left after restoring"
+  return 0
+}
+
 echo "Failure-path tests"
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
   run_test "$t"

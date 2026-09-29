@@ -169,12 +169,16 @@ configure_usenet_providers() {
   [ "$PROVIDER_COUNT" -gt 0 ] && [ -n "$SABNZBD_KEY" ] || return 0
   info "Configuring SABnzbd usenet providers..."
   local servers i name resp
+  # Unknown (not empty) if the list can't be read: providers to disable are
+  # then reported and retried next run, not silently skipped
   servers=$(curl -sf "$SABNZBD_URL/api?mode=get_config&section=servers&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | \
-    jq -c '[.config.servers[]? | {name, enable}]' 2>/dev/null || echo "[]")
+    jq -ce '[.config.servers[] | {name, enable}]' 2>/dev/null) || servers=""
   for i in $(seq 0 $((PROVIDER_COUNT - 1))); do
     name=$(cfg ".usenet_providers[$i].name")
     if [ "$(cfg ".usenet_providers[$i].enable")" != "true" ]; then
-      if jq -e --arg n "$name" 'any(.[]; .name == $n and .enable == 1)' <<< "$servers" >/dev/null; then
+      if [ -z "$servers" ]; then
+        warn "Couldn't read SABnzbd's servers, so $name wasn't checked (retried next run)"
+      elif jq -e --arg n "$name" 'any(.[]; .name == $n and .enable == 1)' <<< "$servers" >/dev/null; then
         # SABnzbd answers errors with HTTP 200 too: check the server really is off
         if sab_set servers enable 0 "$name" && \
            curl -sf "$SABNZBD_URL/api?mode=get_config&section=servers&apikey=$SABNZBD_KEY&output=json" 2>/dev/null | \

@@ -73,6 +73,14 @@ subtitle_language = "eng"
 audio_language = "jpn"
 hardware_acceleration = true   # convert video with Apple's hardware (VideoToolbox) when a device needs it
 
+# ─── Requests (Seerr) ───────────────────────────────────────────
+# auto_approve: requests from other users (family members signing in with
+#   their own Jellyfin account) download right away; false = they wait for
+#   your approval in Seerr. Your own requests are always approved.
+
+[requests]
+auto_approve = true
+
 # ─── Network ────────────────────────────────────────────────────
 # admin_bind: address the admin UIs (Sonarr, Radarr, Prowlarr, Bazarr,
 #   qBittorrent, SABnzbd) listen on: "0.0.0.0" = every interface (LAN +

@@ -164,6 +164,8 @@ run_verification() {
     # Anime requests go to the same Sonarr, into the anime folder
     check_seerr_conn "Sonarr" "$JS_SONARR_V" "Sonarr" 8989 "$TV_DIR" "$SONARR_PROFILE" \
       "(.seriesType // \"standard\") != \"anime\" and .animeSeriesType == \"anime\" and .activeAnimeDirectory == \"$ANIME_DIR\" and .activeAnimeProfileName == \"$ANIME_PROFILE\""
+    check "Seerr → requests from other users $([ "$(cfg_bool .requests.auto_approve true)" = true ] && echo "approved automatically" || echo "need approval")" \
+      "$(api GET "$SEERR_URL/api/v1/settings/main" -H "$JH" | jq --argjson on "$(cfg_bool .requests.auto_approve true)" '((.defaultPermissions / 128 | floor) % 2 == 1) == $on' 2>/dev/null || echo false)"
     check "Seerr → only one Sonarr connection" "$(jq 'length == 1' <<< "$JS_SONARR_V" 2>/dev/null || echo false)"
     check_seerr_conn "Radarr" "$JS_RADARR_V" "Radarr" 7878 "$MOVIES_DIR" "$RADARR_PROFILE"
 
@@ -231,7 +233,12 @@ run_verification() {
     done
     check "Cleanuparr → qBittorrent connected" "$(api GET "$CLEANUPARR_URL/api/configuration/download_client" -H "X-Api-Key: $cu_key" | jq 'any(.clients[]?; .typeName == "qBittorrent" and .enabled)' 2>/dev/null || echo false)"
     if [ "$(cfg_bool .cleanuparr.enabled true)" = true ]; then
-      check "Cleanuparr → queue cleaner on" "$(api GET "$CLEANUPARR_URL/api/configuration/queue_cleaner" -H "X-Api-Key: $cu_key" | jq '.enabled' 2>/dev/null || echo false)"
+      # Paused by netwatch while offline
+      if [ "$(cat "$STATE_DIR/netwatch/connection" 2>/dev/null)" = offline ]; then
+        check "Cleanuparr → queue cleaner paused (offline)" "$(api GET "$CLEANUPARR_URL/api/configuration/queue_cleaner" -H "X-Api-Key: $cu_key" | jq '.enabled == false' 2>/dev/null || echo false)"
+      else
+        check "Cleanuparr → queue cleaner on" "$(api GET "$CLEANUPARR_URL/api/configuration/queue_cleaner" -H "X-Api-Key: $cu_key" | jq '.enabled' 2>/dev/null || echo false)"
+      fi
       check "Cleanuparr → stalled-download rule ($(cfg '.cleanuparr.stalled_strikes // 6') strikes)" "$(api GET "$CLEANUPARR_URL/api/queue-rules/stall" -H "X-Api-Key: $cu_key" | \
         jq --argjson s "$(cfg '.cleanuparr.stalled_strikes // 6')" 'any(.[]; .name == "Stalled" and .enabled and .maxStrikes == $s)' 2>/dev/null || echo false)"
     fi
@@ -373,7 +380,7 @@ run_verification() {
     check "Jellyfin → hardware transcoding ($(cfg_bool .playback.hardware_acceleration true))" "$(api GET "$JELLYFIN_URL/System/Configuration/encoding" -H "$(jf_auth "$JF_TOKEN_V")" | \
       jq --argjson on "$(cfg_bool .playback.hardware_acceleration true)" '(.HardwareAccelerationType == "videotoolbox") == $on' 2>/dev/null || echo false)"
   fi
-  check "Moonfin web app loads nothing from the internet (works offline)" "$(
+  check "Moonfin web app references nothing on the internet (page and loader files; not a browser test)" "$(
     idx=$(curl -sf "$JELLYFIN_URL/Moonfin/Web/" || true); boot=$(curl -sf "$JELLYFIN_URL/Moonfin/Web/flutter_bootstrap.js" || true)
     ! grep -q '<script[^>]*src="https\?://' <<< "$idx" && grep -q 'canvasKitBaseUrl: "canvaskit/"' <<< "$boot" && echo true || echo false)"
   check "Moonfin web app (/Moonfin/Web/)" "$(case "$(http_code "$JELLYFIN_URL/Moonfin/Web/")" in 2*|3*) echo true ;; *) echo false ;; esac)"

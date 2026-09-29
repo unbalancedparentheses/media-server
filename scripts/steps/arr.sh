@@ -244,23 +244,33 @@ migrate_monitoring() {  # db old-series-id new-series-id old-row
 # on also renames what's already in the library, once. Library files are
 # hard links, so seeding is unaffected.
 set_renaming() {  # label url key kind(series|movie)
-  local label="$1" url="$2" H="X-Api-Key: $3" kind="$4" naming field want ids command
+  local label="$1" url="$2" H="X-Api-Key: $3" kind="$4" naming field want ids body marker
+  marker="$STATE_DIR/renamed-$(tr '[:upper:]' '[:lower:]' <<< "$label")"
   field=$([ "$kind" = series ] && echo renameEpisodes || echo renameMovies)
   want=$(cfg_bool .quality.rename_files true)
   naming=$(api GET "$url/api/v3/config/naming" -H "$H") || { warn "$label: could not read its naming settings"; return 0; }
-  [ "$(jq -r ".$field" <<< "$naming")" = "$want" ] && { ok "$label: rename files $want"; return 0; }
-  api PUT "$url/api/v3/config/naming" -H "$H" -d "$(jq -c --argjson w "$want" ".$field = \$w" <<< "$naming")" >/dev/null || \
-    { warn "$label: could not change its file naming"; return 0; }
-  ok "$label: rename files $want"
-  [ "$want" = true ] || return 0
-  if [ "$kind" = series ]; then
-    ids=$(api GET "$url/api/v3/series" -H "$H" | jq -c '[.[].id]') command=RenameSeries
-    [ "$ids" != "[]" ] && api POST "$url/api/v3/command" -H "$H" -d "$(jq -nc --argjson ids "$ids" '{name: "RenameSeries", seriesIds: $ids}')" >/dev/null
-  else
-    ids=$(api GET "$url/api/v3/movie" -H "$H" | jq -c '[.[].id]') command=RenameMovie
-    [ "$ids" != "[]" ] && api POST "$url/api/v3/command" -H "$H" -d "$(jq -nc --argjson ids "$ids" '{name: "RenameMovie", movieIds: $ids}')" >/dev/null
+  if [ "$(jq -r ".$field" <<< "$naming")" != "$want" ]; then
+    api PUT "$url/api/v3/config/naming" -H "$H" -d "$(jq -c --argjson w "$want" ".$field = \$w" <<< "$naming")" >/dev/null || \
+      { warn "$label: could not change its file naming"; return 0; }
   fi
-  [ "$ids" != "[]" ] && ok "$label: renaming the files already in the library ($command)"
+  ok "$label: rename files $want"
+  [ "$want" = true ] || { rm -f "$marker"; return 0; }
+  # The existing library is renamed once; recorded only after Sonarr/Radarr
+  # accepted the request, so an interrupted run does it next time
+  [ -f "$marker" ] && return 0
+  if [ "$kind" = series ]; then
+    ids=$(api GET "$url/api/v3/series" -H "$H" | jq -c '[.[].id]') || return 0
+    body=$(jq -nc --argjson ids "$ids" '{name: "RenameSeries", seriesIds: $ids}')
+  else
+    ids=$(api GET "$url/api/v3/movie" -H "$H" | jq -c '[.[].id]') || return 0
+    body=$(jq -nc --argjson ids "$ids" '{name: "RenameMovie", movieIds: $ids}')
+  fi
+  if [ "$ids" = "[]" ] || api POST "$url/api/v3/command" -H "$H" -d "$body" >/dev/null; then
+    mkdir -p "$STATE_DIR" && touch "$marker"
+    [ "$ids" = "[]" ] || ok "$label: renaming the files already in the library"
+  else
+    warn "$label: could not start renaming the existing files (retried next run)"
+  fi
   return 0
 }
 
