@@ -177,6 +177,8 @@ do_update() {
   info "Re-running setup..."
   local setup_args=()
   [ "$NON_INTERACTIVE" = "true" ] && setup_args+=(--yes)
+  # The re-run takes the lock itself
+  release_lock
   exec nix --extra-experimental-features "nix-command flakes" run "path:$repo#install" -- ${setup_args[@]+"${setup_args[@]}"}
 }
 
@@ -267,11 +269,9 @@ remove_tailscale_serve() {
 # Remember a route setup published, so it can be removed even after the
 # config changes
 record_tailscale_route() {  # port target
-  local routes="$STATE_DIR/tailscale-routes.json" tmp
-  tmp="$routes.tmp.$$"
-  mkdir -p "$STATE_DIR"
-  jq --arg p "$1" --arg t "$2" '.[$p] = $t' "$routes" 2>/dev/null > "$tmp" || jq -n --arg p "$1" --arg t "$2" '{($p): $t}' > "$tmp"
-  mv -f "$tmp" "$routes"
+  local routes="$STATE_DIR/tailscale-routes.json" updated
+  updated=$(jq -c --arg p "$1" --arg t "$2" '.[$p] = $t' "$routes" 2>/dev/null) || updated=$(jq -nc --arg p "$1" --arg t "$2" '{($p): $t}')
+  write_atomic "$routes" "$updated"
 }
 
 # ─── Status / logs / restart ─────────────────────────────────────

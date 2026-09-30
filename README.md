@@ -124,13 +124,16 @@ Every setting is explained in [`config.toml.example`](config.toml.example) and u
 
 ## Troubleshooting
 
-Start with these three commands:
+Start with these:
 
 ```bash
+nix run .#doctor              # is it working? findings with evidence and what to do
 nix run .#status              # which services are running, and free disk space
-nix run .#test                # about 120 checks, with what failed
+nix run .#test                # about 120 checks that the setup is correct
 nix run .#logs -- sonarr      # follow one service's log (also ~/media/logs)
 ```
+
+`doctor` is read-only. It reports what it observes (indexers switched off after failures, downloads that haven't moved in a day, what Sonarr/Radarr's health checks say, titles still without subtitles, anime made in Japanese whose files have no Japanese audio, subtitles only available as pictures, disk space, work an interrupted operation left unfinished) and suggests what to do; it never changes anything.
 
 - **A request never downloads.** Public torrents are sometimes dead or thinly shared. Check Sonarr/Radarr → Activity: Cleanuparr replaces stalled downloads automatically, and Wanted → Missing lists titles still being searched for. Old or obscure titles may simply have no release that passes the filters. Usenet (paid) helps a lot here.
 - **No subtitles.** The free providers don't have everything. Adding a free [OpenSubtitles.com](https://www.opensubtitles.com) account (in Bazarr, then in `config.toml`) covers most gaps. Also check that the file isn't already carrying subtitles in the player's subtitle menu.
@@ -148,6 +151,7 @@ nix run .#logs -- sonarr      # follow one service's log (also ~/media/logs)
 ```bash
 nix run .#install                 # Set up, or apply config.toml changes (--yes: no prompts)
 nix run .#status                  # Services, health, free disk space
+nix run .#doctor                  # Is it working? Findings and what to do (read-only)
 nix run .#logs -- <service>       # Follow a service's log
 nix run .#restart [-- <service>]  # Restart one or all services
 nix run .#test                    # Verification checks
@@ -160,6 +164,8 @@ nix run .#uninstall [-- --purge]  # Remove the services (--purge: and their data
 ```
 
 `./setup.sh` does the same as `nix run .#install` (it runs itself through Nix). Other flags: `--check-config`, `--preflight`, `--dry-run`.
+
+Only one operation that changes the services (install, update, restore, backup, uninstall, restart, e2e) runs at a time; a second one says what's running and stops. `config.toml` is checked in full before anything changes: unknown or misspelled settings (with a "did you mean"), wrong types and out-of-range values are all listed, and nothing is touched until they're fixed. Each install ends with how long it took and its slowest steps.
 
 ### How it works
 
@@ -330,6 +336,7 @@ Public torrents are often thinly shared; Usenet is faster and more reliable, but
 
   The film (372 MB) is downloaded once into `~/media/.state/e2e`. The test builds its own torrents with the data already in place, so they complete instantly (the TV episode is the same file under an episode name). It proves request → grab → import → library → subtitles → Seerr, not indexer searches or downloading from peers. Radarr's automatic search is paused while it runs, with the settings saved first so they're restored even after a crash. The test records what it creates and only ever removes that, refuses to run if the test titles are already in your library, and keeps its record when a service doesn't answer during cleanup, retrying next time. `--keep` leaves everything in place for inspection. Logs: `~/media/logs/e2e-*.log`.
 - **`nix run .#unit`** runs the failure-path tests, which need no services and run with setup's own shell settings: interrupted password changes, backup and restore through `setup.sh`, an interrupted anime migration, Cleanuparr's login safeguard, Tailscale route removal, plugin repositories that can't be read, and e2e cleanup and indexer restore when a service doesn't answer. CI runs them on every push.
+- **Fresh install** ([`.github/workflows/fresh-install.yml`](.github/workflows/fresh-install.yml)), weekly and on demand on a clean GitHub Mac: install → checks → a re-run that must change nothing → a config change → an invalid config that must be rejected → e2e → doctor → backup and restore → uninstall, which must leave nothing behind.
 
 ### Files
 

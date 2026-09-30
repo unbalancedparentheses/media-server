@@ -147,8 +147,7 @@ e2e_resume_radarr_indexers() {
 # Write a record atomically (temp file, then rename): an interruption leaves
 # the old or the new version, never half of one
 e2e_write_json() {  # file json
-  mkdir -p "$(dirname "$1")"
-  printf '%s\n' "$2" > "$1.tmp.$$" && mv -f "$1.tmp.$$" "$1"
+  write_atomic "$1" "$2"
 }
 
 e2e_owned_file() { printf '%s' "$STATE_DIR/e2e/owned.json"; }

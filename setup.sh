@@ -8,6 +8,7 @@ IFS=$'\n\t'
 #
 # Usage: nix run .#install  (or ./setup.sh)   Full setup + verification
 #        nix run .#status                     Service state and health
+#        nix run .#doctor                     Is it working? Findings + what to do
 #        nix run .#logs -- <service>          Follow a service's log
 #        nix run .#restart -- [service]       Restart one or all services
 #        nix run .#test                       Run verification only
@@ -51,6 +52,8 @@ MAX_BACKUPS=10
 . "$SCRIPT_DIR/scripts/maintenance.sh"
 # shellcheck source=scripts/e2e.sh
 . "$SCRIPT_DIR/scripts/e2e.sh"
+# shellcheck source=scripts/doctor.sh
+. "$SCRIPT_DIR/scripts/doctor.sh"
 for step in "$SCRIPT_DIR"/scripts/steps/*.sh; do
   # shellcheck source=/dev/null
   . "$step"
@@ -61,7 +64,7 @@ init_service_registry
 
 # Clean up temp files on exit
 TMPDIR_SETUP=$(mktemp -d)
-cleanup() { rm -rf "$TMPDIR_SETUP"; }
+cleanup() { rm -rf "$TMPDIR_SETUP"; release_lock; }
 trap cleanup EXIT
 
 # ─── Mode selection ──────────────────────────────────────────────
@@ -71,7 +74,7 @@ NON_INTERACTIVE=false
 DRY_RUN=false
 PURGE=false
 E2E_KEEP=false
-USAGE="Usage: setup.sh [--yes] [--dry-run] [--preflight|--check-config|--test|--e2e [--keep]|--status|--logs <service>|--restart [service]|--update|--backup|--restore <file>|--uninstall [--purge]]"
+USAGE="Usage: setup.sh [--yes] [--dry-run] [--preflight|--check-config|--test|--e2e [--keep]|--status|--doctor|--logs <service>|--restart [service]|--update|--backup|--restore <file>|--uninstall [--purge]]"
 set_mode() {
   [ -n "$MODE" ] && err "Only one mode can be used at a time"
   MODE="$1"
@@ -82,7 +85,7 @@ while [ "$#" -gt 0 ]; do
     --dry-run) DRY_RUN=true ;;
     --purge) PURGE=true ;;
     --keep) E2E_KEEP=true ;;
-    --preflight|--check-config|--test|--e2e|--status|--update|--backup|--uninstall)
+    --preflight|--check-config|--test|--e2e|--status|--doctor|--update|--backup|--uninstall)
       MODE_NAME="${1#--}"
       set_mode "${MODE_NAME//-/_}"
       ;;
@@ -104,34 +107,43 @@ done
 [ -z "$MODE" ] && MODE="setup"
 [ "$PURGE" = "true" ] && [ "$MODE" != "uninstall" ] && err "--purge only goes with --uninstall"
 
+# Each step is timed (measure before optimizing); the summary lists the slowest
+STEP_TIMES=""
+timed() {
+  local start=$SECONDS
+  "$@"
+  STEP_TIMES+="$((SECONDS - start)) $1"$'\n'
+}
+
 run_setup() {
-  check_platform
-  ensure_config
-  configure_tailscale
-  create_directories
-  write_service_configs
-  start_stack
-  read_setup_config
-  creds_load
-  wait_for_services
-  load_api_keys
+  SETUP_STARTED=$SECONDS
+  timed check_platform
+  timed ensure_config
+  timed configure_tailscale
+  timed create_directories
+  timed write_service_configs
+  timed start_stack
+  timed read_setup_config
+  timed creds_load
+  timed wait_for_services
+  timed load_api_keys
   # Radarr indexers an interrupted e2e test left paused
   e2e_resume_radarr_indexers || true
-  configure_qbittorrent
-  configure_jellyfin
-  configure_sabnzbd
-  configure_arrs
-  configure_junk_filters
-  configure_prowlarr
-  configure_usenet_providers
-  configure_bazarr
-  configure_sabnzbd_auth
-  configure_seerr
-  configure_moonbase
-  configure_intro_skipper
-  configure_unpackerr
-  configure_cleanuparr
-  write_api_proxy
+  timed configure_qbittorrent
+  timed configure_jellyfin
+  timed configure_sabnzbd
+  timed configure_arrs
+  timed configure_junk_filters
+  timed configure_prowlarr
+  timed configure_usenet_providers
+  timed configure_bazarr
+  timed configure_sabnzbd_auth
+  timed configure_seerr
+  timed configure_moonbase
+  timed configure_intro_skipper
+  timed configure_unpackerr
+  timed configure_cleanuparr
+  timed write_api_proxy
 }
 
 print_summary() {
@@ -160,6 +172,15 @@ print_summary() {
   echo "  Apps: install Moonfin (App Store, Google Play, Amazon) and point it at"
   echo "  http://${lan_ip:-<this Mac>}:8096. Log in with your Jellyfin user."
   echo ""
+  echo "  What the checks above prove: every service is running, configured,"
+  echo "  connected to the others, and accepts your login. They don't prove that"
+  echo "  releases are found (that depends on the indexers), that playback works"
+  echo "  on your devices, or that Moonfin loads offline in a browser."
+  echo "    Is it working right now?        nix run .#doctor"
+  echo "    Request → library → subtitles:  nix run .#e2e"
+  echo ""
+  echo "  Setup took $((SECONDS - SETUP_STARTED))s; slowest: $(printf '%s' "$STEP_TIMES" | sort -rn | head -3 | awk '{printf "%s%s %ss", (NR>1?", ":""), $2, $1}')"
+  echo ""
   echo "  Manage: nix run .#status | .#logs -- <service> | .#restart | .#uninstall"
   echo "  Keep the Mac awake while serving: System Settings → Energy → Prevent"
   echo "  automatic sleeping when the display is off."
@@ -184,6 +205,11 @@ if [ "$DRY_RUN" = "true" ]; then
   exit 0
 fi
 
+# Operations that change the services take the lock (read-only ones don't)
+case "$MODE" in
+  setup|update|restore|backup|uninstall|restart|e2e) acquire_lock ;;
+esac
+
 case "$MODE" in
   check_config) do_check_config; exit 0 ;;
   preflight) do_preflight; exit $? ;;
@@ -196,7 +222,7 @@ case "$MODE" in
 esac
 
 # The remaining modes need a valid config
-if [ "$MODE" = "test" ] || [ "$MODE" = "status" ] || [ "$MODE" = "e2e" ]; then
+if [ "$MODE" = "test" ] || [ "$MODE" = "status" ] || [ "$MODE" = "e2e" ] || [ "$MODE" = "doctor" ]; then
   [ -f "$CONFIG_FILE" ] || err "$CONFIG_FILE not found — run 'nix run .#install' first"
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
   validate_required_config
@@ -205,6 +231,7 @@ if [ "$MODE" = "test" ] || [ "$MODE" = "status" ] || [ "$MODE" = "e2e" ]; then
   read_setup_config
   read_api_keys
   if [ "$MODE" = "status" ]; then do_status; exit 0; fi
+  if [ "$MODE" = "doctor" ]; then DOCTOR_EXIT=0; do_doctor || DOCTOR_EXIT=$?; exit "$DOCTOR_EXIT"; fi
   if [ "$MODE" = "e2e" ]; then
     E2E_EXIT=0
     do_e2e || E2E_EXIT=$?

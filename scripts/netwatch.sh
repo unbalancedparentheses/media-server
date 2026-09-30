@@ -12,6 +12,8 @@
 #     writes to $NETWATCH_STATE/cleanuparr-wanted ("true"/"false").
 #   - before the first successful check nothing is changed, so a restart
 #     while offline never switches the cleaner back on.
+#   - while an install or other operation holds setup's lock, it only
+#     watches: setup is configuring Cleanuparr itself.
 # Coming back online also re-tests the indexers (Prowlarr backs off for up
 # to a day after failures, and Sonarr/Radarr then can't search) and clears
 # Bazarr's provider throttling.
@@ -24,6 +26,14 @@
 cfg="${NETWATCH_CONFIG:-$HOME/media/config}"
 state_dir="${NETWATCH_STATE:-$HOME/media/.state/netwatch}"
 cleanuparr_url="${NETWATCH_CLEANUPARR_URL:-http://127.0.0.1:11011}"
+lock="${NETWATCH_LOCK:-$(dirname "$state_dir")/lock}"
+
+# An install/update/restore/e2e is running (setup's operation lock, owner alive)
+operation_running() {
+  local owner
+  owner=$(cat "$lock/pid" 2>/dev/null) || return 1
+  [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null
+}
 
 log() { echo "$(date '+%F %T') $*"; }
 key() { sed -n 's:.*<ApiKey>\(.*\)</ApiKey>.*:\1:p' "$cfg/$1/config.xml" 2>/dev/null; }
@@ -97,11 +107,23 @@ netwatch_round() {
     log "connection: $NW_STATE"
     mkdir -p "$state_dir" && printf '%s\n' "$NW_STATE" > "$state_dir/connection"
   }
+  # Came back online: the re-tests run once nothing else is in the way
+  [ "$before" = offline ] && [ "$NW_STATE" = online ] && NW_RECONNECTED=1
+  # Setup is changing things: keep watching, don't touch Cleanuparr
+  if operation_running; then
+    [ "${NW_WAITING:-}" = 1 ] || log "an install or other operation is running; leaving Cleanuparr to it"
+    NW_WAITING=1
+    return 0
+  fi
+  NW_WAITING=""
   case "$NW_STATE" in
     offline) set_cleaner false || log "couldn't pause Cleanuparr's queue cleaner (retrying)" ;;
     online)
       set_cleaner "$(wanted)" || log "couldn't set Cleanuparr's queue cleaner (retrying)"
-      [ "$before" = offline ] && after_reconnect
+      if [ "${NW_RECONNECTED:-}" = 1 ]; then
+        NW_RECONNECTED=""
+        after_reconnect
+      fi
       ;;
   esac
   return 0

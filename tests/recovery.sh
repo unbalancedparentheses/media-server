@@ -581,6 +581,111 @@ test_e2e_stops_when_pausing_indexers_fails() {
   return 0
 }
 
+# ─── Operation lock ──────────────────────────────────────────────
+
+# A second operation is refused while the first is running
+test_lock_refuses_second_operation() {
+  command sleep 30 & local owner=$!
+  mkdir -p "$STATE_DIR/lock"; echo "$owner" > "$STATE_DIR/lock/pid"
+  local out
+  out=$( (acquire_lock) 2>&1 ) && { kill "$owner"; fail "took the lock from a running operation"; }
+  kill "$owner" 2>/dev/null
+  grep -q "Another media-server operation is running" <<< "$out" || fail "unexpected message: $out"
+}
+
+# A lock left by an operation that's gone is taken over
+test_lock_taken_over_when_stale() {
+  mkdir -p "$STATE_DIR/lock"; echo 999999 > "$STATE_DIR/lock/pid"
+  acquire_lock >/dev/null 2>&1 || fail "stale lock not taken over"
+  expect_eq "$(cat "$STATE_DIR/lock/pid")" "$$" "lock owner"
+  release_lock
+  [ ! -e "$STATE_DIR/lock" ] || fail "lock not released"
+}
+
+# Through setup.sh: a backup is refused while another operation runs
+test_entry_point_refuses_concurrent_operation() {
+  echo '{}' > "$FAKE/services.json"
+  command sleep 30 & local owner=$!
+  mkdir -p "$STATE_DIR/lock"; echo "$owner" > "$STATE_DIR/lock/pid"
+  env MEDIA_DIR="$MEDIA_DIR" MEDIA_SERVICES_JSON="$FAKE/services.json" MEDIA_LABEL_PREFIX="test.media-server.$$" \
+    bash "$ROOT/setup.sh" --backup >/dev/null 2>&1 && { kill "$owner"; fail "backup ran during another operation"; }
+  kill "$owner" 2>/dev/null
+  [ ! -e "$BACKUP_DIR" ] || [ -z "$(ls "$BACKUP_DIR" 2>/dev/null)" ] || fail "a backup was written"
+  expect_eq "$(cat "$STATE_DIR/lock/pid")" "$owner" "lock still the first operation's"
+}
+
+# netwatch leaves Cleanuparr alone during an install, and runs the
+# post-reconnect re-tests once the install is done
+test_netwatch_waits_for_running_operation() {
+  netwatch_fakes
+  echo true > "$FAKE/cleaner"
+  touch "$FAKE/offline"
+  for _ in 1 2 3; do netwatch_round >/dev/null; done
+  expect_eq "$(cat "$FAKE/cleaner")" false "paused while offline"
+  command sleep 30 & local owner=$!
+  mkdir -p "$STATE_DIR/lock"; echo "$owner" > "$STATE_DIR/lock/pid"
+  rm "$FAKE/offline"
+  netwatch_round >/dev/null
+  expect_eq "$(cat "$FAKE/cleaner")" false "cleaner during the install"
+  [ ! -f "$FAKE/reconnected" ] || fail "re-tested during the install"
+  kill "$owner"; wait "$owner" 2>/dev/null; rm -rf "$STATE_DIR/lock"
+  netwatch_round >/dev/null
+  expect_eq "$(cat "$FAKE/cleaner")" true "cleaner after the install"
+  [ -f "$FAKE/reconnected" ] || fail "re-tests never ran after the install"
+}
+
+# ─── Config validation ───────────────────────────────────────────
+
+# A typo is caught before anything changes, with a suggestion
+test_config_typo_rejected_with_suggestion() {
+  echo '{}' > "$FAKE/services.json"
+  sed 's/"changeme"/"real-password"/; s/^prefer_h265 = true/prefer_h256 = true/' "$ROOT/config.toml.example" > "$CONFIG_FILE"
+  local out
+  out=$(env MEDIA_DIR="$MEDIA_DIR" MEDIA_SERVICES_JSON="$FAKE/services.json" bash "$ROOT/setup.sh" --check-config 2>&1) && \
+    fail "accepted an unknown setting"
+  grep -q 'quality.prefer_h256: unknown setting (did you mean "prefer_h265"?)' <<< "$out" || fail "unexpected output: $out"
+  sed 's/"changeme"/"real-password"/' "$ROOT/config.toml.example" > "$CONFIG_FILE"
+  env MEDIA_DIR="$MEDIA_DIR" MEDIA_SERVICES_JSON="$FAKE/services.json" bash "$ROOT/setup.sh" --check-config >/dev/null 2>&1 || \
+    fail "the example config (with real passwords) was rejected"
+}
+
+# ─── Failed reads never become "empty" ───────────────────────────
+
+# Prowlarr's indexer list can't be read: nothing is added (it used to look
+# empty, so every indexer was added a second time)
+test_prowlarr_unreadable_indexers_not_readded() {
+  PROWLARR_KEY=p SONARR_KEY="" RADARR_KEY="" TMPDIR_SETUP="$FAKE"
+  CONFIG_JSON='{"indexers":[{"name":"Nyaa.si","definitionName":"nyaasi","enable":true}]}'
+  api() {
+    case "$1 $2" in
+      "GET "*/api/v1/indexer) return 22 ;;
+      "GET "*/indexer/schema) echo '[{"definitionName":"nyaasi","fields":[]}]' ;;
+      "GET "*/applications|"GET "*/indexerProxy|"GET "*/downloadclient|"GET "*/tag) echo '[]' ;;
+      "POST "*/api/v1/indexer) touch "$FAKE/indexer_added" ;;
+      *) echo '{}' ;;
+    esac
+  }
+  set_arr_login() { :; }
+  configure_prowlarr >/dev/null 2>&1
+  [ ! -f "$FAKE/indexer_added" ] || fail "added an indexer without knowing which exist"
+}
+
+# Sonarr's download clients can't be read: no second qBittorrent client
+test_unreadable_download_clients_not_readded() {
+  QBIT_USER=u QBIT_PASS=p SABNZBD_KEY="" JELLYFIN_API_KEY=""
+  api() {
+    case "$1 $2" in
+      "GET "*/rootfolder) echo '[]' ;;
+      "GET "*/downloadclient) return 22 ;;
+      "POST "*/downloadclient) touch "$FAKE/client_added" ;;
+    esac
+  }
+  api_retry() { "$@"; }
+  set_arr_login() { :; }
+  configure_arr sonarr http://s k /tv tvCategory >/dev/null 2>&1
+  [ ! -f "$FAKE/client_added" ] || fail "added qBittorrent without knowing it was already there"
+}
+
 echo "Failure-path tests"
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
   run_test "$t"

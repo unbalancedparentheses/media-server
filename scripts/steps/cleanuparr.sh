@@ -40,7 +40,8 @@ configure_cleanuparr() {
   for app in sonarr radarr; do
     if [ "$app" = sonarr ]; then url="$SONARR_INTERNAL" key="$SONARR_KEY"; else url="$RADARR_INTERNAL" key="$RADARR_KEY"; fi
     [ -n "$key" ] || continue
-    existing=$(cleanuparr_api GET "configuration/$app" || echo "{}")
+    # Unreadable is not "none": the instance would be added twice
+    existing=$(cleanuparr_api GET "configuration/$app") || { warn "Cleanuparr: couldn't read its ${app^} settings; skipped (retried next run)"; continue; }
     id=$(jq -r --arg u "$url/" '[.instances[]? | select(.url == $u) | .id][0] // empty' <<< "$existing")
     # Sent every run so a changed API key reaches it
     local body
@@ -94,7 +95,7 @@ configure_cleanuparr() {
     run_now=false
     [ "$enabled" = true ] && warn "Offline: Cleanuparr's queue cleaner stays paused until the connection is back (netwatch resumes it)"
   fi
-  qc=$(cleanuparr_api GET configuration/queue_cleaner || echo "{}")
+  qc=$(cleanuparr_api GET configuration/queue_cleaner) || { warn "Cleanuparr: couldn't read the queue cleaner's settings; not changed (retried next run)"; return 0; }
   want=$(jq -c --argjson on "$run_now" '
     .enabled = $on
     # Also: metadata that never arrives (3 checks) and failed imports (3 tries)

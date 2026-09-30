@@ -78,20 +78,23 @@ PYEOF
     BAZARR_API_KEY_VAL=$(sed -n '/^auth:/,/^[^ ]/{s/^  apikey: *//p;}' "$BAZARR_CONFIG" 2>/dev/null | head -1)
     if [ -n "$BAZARR_API_KEY_VAL" ]; then
       wait_for "Bazarr" "$BAZARR_URL"
-      EXISTING_PROFILES=$(curl -sf "$BAZARR_URL/api/system/languages/profiles?apikey=$BAZARR_API_KEY_VAL" 2>/dev/null || echo "[]")
+      # Unreadable is not "none": saving would replace every other profile
+      EXISTING_PROFILES=$(curl -sf "$BAZARR_URL/api/system/languages/profiles?apikey=$BAZARR_API_KEY_VAL" 2>/dev/null) || EXISTING_PROFILES=""
       # The "Default" profile carries subtitles.languages: create it, or
       # update it when the list changed. Other profiles are kept as they are.
       local want_langs profiles_json
       want_langs=$(jq -Rc 'split(",") | map(select(. != ""))' <<< "$SUBTITLE_LANGS")
       # subtitles.want = "first": done once the first language is there
-      # (cutoff = its item id, 0). Until then the others are fetched too, as
-      # a fallback, and Bazarr keeps looking for the first; so a file with
-      # only Spanish still gets English when it exists. (65535, "any", would
-      # stop at whatever language happens to be there.) "all": every one.
+      # (cutoff = its item id). Until then the others are fetched too, as a
+      # fallback, and Bazarr keeps looking for the first; so a file with only
+      # Spanish still gets English when it exists. (65535, "any", would stop
+      # at whatever language happens to be there.) "all": every one.
+      # Item ids start at 1: Bazarr checks the cutoff with "if cutoff", so
+      # an id of 0 would mean no cutoff at all.
       local cutoff=null
-      [ "$(cfg '.subtitles.want // "first"')" = first ] && cutoff=0
+      [ "$(cfg '.subtitles.want // "first"')" = first ] && cutoff=1
       profiles_json=$(jq -c --argjson langs "$want_langs" --argjson cutoff "$cutoff" '
-        ($langs | to_entries | map({id: .key, language: .value, hi: "False", forced: "False", audio_exclude: "False", audio_only_include: "False"})) as $items
+        ($langs | to_entries | map({id: (.key + 1), language: .value, hi: "False", forced: "False", audio_exclude: "False", audio_only_include: "False"})) as $items
         # Bazarr compares these flags as the strings "True"/"False"; booleans
         # (written by older versions of this script) never match the cutoff
         | if any(.[]; .name == "Default") then
@@ -102,7 +105,9 @@ PYEOF
             . + [{profileId: ((map(.profileId) | max // 0) + 1), name: "Default", cutoff: $cutoff,
                   items: $items, mustContain: [], mustNotContain: [], originalFormat: null}]
           end' <<< "$EXISTING_PROFILES" 2>/dev/null || true)
-      if [ -z "$profiles_json" ]; then
+      if [ -z "$EXISTING_PROFILES" ]; then
+        warn "Couldn't read Bazarr's language profiles; not changed (retried next run)"
+      elif [ -z "$profiles_json" ]; then
         ok "Language profile: Default ($(echo "$SUBTITLE_LANGS" | tr ',' ' '); $(cfg '.subtitles.want // "first"'))"
       else
         local default_id lang

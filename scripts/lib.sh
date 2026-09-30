@@ -375,7 +375,13 @@ TIMEZONE_PATH='(.timezone // .qbittorrent.timezone)'
 is_non_negative_number() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
 is_non_negative_int() { [[ "$1" =~ ^[0-9]+$ ]]; }
 validate_config_semantics() {
-  local seed_ratio seed_time timezone admin_bind dashboard_port
+  local seed_ratio seed_time timezone admin_bind dashboard_port problems
+  # Every key, type and range (scripts/validate_config.py), all problems at once
+  if ! problems=$(python3 "$SCRIPT_DIR/scripts/validate_config.py" <<< "$CONFIG_JSON" 2>&1); then
+    printf "\033[1;31m   ✗ %s has problems; nothing was changed:\033[0m\n" "$CONFIG_FILE"
+    while IFS= read -r line; do printf "       %s\n" "$line"; done <<< "$problems"
+    exit 1
+  fi
 
   seed_ratio=$(cfg '.downloads.seeding_ratio')
   seed_time=$(cfg '.downloads.seeding_time_minutes')
@@ -439,4 +445,45 @@ sync_resource_fields() {  # label resource-url id fields-json api-key
   api PUT "$base/$id?forceSave=true" -H "$H" \
     -d "$(jq -c --argjson f "$fields" '.fields |= map(if $f[.name] != null then .value = $f[.name] else . end)' <<< "$cur")" >/dev/null || \
     warn "$label: could not update its settings"
+}
+
+
+# Write a state record atomically (temp file in the same folder, then
+# rename): an interruption leaves the old or the new version, never half.
+# Records that describe work in progress must be written with this.
+write_atomic() {  # file content
+  local tmp
+  mkdir -p "$(dirname "$1")" || return 1
+  tmp="$1.tmp.$$"
+  (umask 077 && printf '%s\n' "$2" > "$tmp") && mv -f "$tmp" "$1"
+}
+
+# ─── Operation lock ──────────────────────────────────────────────
+# Install, update, restore, backup, uninstall, restart and the e2e test all
+# change the same services; only one may run at a time. The lock is a
+# directory (mkdir is atomic) holding the owner's PID; a lock whose owner is
+# gone is stale and taken over. netwatch leaves Cleanuparr alone while it's
+# held.
+lock_dir() { printf '%s/lock' "$STATE_DIR"; }
+acquire_lock() {
+  local dir owner
+  dir=$(lock_dir)
+  mkdir -p "$STATE_DIR"
+  if ! mkdir "$dir" 2>/dev/null; then
+    owner=$(cat "$dir/pid" 2>/dev/null || true)
+    if [ -n "$owner" ] && [ "$owner" != "$$" ] && kill -0 "$owner" 2>/dev/null; then
+      err "Another media-server operation is running (PID $owner: $(ps -o command= -p "$owner" 2>/dev/null | cut -c1-70)). Wait for it to finish, then try again."
+    fi
+    # The owner is gone (or it's us): take it over
+    rm -rf "$dir"
+    mkdir "$dir" 2>/dev/null || err "Couldn't take the operation lock ($dir)"
+  fi
+  printf '%s\n' "$$" > "$dir/pid"
+  LOCK_HELD=1
+}
+release_lock() {
+  [ "${LOCK_HELD:-}" = 1 ] || return 0
+  [ "$(cat "$(lock_dir)/pid" 2>/dev/null)" = "$$" ] && rm -rf "$(lock_dir)"
+  LOCK_HELD=""
+  return 0
 }

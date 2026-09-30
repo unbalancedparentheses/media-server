@@ -28,8 +28,8 @@ configure_seerr() {
     # A sign-in can succeed without Seerr knowing where Jellyfin is (e.g. an
     # earlier run was interrupted after creating the admin); set it if missing
     local jf_settings
-    jf_settings=$(api GET "$SEERR_URL/api/v1/settings/jellyfin" "${JA[@]}" || echo "{}")
-    if [ -z "$(jq -r '.ip // ""' <<< "$jf_settings")" ]; then
+    if jf_settings=$(api GET "$SEERR_URL/api/v1/settings/jellyfin" "${JA[@]}") && \
+       [ -z "$(jq -r '.ip // ""' <<< "$jf_settings")" ]; then
       api POST "$SEERR_URL/api/v1/settings/jellyfin" "${JA[@]}" \
         -d '{"ip":"localhost","port":8096,"useSsl":false,"urlBase":""}' >/dev/null && \
         ok "Jellyfin address set (localhost:8096)" || warn "Could not set Seerr's Jellyfin address"

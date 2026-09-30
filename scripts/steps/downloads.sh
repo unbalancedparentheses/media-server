@@ -51,13 +51,25 @@ configure_qbittorrent() {
     svc_restart qbittorrent >/dev/null 2>&1 && wait_for "qBittorrent" "$QBIT_URL" && ok "qBittorrent restarted to listen on ${ADMIN_BIND:-0.0.0.0}"
   fi
 
+  # Create or fix each category's folder; unchanged ones are left alone
+  local cats path
+  cats=$(curl -sf "$QBIT_URL/api/v2/torrents/categories" -b "$QBIT_COOKIE" 2>/dev/null) || cats=""
   for cat in sonarr radarr; do
-    curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/createCategory" \
-      -b "$QBIT_COOKIE" \
-      --data-urlencode "category=$cat" --data-urlencode "savePath=$DL_COMPLETE/$cat" 2>/dev/null && ok "Category: $cat" || \
-    curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/editCategory" \
-      -b "$QBIT_COOKIE" \
-      --data-urlencode "category=$cat" --data-urlencode "savePath=$DL_COMPLETE/$cat" 2>/dev/null && ok "Category: $cat (updated)" || true
+    if [ -z "$cats" ]; then
+      warn "Couldn't read qBittorrent's categories (retried next run)"; break
+    fi
+    path=$(jq -r --arg c "$cat" '.[$c].savePath // empty' <<< "$cats")
+    if [ "$path" = "$DL_COMPLETE/$cat" ]; then
+      ok "Category: $cat"
+    elif [ -z "$path" ] && ! jq -e --arg c "$cat" 'has($c)' <<< "$cats" >/dev/null; then
+      curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/createCategory" -b "$QBIT_COOKIE" \
+        --data-urlencode "category=$cat" --data-urlencode "savePath=$DL_COMPLETE/$cat" 2>/dev/null && \
+        ok "Category: $cat (created)" || warn "Could not create category: $cat"
+    else
+      curl -sf -o /dev/null "$QBIT_URL/api/v2/torrents/editCategory" -b "$QBIT_COOKIE" \
+        --data-urlencode "category=$cat" --data-urlencode "savePath=$DL_COMPLETE/$cat" 2>/dev/null && \
+        ok "Category: $cat (folder fixed)" || warn "Could not update category: $cat"
+    fi
   done
 }
 

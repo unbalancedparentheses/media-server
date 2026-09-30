@@ -1,0 +1,81 @@
+name: Fresh install
+
+# The whole lifecycle on a clean Mac: what a new user runs. Weekly and on
+# demand (the first build of Seerr and Sonarr takes a while), not on every
+# push; CI covers syntax, ShellCheck, config and the failure-path tests.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  lifecycle:
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+      NIX_CONFIG: "extra-experimental-features = nix-command flakes"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Fresh install
+        run: nix run .#install -- --yes
+
+      - name: Checks
+        run: nix run .#test
+
+      - name: Re-run changes nothing
+        run: |
+          nix run .#install -- --yes | tee rerun.log
+          if grep -E "restarted with new settings|login set:|published|updated\)|\(created\)|folder fixed" rerun.log; then
+            echo "::error::A re-run with an unchanged config.toml changed something (above)"
+            exit 1
+          fi
+
+      - name: Config change
+        run: |
+          sed -i '' 's/^want = "first"/want = "all"/; s/^prefer_h265 = true/prefer_h265 = false/; s/^upload_limit_kib = 100 /upload_limit_kib = 0 /' ~/media/config.toml
+          nix run .#install -- --yes
+          nix run .#test
+
+      - name: Invalid config is rejected before anything changes
+        run: |
+          cp ~/media/config.toml config.good
+          sed -i '' 's/^prefer_h265 =/prefer_h256 =/' ~/media/config.toml
+          if nix run .#install -- --yes > invalid.log 2>&1; then
+            echo "::error::An unknown setting was accepted"; exit 1
+          fi
+          grep -q 'did you mean "prefer_h265"' invalid.log
+          cp config.good ~/media/config.toml
+
+      - name: End-to-end
+        run: nix run .#e2e
+
+      - name: Doctor
+        run: nix run .#doctor || true   # public indexers vary; informational
+
+      - name: Backup and restore
+        run: |
+          nix run .#backup
+          nix run .#restore -- "$(ls -t ~/media/backups/media-server_*.tar.gz | head -1)" --yes
+          nix run .#install -- --yes
+          nix run .#test
+
+      - name: Uninstall leaves nothing running
+        run: |
+          nix run .#uninstall -- --purge --yes
+          if ls ~/Library/LaunchAgents/org.media-server.* 2>/dev/null; then
+            echo "::error::launchd agents left behind"; exit 1
+          fi
+          if launchctl list | grep org.media-server; then
+            echo "::error::services still loaded"; exit 1
+          fi
+          [ ! -e ~/media/config ] || { echo "::error::configs left behind after --purge"; exit 1; }
+
+      - name: Logs
+        if: failure()
+        run: |
+          tail -n 60 ~/media/logs/*.log 2>/dev/null || true

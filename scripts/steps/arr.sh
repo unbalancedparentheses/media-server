@@ -9,7 +9,8 @@ configure_arr() {
   # Root folders: exactly the given ones (newline-separated); others, like
   # a stale /downloads, are removed
   local root
-  EXISTING_ROOTS=$(api_retry api GET "$url/api/$api_ver/rootfolder" -H "$H" 2>/dev/null || echo "[]")
+  EXISTING_ROOTS=$(api_retry api GET "$url/api/$api_ver/rootfolder" -H "$H" 2>/dev/null) || {
+    warn "$name: couldn't read its root folders; skipped (retried next run)"; root_folder=""; EXISTING_ROOTS="[]"; }
   while read -r stale_id; do
     [ -n "$stale_id" ] && api DELETE "$url/api/$api_ver/rootfolder/$stale_id" -H "$H" >/dev/null 2>&1 && \
       ok "Removed stale root folder (id: $stale_id)"
@@ -25,7 +26,9 @@ configure_arr() {
   done
 
   local clients qbit_id sab_id
-  clients=$(api GET "$url/api/$api_ver/downloadclient" -H "$H" 2>/dev/null || echo "[]")
+  # Unreadable is not "none": qBittorrent/SABnzbd would be added twice
+  clients=$(api GET "$url/api/$api_ver/downloadclient" -H "$H" 2>/dev/null) || {
+    warn "$name: couldn't read its download clients; skipped (retried next run)"; set_arr_login "$name" "$url" "$key" "$api_ver" "$name"; return 0; }
   qbit_id=$(jq -r '[.[] | select(.implementation == "QBittorrent") | .id][0] // empty' <<< "$clients")
   sab_id=$(jq -r '[.[] | select(.implementation == "Sabnzbd") | .id][0] // empty' <<< "$clients")
 
@@ -190,9 +193,7 @@ migrate_anime_sonarr() {
 }
 
 migration_progress_save() {  # file json
-  local tmp="$1.tmp.$$"
-  mkdir -p "$(dirname "$1")"
-  printf '%s\n' "$2" > "$tmp" && mv -f "$tmp" "$1"
+  write_atomic "$1" "$2"
 }
 
 # Wait until Sonarr has finished adding a series: its episodes are listed
@@ -300,7 +301,7 @@ ANIME_PROFILE="Anime"
 apply_junk_filters() {
   local label="$1" url="$2" key="$3" app="$4" H f payload name existing id formats="[]" score scope profiles
   H="X-Api-Key: $key"
-  existing=$(api GET "$url/api/v3/customformat" -H "$H" || echo "[]")
+  existing=$(api GET "$url/api/v3/customformat" -H "$H") || { warn "$label: couldn't read its custom formats; filters skipped (retried next run)"; return 0; }
   for f in "$SCRIPT_DIR/custom-formats/$app"/*.json; do
     # TRaSH's file format → the API's (fields as a list of name/value pairs)
     payload=$(jq -c '{name, includeCustomFormatWhenRenaming: false,

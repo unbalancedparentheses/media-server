@@ -344,6 +344,7 @@
         install = app pkgs [ ];
         uninstall = app pkgs [ "--uninstall" ];
         status = app pkgs [ "--status" ];
+        doctor = app pkgs [ "--doctor" ];
         logs = app pkgs [ "--logs" ];
         restart = app pkgs [ "--restart" ];
         test = app pkgs [ "--test" ];

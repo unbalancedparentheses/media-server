@@ -68,7 +68,9 @@ configure_prowlarr() {
     # Add indexers from config.json
     INDEXER_COUNT=$(cfg '.indexers | length' 2>/dev/null || echo "0")
     [[ "$INDEXER_COUNT" =~ ^[0-9]+$ ]] || INDEXER_COUNT=0
-    ALL_INDEXERS=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH" || echo "[]")
+    # Unreadable is not "none": every indexer would look new and be added twice
+    ALL_INDEXERS=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "$PH") || {
+      warn "Couldn't read Prowlarr's indexers; indexers skipped (retried next run)"; INDEXER_COUNT=0; }
     SCHEMAS=""
 
     if [ "$INDEXER_COUNT" -gt 0 ]; then
