@@ -206,3 +206,31 @@ jellyfin_pin_repository() {  # auth-header name url pattern
   api POST "$JELLYFIN_URL/Repositories" -H "$1" -d "$updated" >/dev/null || { warn "Could not set $2's plugin repository"; return 1; }
   ok "Plugin repository pinned ($2)"
 }
+
+# After a restart Jellyfin answers /health before it accepts logins and has
+# loaded its plugins: restart it, then wait until logging in works
+jellyfin_restart_ready() {
+  local start
+  svc_restart jellyfin
+  sleep 3
+  wait_for "Jellyfin" "$JELLYFIN_URL/health" || return 1
+  start=$SECONDS
+  JELLYFIN_TOKEN=""
+  until [ -n "$JELLYFIN_TOKEN" ]; do
+    [ $((SECONDS - start)) -ge 180 ] && { warn "Jellyfin restarted but doesn't accept the login yet"; return 1; }
+    sleep 2
+    jellyfin_login
+  done
+}
+
+# A plugin's id once Jellyfin has loaded it (it can take a few seconds
+# after the login works); empty if it never shows up
+jellyfin_wait_plugin() {  # id-function
+  local start=$SECONDS id
+  while :; do
+    id=$("$1")
+    [ -n "$id" ] && { printf '%s' "$id"; return 0; }
+    [ $((SECONDS - start)) -ge 60 ] && return 1
+    sleep 2
+  done
+}

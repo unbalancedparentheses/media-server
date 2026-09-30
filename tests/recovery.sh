@@ -686,6 +686,24 @@ test_unreadable_download_clients_not_readded() {
   [ ! -f "$FAKE/client_added" ] || fail "added qBittorrent without knowing it was already there"
 }
 
+# ─── Jellyfin restarts ───────────────────────────────────────────
+
+# After a restart Jellyfin is "healthy" before it accepts logins: setup
+# waits for the login instead of carrying on without one (which skipped
+# Intro Skipper and the Moonfin offline patch on a fresh install)
+test_jellyfin_restart_waits_for_login() {
+  svc_restart() { :; }
+  wait_for() { :; }
+  echo 0 > "$FAKE/logins"
+  jellyfin_login() {
+    local n; n=$(( $(cat "$FAKE/logins") + 1 )); echo "$n" > "$FAKE/logins"
+    if [ "$n" -ge 3 ]; then JELLYFIN_TOKEN=tok; else JELLYFIN_TOKEN=""; fi
+  }
+  jellyfin_restart_ready >/dev/null 2>&1 || fail "gave up while Jellyfin was still starting"
+  expect_eq "$JELLYFIN_TOKEN" tok "token after the restart"
+  expect_eq "$(cat "$FAKE/logins")" 3 "login attempts"
+}
+
 echo "Failure-path tests"
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
   run_test "$t"

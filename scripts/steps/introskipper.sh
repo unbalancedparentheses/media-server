@@ -32,12 +32,9 @@ configure_intro_skipper() {
       sleep 1
     done
     ok "Intro Skipper installed; restarting Jellyfin"
-    svc_restart jellyfin
-    sleep 3
-    wait_for "Jellyfin" "$JELLYFIN_URL/health"
-    jellyfin_login
+    jellyfin_restart_ready || { warn "Intro Skipper: Jellyfin isn't back yet; re-run setup"; return 0; }
     JT=$(jf_auth "$JELLYFIN_TOKEN")
-    plugin_id=$(intro_skipper_plugin_id)
+    plugin_id=$(jellyfin_wait_plugin intro_skipper_plugin_id || true)
     [ -n "$plugin_id" ] || { warn "Intro Skipper didn't load after restart (see $LOG_DIR/jellyfin.log)"; return 0; }
     # Analyze what's already in the library once; new episodes are
     # analyzed as they're added

@@ -33,12 +33,9 @@ configure_moonbase() {
     done
     compgen -G "$CONFIG_DIR/jellyfin/data/plugins/Moonbase*" >/dev/null || { warn "Moonbase download didn't finish; re-run setup"; return 0; }
     ok "Moonbase installed; restarting Jellyfin"
-    svc_restart jellyfin
-    sleep 3
-    wait_for "Jellyfin" "$JELLYFIN_URL/health"
-    jellyfin_login
+    jellyfin_restart_ready || { warn "Moonbase: Jellyfin isn't back yet; re-run setup"; return 0; }
     JT=$(jf_auth "$JELLYFIN_TOKEN")
-    plugin_id=$(moonbase_plugin_id)
+    plugin_id=$(jellyfin_wait_plugin moonbase_plugin_id || true)
     [ -n "$plugin_id" ] || { warn "Moonbase didn't load after restart (see $LOG_DIR/jellyfin.log)"; return 0; }
   fi
   ok "Moonbase loaded"
