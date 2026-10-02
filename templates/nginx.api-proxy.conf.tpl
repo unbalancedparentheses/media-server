@@ -66,6 +66,15 @@ location = /api/seerr/request {
     proxy_set_header X-Api-Key "{{SEERR_KEY}}";
 }
 
+# Seerr search (the dashboard's search box offers titles to request)
+location = /api/seerr/search {
+    limit_except GET { deny all; }
+    limit_req zone=api burst=20 nodelay;
+    set $upstream_api_seerr_search http://127.0.0.1:5055/api/v1/search$is_args$args;
+    proxy_pass $upstream_api_seerr_search;
+    proxy_set_header X-Api-Key "{{SEERR_KEY}}";
+}
+
 # SABnzbd — its API is one URL with a mode parameter, so only the queue and
 # history modes are allowed and the query string is rebuilt rather than
 # forwarded (the client can't smuggle in its own mode or apikey).

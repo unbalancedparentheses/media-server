@@ -69,7 +69,14 @@ You can run `nix run .#install` again at any time: it only changes what differs 
 2. **Request something.** Search for a movie or show in Moonfin (or in Seerr at `http://<mac-ip>:5055`) and press Request. It usually appears in the library within minutes to an hour, depending on how many people are sharing the release.
 3. **Install the apps.** Get **Moonfin** from the App Store, Google Play or Amazon on your TV, phone or tablet, enter `http://<mac-ip>:8096` as the server, and log in. LG and Samsung TVs can sideload Moonfin, or use Litefin.
 4. **Add your family.** In Jellyfin (`http://<mac-ip>:8096` → Dashboard → Users), create a user per person. Moonfin shows them as profiles, each with its own watch history. They can request too, and their requests download right away (`[requests] auto_approve`; set it to `false` to approve them yourself in Seerr). The playback defaults (subtitles on, Japanese audio for anime) are set for your user only; others choose theirs in the player.
-5. **Look around the dashboard** at `http://localhost` (or `http://<mac-ip>`): current downloads, the upcoming-episodes calendar, recent requests and links to every service. `http://localhost/admin.html` lists the admin pages.
+5. **Look around the dashboard** at `http://localhost` (or `http://<mac-ip>`). On one page:
+   - **Search** (press `/`): your library ("watch") and anything else to request, in one box.
+   - **What needs attention**, with what to do, or "Everything is working"; an offline banner when the Mac has no connection.
+   - **At a glance**: now playing, transfer speeds, library size, requests, missing items, missing subtitles, indexer health (with the last 24 hours of searches and grabs), CPU and memory, disk, Tailscale.
+   - **Now playing**, including *why* Jellyfin is converting a video if it is (for example "picture subtitles drawn into the video"), **service uptime** over 24 hours, and **recently watched**.
+   - Downloads in progress, the upcoming calendar, recently added, and recent requests with posters.
+
+   `http://localhost/admin.html` lists the admin pages.
 
 To find your Mac's address, run `ipconfig getifaddr en0` or look in System Settings → Wi-Fi → Details.
 
@@ -202,7 +209,8 @@ You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr �
 | **[Byparr](https://github.com/ThePhaseless/Byparr)** | 8191 (local only) | Gets past Cloudflare on protected indexers |
 | **[Unpackerr](https://unpackerr.zip)** | — | Extracts archived downloads for import |
 | **[Cleanuparr](https://github.com/Cleanuparr/Cleanuparr)** | 11011 | Removes stalled, metadata-stuck and failed-import downloads; Sonarr/Radarr blocklist them and search again |
-| **[nginx](https://nginx.org)** | 80 | Dashboard with live download and calendar widgets |
+| **[nginx](https://nginx.org)** | 80 | The dashboard (see below) |
+| **dashstatus** | — | Gathers the dashboard's live data every 15 s into one file the page reads; the API keys stay on the server |
 | **diskwatch** | — | Warns (macOS notification) when the media disk runs low |
 | **netwatch** | — | Checks the connection every minute (offline after 3 failed checks in a row) and keeps things in line each time, so a step that fails is retried: offline, Cleanuparr's queue cleaner is paused (it would otherwise remove every download as stalled); online, it's whatever `cleanuparr.enabled` says. Coming back also re-tests the indexers (Prowlarr backs off for up to a day after failures) and clears Bazarr's provider throttling. Nothing changes before its first successful check. Log: `~/media/logs/netwatch.log` |
 

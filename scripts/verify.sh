@@ -383,6 +383,7 @@ run_verification() {
   check "Moonfin web app references nothing on the internet (page and loader files; not a browser test)" "$(
     idx=$(curl -sf "$JELLYFIN_URL/Moonfin/Web/" || true); boot=$(curl -sf "$JELLYFIN_URL/Moonfin/Web/flutter_bootstrap.js" || true)
     ! grep -q '<script[^>]*src="https\?://' <<< "$idx" && grep -q 'canvasKitBaseUrl: "canvaskit/"' <<< "$boot" && echo true || echo false)"
+  check "Dashboard live data is fresh (status.json, under 2 minutes old)" "$(curl -sf "$DASHBOARD_URL/status.json" 2>/dev/null | jq '(now - .updated) < 120' 2>/dev/null || echo false)"
   check "Moonfin web app (/Moonfin/Web/)" "$(case "$(http_code "$JELLYFIN_URL/Moonfin/Web/")" in 2*|3*) echo true ;; *) echo false ;; esac)"
 
   info "Services (launchd)..."

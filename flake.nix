@@ -153,6 +153,13 @@
             exec ${pkgs.bash}/bin/bash ${./scripts/netwatch.sh}
           '';
 
+          # Gathers the dashboard's live data into one file the page reads
+          # (scripts/dashstatus.sh explains what it collects)
+          dashstatusStart = pkgs.writeShellScript "dashstatus" ''
+            export PATH=${pkgs.curl}/bin:${pkgs.jq}/bin:/usr/bin:/bin:/usr/sbin
+            exec ${pkgs.bash}/bin/bash ${./scripts/dashstatus.sh}
+          '';
+
           # Placeholders filled in by setup.sh when it writes the launchd agents:
           # @MEDIA@ (~/media), @CONFIG@ (~/media/config), @STATE@ (~/media/.state),
           # @ADMIN_BIND@, @DISK_WARN_GB@, @DISK_MIN_GB@
@@ -230,6 +237,16 @@
                 PORT = "11011";
                 BIND_ADDRESS = "@ADMIN_BIND@";
                 CLEANUPARR_CONFIG_PATH = "@CONFIG@/cleanuparr";
+              };
+            };
+            dashstatus = {
+              args = [ "${dashstatusStart}" ];
+              env = {
+                DASH_CONFIG = "@CONFIG@";
+                DASH_STATE = "@STATE@";
+                DASH_MEDIA = "@MEDIA@";
+                DISK_WARN_GB = "@DISK_WARN_GB@";
+                DISK_MIN_GB = "@DISK_MIN_GB@";
               };
             };
             netwatch = {

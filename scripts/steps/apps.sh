@@ -12,6 +12,8 @@ write_api_proxy() {
   ADMIN_HOST=$(admin_host)
   write_api_proxy_from_template
   chmod 600 "$API_PROXY"
+  # The dashboard's data collector reads Jellyfin with setup's own key
+  [ -n "${JELLYFIN_API_KEY:-}" ] && write_atomic "$STATE_DIR/dashstatus/jellyfin-key" "$JELLYFIN_API_KEY"
   ok "api-proxy.conf written"
 
   svc_restart nginx && ok "nginx reloaded" || warn "Could not restart nginx"
