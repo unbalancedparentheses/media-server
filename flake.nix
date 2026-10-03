@@ -156,7 +156,8 @@
           # Gathers the dashboard's live data into one file the page reads
           # (scripts/dashstatus.sh explains what it collects)
           dashstatusStart = pkgs.writeShellScript "dashstatus" ''
-            export PATH=${pkgs.curl}/bin:${pkgs.jq}/bin:/usr/bin:/bin:/usr/sbin
+            export PATH=${pkgs.curl}/bin:${pkgs.jq}/bin:${pkgs.python3}/bin:/usr/bin:/bin:/usr/sbin
+            export DASH_MEDIA_SCRIPT=${./scripts/dashmedia.py}
             exec ${pkgs.bash}/bin/bash ${./scripts/dashstatus.sh}
           '';
 
@@ -416,7 +417,7 @@
               text = ''
                 bash ${self}/tests/recovery.sh
                 echo "Post-import tests"
-                cd ${self}/tests && python3 -m unittest -q test_postimport
+                cd ${self}/tests && python3 -m unittest -q test_postimport test_dashmedia
               '';
             }
           );

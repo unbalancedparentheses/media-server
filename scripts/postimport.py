@@ -631,7 +631,7 @@ class Worker:
                     if info is None:
                         seen[str(path)] = [st.st_size, int(st.st_mtime)]
                         continue
-                    if self.fix(path, info, path.stem):
+                    if self.fix(path, info, display_name(path)):
                         done += 1
                         save(self.state)
                     if done >= SWEEP_PER_ROUND or operation_running():
@@ -648,6 +648,12 @@ class Worker:
                         for r in rejections if r.get("status") == "looking"],
             "kept": [{"title": r["title"], "reason": r["reason"]} for r in rejections if r.get("status") == "kept"],
         }
+
+
+def display_name(path):
+    """"Movie (2020) Bluray-1080p Proper" → "Movie (2020)"; episodes keep
+    "Show - S01E02 - Title" (Sonarr/Radarr's naming, quality last)"""
+    return re.sub(r" (Remux|Bluray|WEBDL|WEBRip|HDTV|DVD|SDTV|Raw-HD|BR-DISK)-\S+( Proper| Repack)*$", "", Path(path).stem)
 
 
 def save(state):
@@ -675,7 +681,7 @@ def by_hand(mode, path):
         print("can't read the file")
         return 1
     state = read_json(STATE / "state.json", {})
-    Worker([], settings, state).fix(path, info, path.stem)
+    Worker([], settings, state).fix(path, info, display_name(path))
     save(state)
     return 0
 

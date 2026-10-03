@@ -267,22 +267,21 @@ run_verification() {
   LANDING=$(curl -sf "$DASHBOARD_URL" 2>/dev/null || echo "")
   check "Landing page → serves HTML" "$(echo "$LANDING" | grep -q 'Media.*Server' && echo true || echo false)"
   check "Landing page → Content-Type text/html" "$(echo "$LANDING_HEADERS" | grep -qi 'content-type.*text/html' && echo true || echo false)"
-  check "Landing page → service grid" "$(echo "$LANDING" | grep -q 'Jellyfin' && echo true || echo false)"
+  check "Landing page → watch link" "$(echo "$LANDING" | grep -q 'Moonfin/Web' && echo true || echo false)"
   check "Landing page → downloads widget" "$(echo "$LANDING" | grep -q 'qbt/torrents' && echo true || echo false)"
 
   QBT_PROXY=$(curl -sf "$DASHBOARD_URL/api/qbt/torrents/info" 2>/dev/null || echo "")
   check "Landing page → qBittorrent proxy" "$(echo "$QBT_PROXY" | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
 
-  check "Proxy → Sonarr calendar" "$(curl -sf "$DASHBOARD_URL/api/sonarr/calendar" 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-  check "Proxy → Radarr calendar" "$(curl -sf "$DASHBOARD_URL/api/radarr/calendar" 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
   check "Proxy → Jellyfin latest" "$(curl -sf "$DASHBOARD_URL"'/api/jellyfin/Items?SortBy=DateCreated&SortOrder=Descending&Limit=3&Recursive=true&IncludeItemTypes=Movie,Series' 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
-  check "Proxy → Seerr requests" "$(curl -sf "$DASHBOARD_URL/api/seerr/request" 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
   check "Proxy → SABnzbd queue" "$(curl -sf "$DASHBOARD_URL"'/api/sabnzbd/?mode=queue&output=json' 2>/dev/null | python3 -c 'import sys,json; json.load(sys.stdin); print("true")' 2>/dev/null || echo "false")"
 
   info "Access control..."
   http_code() { curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$@" 2>/dev/null || true; }
-  check "Proxy → rejects writes (POST Sonarr calendar: $(http_code -X POST "$DASHBOARD_URL/api/sonarr/calendar"))" \
-    "$([ "$(http_code -X POST "$DASHBOARD_URL/api/sonarr/calendar")" = "403" ] && echo true || echo false)"
+  check "Proxy → rejects writes (POST Jellyfin items: $(http_code -X POST "$DASHBOARD_URL/api/jellyfin/Items"))" \
+    "$([ "$(http_code -X POST "$DASHBOARD_URL/api/jellyfin/Items")" = "403" ] && echo true || echo false)"
+  check "Proxy → no Sonarr access (calendar: $(http_code "$DASHBOARD_URL/api/sonarr/calendar"))" \
+    "$([ "$(http_code "$DASHBOARD_URL/api/sonarr/calendar")" = "404" ] && echo true || echo false)"
   check "Proxy → hides other endpoints (Jellyfin Auth/Keys: $(http_code "$DASHBOARD_URL/api/jellyfin/Auth/Keys"))" \
     "$([ "$(http_code "$DASHBOARD_URL/api/jellyfin/Auth/Keys")" = "404" ] && echo true || echo false)"
   check "Proxy → SABnzbd limited to queue/history" \
@@ -384,6 +383,7 @@ run_verification() {
     idx=$(curl -sf "$JELLYFIN_URL/Moonfin/Web/" || true); boot=$(curl -sf "$JELLYFIN_URL/Moonfin/Web/flutter_bootstrap.js" || true)
     ! grep -q '<script[^>]*src="https\?://' <<< "$idx" && grep -q 'canvasKitBaseUrl: "canvaskit/"' <<< "$boot" && echo true || echo false)"
   check "Dashboard live data is fresh (status.json, under 2 minutes old)" "$(curl -sf "$DASHBOARD_URL/status.json" 2>/dev/null | jq '(now - .updated) < 120' 2>/dev/null || echo false)"
+  check "Dashboard media data (requests, coming up, library health)" "$(curl -sf "$DASHBOARD_URL/status.json" 2>/dev/null | jq 'has("requests_live") and has("upcoming") and has("health")' 2>/dev/null || echo false)"
   check "Moonfin web app (/Moonfin/Web/)" "$(case "$(http_code "$JELLYFIN_URL/Moonfin/Web/")" in 2*|3*) echo true ;; *) echo false ;; esac)"
 
   info "Services (launchd)..."

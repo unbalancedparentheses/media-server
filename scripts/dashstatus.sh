@@ -8,11 +8,14 @@
 # converting it, if it is), transfer speeds, system load and memory, the
 # connection. Every DASH_SLOW_EVERY rounds (20, i.e. 5 minutes): library
 # counts, Sonarr/Radarr queues, missing items and health, Prowlarr's
-# indexers, Bazarr's missing subtitles, Seerr's requests, disk space.
+# indexers, Bazarr's missing subtitles, Seerr's requests, disk space, and
+# the media side from dashmedia.py (continue watching, latest, requests'
+# real state, upcoming releases, library health).
 # "attention" lists what needs you, each with a suggested action.
 #
 # Environment: DASH_CONFIG (~/media/config), DASH_STATE (~/media/.state),
-# DASH_MEDIA (~/media), DASH_OUT, DISK_WARN_GB, DISK_MIN_GB.
+# DASH_MEDIA (~/media), DASH_OUT, DISK_WARN_GB, DISK_MIN_GB, DASH_MEDIA_SCRIPT
+# (dashmedia.py; by default next to this script).
 
 cfg="${DASH_CONFIG:-$HOME/media/config}"
 state="${DASH_STATE:-$HOME/media/.state}"
@@ -51,7 +54,9 @@ playing_json() {
   [ -n "$jk" ] || { echo "[]"; return; }
   get "http://127.0.0.1:8096/Sessions?ActiveWithinSeconds=120" "Authorization: MediaBrowser Token=\"$jk\"" | jq -c '
     [.[]? | select(.NowPlayingItem) | . as $s | .NowPlayingItem as $i
-     | {user: .UserName, client: (.Client // ""), device: (.DeviceName // ""),
+     | {user: .UserName, client: (.Client // ""), device: (.DeviceName // ""), id: $i.Id,
+        image: (if $i.SeriesPrimaryImageTag then $i.SeriesId else $i.Id end),
+        tag: ($i.SeriesPrimaryImageTag // $i.ImageTags.Primary // null),
         title: (if $i.SeriesName then $i.SeriesName else $i.Name end),
         detail: (if $i.SeriesName then "S\($i.ParentIndexNumber // 0)E\($i.IndexNumber // 0) · \($i.Name)" else ($i.ProductionYear // "" | tostring) end),
         progress: (if ($i.RunTimeTicks // 0) > 0 then (($s.PlayState.PositionTicks // 0) / $i.RunTimeTicks * 100 | floor) else 0 end),
@@ -145,7 +150,8 @@ slow_json() {
   jq -nc --argjson sonarr "$(arr_json http://127.0.0.1:8989 "$sk")" --argjson radarr "$(arr_json http://127.0.0.1:7878 "$rk")" \
     --argjson idx "$indexers" --argjson st "$statuses" --argjson counts "$counts" --argjson badges "$badges" --argjson req "$requests" \
     --argjson stats "${stats:-{\}}" --argjson ts "${tailscale:-{\}}" --argjson up "$(uptime_json)" --argjson watched "${watched:-[]}" --argjson rr "${recent_requests:-[]}" \
-    --argjson total "${total_kb:-0}" --argjson free "${free_kb:-0}" --argjson warn "${DISK_WARN_GB:-50}" --argjson min "${DISK_MIN_GB:-10}" '
+    --argjson total "${total_kb:-0}" --argjson free "${free_kb:-0}" --argjson warn "${DISK_WARN_GB:-50}" --argjson min "${DISK_MIN_GB:-10}" \
+    --argjson media "$(python3 "${DASH_MEDIA_SCRIPT:-$(dirname "${BASH_SOURCE[0]}")/dashmedia.py}" 2>/dev/null || echo '{}')" '
     ($idx | map({key: (.id | tostring), value: .name}) | from_entries) as $names
     | {sonarr: $sonarr, radarr: $radarr,
        prowlarr: {indexers: ($idx | length), enabled: ([$idx[] | select(.enable)] | length),
@@ -155,12 +161,14 @@ slow_json() {
        subtitles: {missing_episodes: ($badges.episodes // null), missing_movies: ($badges.movies // null)},
        indexer_stats: $stats, tailscale: $ts, uptime: $up, watched: $watched, recent_requests: $rr,
        requests: {pending: ($req.pending // null), processing: ($req.processing // null), available: ($req.available // null), total: ($req.total // null)},
-       disk: {total_gb: ($total / 1048576 | floor), free_gb: ($free / 1048576 | floor), warn_gb: $warn, min_gb: $min}}' 2>/dev/null || echo '{}'
+       disk: {total_gb: ($total / 1048576 | floor), free_gb: ($free / 1048576 | floor), warn_gb: $warn, min_gb: $min}}
+      + $media' 2>/dev/null || echo '{}'
 }
 
 # 24-hour availability per service: a sample every slow round (5 minutes),
-# the last 288 kept in $state/dashstatus/uptime.json
-UPTIME_CHECKS="Jellyfin|http://127.0.0.1:8096/health Seerr|http://127.0.0.1:5055/api/v1/status Sonarr|http://127.0.0.1:8989/ping Radarr|http://127.0.0.1:7878/ping Prowlarr|http://127.0.0.1:9696/ping Bazarr|http://127.0.0.1:6767 qBittorrent|http://127.0.0.1:8081 SABnzbd|http://127.0.0.1:8080 Cleanuparr|http://127.0.0.1:11011/health Byparr|http://127.0.0.1:8191/health"
+# the last 288 kept in $state/dashstatus/uptime.json. Byparr is checked on
+# /docs: its /health opens a browser and can take longer than the timeout.
+UPTIME_CHECKS="Jellyfin|http://127.0.0.1:8096/health Seerr|http://127.0.0.1:5055/api/v1/status Sonarr|http://127.0.0.1:8989/ping Radarr|http://127.0.0.1:7878/ping Prowlarr|http://127.0.0.1:9696/ping Bazarr|http://127.0.0.1:6767 qBittorrent|http://127.0.0.1:8081 SABnzbd|http://127.0.0.1:8080 Cleanuparr|http://127.0.0.1:11011/health Byparr|http://127.0.0.1:8191/docs"
 uptime_json() {
   local f="$state/dashstatus/uptime.json" now sample="{}" check name url code hist
   now=$(date +%s)

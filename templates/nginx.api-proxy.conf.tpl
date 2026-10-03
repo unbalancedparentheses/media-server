@@ -20,33 +20,6 @@ location = /api/qbt/torrents/info {
     proxy_set_header Referer http://{{ADMIN_HOST}}:8081;
     proxy_set_header Origin http://{{ADMIN_HOST}}:8081;
 }
-location = /api/qbt/sync/maindata {
-    limit_except GET { deny all; }
-    limit_req zone=api burst=50 nodelay;
-    set $upstream_api_qbt http://{{ADMIN_HOST}}:8081/api/v2/sync/maindata$is_args$args;
-    proxy_pass $upstream_api_qbt;
-    proxy_set_header Host {{ADMIN_HOST}}:8081;
-    proxy_set_header Referer http://{{ADMIN_HOST}}:8081;
-    proxy_set_header Origin http://{{ADMIN_HOST}}:8081;
-}
-
-# Sonarr
-location = /api/sonarr/calendar {
-    limit_except GET { deny all; }
-    limit_req zone=api burst=50 nodelay;
-    set $upstream_api_sonarr http://{{ADMIN_HOST}}:8989/api/v3/calendar$is_args$args;
-    proxy_pass $upstream_api_sonarr;
-    proxy_set_header X-Api-Key "{{SONARR_KEY}}";
-}
-
-# Radarr
-location = /api/radarr/calendar {
-    limit_except GET { deny all; }
-    limit_req zone=api burst=50 nodelay;
-    set $upstream_api_radarr http://{{ADMIN_HOST}}:7878/api/v3/calendar$is_args$args;
-    proxy_pass $upstream_api_radarr;
-    proxy_set_header X-Api-Key "{{RADARR_KEY}}";
-}
 
 # Jellyfin
 location = /api/jellyfin/Items {
@@ -55,15 +28,6 @@ location = /api/jellyfin/Items {
     set $upstream_api_jellyfin http://127.0.0.1:8096/Items$is_args$args;
     proxy_pass $upstream_api_jellyfin;
     proxy_set_header Authorization 'MediaBrowser Token="{{JELLYFIN_API_KEY}}"';
-}
-
-# Seerr
-location = /api/seerr/request {
-    limit_except GET { deny all; }
-    limit_req zone=api burst=50 nodelay;
-    set $upstream_api_seerr http://127.0.0.1:5055/api/v1/request$is_args$args;
-    proxy_pass $upstream_api_seerr;
-    proxy_set_header X-Api-Key "{{SEERR_KEY}}";
 }
 
 # Seerr search (the dashboard's search box offers titles to request)
