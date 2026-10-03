@@ -504,3 +504,16 @@ jellyfin_login() {
     -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{Username:$u,Pw:$p}')" || echo "")
   JELLYFIN_TOKEN=$(echo "$resp" | jq -r '.AccessToken // empty' 2>/dev/null || echo "")
 }
+
+# Wait until Sonarr has finished adding a series: its episodes are listed
+# and no refresh or scan is pending (mediaserver/steps/arrs.py has the
+# same for setup)
+sonarr_series_settled() {  # series-id [timeout]
+  local id="$1" max="${2:-180}" start=$SECONDS H="X-Api-Key: $SONARR_KEY"
+  until [ "$(api GET "$SONARR_URL/api/v3/episode?seriesId=$id" -H "$H" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] && \
+        ! api GET "$SONARR_URL/api/v3/command" -H "$H" | \
+          jq -e 'any(.[]; (.name == "RefreshSeries" or .name == "RescanSeries") and (.status == "queued" or .status == "started"))' >/dev/null; do
+    [ $((SECONDS - start)) -ge "$max" ] && return 1
+    sleep 2
+  done
+}
