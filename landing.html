@@ -416,7 +416,7 @@
       t+=tile('Library',plural(lib.movies||0,'movie'),(lib.series||0)+' series'+' · '+num(lib.episodes)+' episodes',moonfin,'');
       t+=tile('Missing',num(missing),num((s.sonarr||{}).missing)+' episodes · '+num((s.radarr||{}).missing)+' movies still wanted',admin(8989,'/wanted/missing'),'');
       t+=tile('Subtitles missing',num((sub.missing_episodes||0)+(sub.missing_movies||0)),num(sub.missing_episodes)+' episodes · '+num(sub.missing_movies)+' movies',admin(6767,'/wanted/series'),'');
-      t+=tile('Indexers',(px.enabled!=null?(px.enabled-off)+' / '+px.indexers:'–'),'working · 24 h: '+num(st.queries)+' searches, '+num(st.grabs)+' grabs',admin(9696),off?'t-warn':'t-good');
+      t+=tile('Indexers',(px.enabled!=null?(px.enabled-off)+' / '+px.enabled:'–'),'working · 24 h: '+num(st.queries)+' searches, '+num(st.grabs)+' grabs',admin(9696),off?'t-warn':'t-good');
       t+=tile('System',(sys.cpu_pct==null?'–':sys.cpu_pct+'%')+' CPU',(sys.mem_pct==null?'–':sys.mem_pct+'%')+' memory · up '+(sys.uptime_s?upFor(sys.uptime_s):'–'),null,sys.cpu_pct>85?'t-warn':'',{v:sys.cpu_pct||0,cls:sys.cpu_pct>85?'warn':''});
       t+=tile('Disk',num(dk.free_gb)+' GB free','of '+num(dk.total_gb)+' GB · imports stop below '+dk.min_gb+' GB',null,dk.free_gb<dk.warn_gb?'t-warn':'',{v:used,cls:dk.free_gb<dk.min_gb?'crit':dk.free_gb<dk.warn_gb?'warn':''});
       if(ts.installed&&ts.state==='Running')t+=tile('Tailscale','Connected',esc(ts.name)+' · '+ts.peers+' devices',null,'t-good');

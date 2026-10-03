@@ -74,7 +74,9 @@ doctor_indexers() {
   names=$(api GET "$PROWLARR_URL/api/v1/indexer" -H "X-Api-Key: $PROWLARR_KEY" || echo "[]")
   off=$(jq -r --argjson names "$names" '
     ($names | map({key: (.id | tostring), value: .name}) | from_entries) as $n
-    | [.[] | select(.disabledTill != null and (.disabledTill | fromdateiso8601) > now)
+    | [$names[] | select(.enable) | .id] as $on
+    # Switched-off indexers keep their last failure; only enabled ones count
+    | [.[] | select(.indexerId as $i | $on | index($i)) | select(.disabledTill != null and (.disabledTill | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) > now)
       | "\($n[.indexerId | tostring] // "indexer \(.indexerId)") (until \(.disabledTill | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | strflocaltime("%a %H:%M")))"]
     | join(", ")' <<< "$statuses" 2>/dev/null)
   if [ -n "$off" ]; then

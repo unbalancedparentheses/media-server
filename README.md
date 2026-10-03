@@ -340,7 +340,7 @@ flaresolverr = false        # true: go through Byparr (Cloudflare-protected site
 fields = { apiKey = "…" }   # for indexers that need an account or API key
 ```
 
-The defaults are 16 public ones: general (1337x, EZTV, The Pirate Bay, YTS, Knaben, LimeTorrents, Torrent Downloads, MegaPeer, KickassTorrents, Uindex) and anime (Nyaa, SubsPlease, Mikan, Bangumi Moe, Tokyo Toshokan, nekoBT). NZBgeek is included, disabled, as a Usenet example.
+The defaults are 15 public ones: general (1337x, EZTV, The Pirate Bay, YTS, Knaben, LimeTorrents, MegaPeer, KickassTorrents, Uindex) and anime (Nyaa, SubsPlease, Mikan, Bangumi Moe, Tokyo Toshokan, nekoBT). NZBgeek is included, disabled, as a Usenet example.
 
 **`[[usenet_providers]]`: Usenet (optional, paid)**
 

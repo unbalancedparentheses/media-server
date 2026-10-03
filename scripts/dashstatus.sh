@@ -153,9 +153,10 @@ slow_json() {
     --argjson total "${total_kb:-0}" --argjson free "${free_kb:-0}" --argjson warn "${DISK_WARN_GB:-50}" --argjson min "${DISK_MIN_GB:-10}" \
     --argjson media "$(python3 "${DASH_MEDIA_SCRIPT:-$(dirname "${BASH_SOURCE[0]}")/dashmedia.py}" 2>/dev/null || echo '{}')" '
     ($idx | map({key: (.id | tostring), value: .name}) | from_entries) as $names
+    | [$idx[] | select(.enable) | .id] as $on
     | {sonarr: $sonarr, radarr: $radarr,
        prowlarr: {indexers: ($idx | length), enabled: ([$idx[] | select(.enable)] | length),
-                  off: [$st[]? | select(.disabledTill != null and ((.disabledTill | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) > now))
+                  off: [$st[]? | select(.indexerId as $i | $on | index($i)) | select(.disabledTill != null and ((.disabledTill | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) > now))
                         | {name: ($names[.indexerId | tostring] // "indexer \(.indexerId)"), until: .disabledTill}]},
        library: {movies: ($counts.MovieCount // null), series: ($counts.SeriesCount // null), episodes: ($counts.EpisodeCount // null)},
        subtitles: {missing_episodes: ($badges.episodes // null), missing_movies: ($badges.movies // null)},

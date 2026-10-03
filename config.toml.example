@@ -159,12 +159,6 @@ definitionName = "limetorrents"
 enable = true
 
 [[indexers]]
-name = "Torrent Downloads"
-definitionName = "torrentdownloads"
-enable = true
-flaresolverr = true   # behind Cloudflare
-
-[[indexers]]
 name = "MegaPeer"
 definitionName = "megapeer"
 enable = true
