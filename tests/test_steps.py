@@ -575,3 +575,14 @@ class Arrs(unittest.TestCase):
         self.assertEqual({i["format"]: i["score"] for i in tv["formatItems"]}, {1: -10000, 2: 0, 3: 50})
         anime = arrs.scored_profile({"name": "Anime", "formatItems": []}, formats)
         self.assertEqual({i["format"]: i["score"] for i in anime["formatItems"]}, {1: -10000, 2: -10000, 3: 0})
+
+
+class FreshSabnzbd(unittest.TestCase):
+    def test_no_server_list_means_no_servers(self):
+        cfg = scratch()
+        self.addCleanup(shutil.rmtree, cfg.paths.media)
+        s = downloads.Sabnzbd(cfg, "k")
+        with mock.patch.object(c, "request", return_value=c.Response(200, {}, b'{"config": {}}')):
+            self.assertEqual(s.servers(), [])
+        with mock.patch.object(c, "request", return_value=c.Response(0, {}, b"")):
+            self.assertIsNone(s.servers())

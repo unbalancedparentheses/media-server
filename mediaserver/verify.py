@@ -87,10 +87,11 @@ class Verifier:
     def health(self) -> None:
         info("Service health...")
         for name, url in self.urls.health_endpoints():
-            code = c.status_code(url)
+            # Generous: Byparr's /health starts a browser to answer
+            code = c.status_code(url, timeout=30)
             if code == 0:
                 time.sleep(5)
-                code = c.status_code(url)
+                code = c.status_code(url, timeout=30)
             shown = f"{code:03d}"
             if name == "Byparr" and not 200 <= code < 400 and not self.cfg.byparr_needed():
                 self.t.skip(f"Byparr responds ({shown}; no enabled indexer needs it)")

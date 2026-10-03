@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 import time
 from pathlib import Path
 from typing import Any
@@ -240,6 +241,17 @@ def custom_format(path: Path) -> tuple[dict, int, str]:
     return payload, data.get("mediaServerScore", JUNK_SCORE), data.get("mediaServerProfiles", "all")
 
 
+def comparable(cf: dict) -> dict:
+    """A custom format as far as setup sets it (the apps add their own
+    fields to what they read back: ids, labels, help texts)"""
+    return {"name": cf.get("name"), "includeCustomFormatWhenRenaming": bool(cf.get("includeCustomFormatWhenRenaming")),
+            "specifications": sorted(
+                (json.dumps({"name": sp.get("name"), "implementation": sp.get("implementation"), "negate": bool(sp.get("negate")),
+                             "required": bool(sp.get("required")),
+                             "fields": {f.get("name"): f.get("value") for f in sp.get("fields") or []}}, sort_keys=True)
+                 for sp in cf.get("specifications") or []))}
+
+
 def preference_score(cfg: Config, name: str, score: int) -> int:
     """Preferences config.toml can turn off score 0"""
     if name == "Prefer HEVC" and not cfg.flag("quality.prefer_h265", True):
@@ -282,7 +294,8 @@ def apply_junk_filters(cfg: Config, app: App, folder: str) -> None:
         current = next((x for x in existing if x.get("name") == name), None)
         try:
             if current:
-                app.call("PUT", f"customformat/{current['id']}", dict(payload, id=current["id"]))
+                if comparable(current) != comparable(payload):
+                    app.call("PUT", f"customformat/{current['id']}", dict(payload, id=current["id"]))
                 fid = current["id"]
             else:
                 fid = (app.call("POST", "customformat", payload) or {}).get("id")
@@ -472,7 +485,7 @@ def migrate_anime_sonarr(cfg: Config, sonarr: App) -> None:
 
 
 def query(db: Path, sql: str) -> list[dict]:
-    with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as conn:
+    with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn, conn:
         conn.row_factory = sqlite3.Row
         return [dict(r) for r in conn.execute(sql)]
 

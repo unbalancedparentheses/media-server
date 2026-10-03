@@ -400,6 +400,7 @@
                 (python3.withPackages (ps: [
                   ps.pyyaml
                   ps.bcrypt
+                  ps.coverage
                 ]))
                 sqlite
                 jellyfin-ffmpeg
@@ -407,7 +408,13 @@
               text = ''
                 bash ${self}/tests/recovery.sh
                 echo "Python tests"
-                cd ${self} && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -q -s tests -t .
+                # With coverage: the report lists what isn't tested yet, and
+                # the run fails if coverage drops below the floor
+                COVERAGE_FILE=$(mktemp -d)/coverage
+                export COVERAGE_FILE PYTHONDONTWRITEBYTECODE=1
+                cd ${self}
+                python3 -m coverage run --source=mediaserver -m unittest discover -q -s tests -t .
+                python3 -m coverage report --sort=cover --skip-covered --fail-under=75
               '';
             }
           );

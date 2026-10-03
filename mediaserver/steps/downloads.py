@@ -192,9 +192,14 @@ class Sabnzbd:
         return self.api(fields, tries=3) is not None
 
     def servers(self):
+        """The servers ([{name, enable}]); None when SABnzbd didn't answer.
+        A fresh SABnzbd leaves the list out: that's no servers."""
         answer = self.api({"mode": "get_config", "section": "servers"})
+        if answer is None:
+            return None
+        servers = (answer.get("config") or {}).get("servers") if isinstance(answer, dict) else None
         try:
-            return [{"name": s["name"], "enable": s.get("enable")} for s in answer["config"]["servers"]] if answer else None
+            return [{"name": s["name"], "enable": s.get("enable")} for s in servers or []]
         except (KeyError, TypeError):
             return None
 

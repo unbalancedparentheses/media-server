@@ -121,6 +121,7 @@ def run(cfg: Config) -> None:
         return
     plugin = jf.plugin(MOONBASE.guid)
     plugins_dir = cfg.paths.config / "jellyfin/data/plugins"
+    installed_now = not plugin
     if not plugin:
         if not jf.pin_repository(f"Moonbase {MOONBASE.version}", MOONBASE.manifest, "Moonfin-Client/Plugin"):
             return
@@ -171,8 +172,11 @@ def run(cfg: Config) -> None:
     except ApiError:
         warn("Could not set the Seerr URL in Moonbase")
 
-    # Upstream: the web app needs the "Moonfin Startup" task once after install
+    # Upstream: the web app needs the "Moonfin Startup" task once after
+    # install (it unpacks the web files)
     try:
+        if not (installed_now or d is None):
+            raise ApiError("not needed")
         task = next((t for t in jf.get("ScheduledTasks") or [] if re.search("Moonfin Startup", t.get("Name") or "", re.I)), None)
         if task:
             jf.post(f"ScheduledTasks/Running/{task['Id']}")

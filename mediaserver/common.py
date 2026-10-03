@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sqlite3
+from contextlib import closing
 import subprocess
 import time
 import urllib.error
@@ -101,7 +102,7 @@ def sabnzbd_key(config: Path) -> str:
 
 def cleanuparr_key(config: Path) -> str:
     try:
-        with sqlite3.connect(f"file:{config / 'cleanuparr/users.db'}?mode=ro", uri=True) as db:
+        with closing(sqlite3.connect(f"file:{config / 'cleanuparr/users.db'}?mode=ro", uri=True)) as db, db:
             row = db.execute("SELECT api_key FROM users LIMIT 1").fetchone()
         return row[0] if row else ""
     except sqlite3.Error:

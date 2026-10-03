@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -63,7 +64,8 @@ class Cleanuparr:
             except ApiError:
                 warn(f"Cleanuparr: couldn't read its {name} settings; skipped (retried next run)")
                 continue
-            ids = [i["id"] for i in existing.get("instances") or [] if i.get("url") == f"{url}/"]
+            # Cleanuparr may store the address with a trailing slash
+            ids = [i["id"] for i in existing.get("instances") or [] if (i.get("url") or "").rstrip("/") == url]
             # Sent every run so a changed API key reaches it
             body = {"name": name, "url": url, "apiKey": key, "version": version, "enabled": True}
             try:
@@ -187,7 +189,7 @@ def write_login(db_path: Path, user: str, password: str) -> None:
     import bcrypt
     # $2a$ like BCrypt.Net; same algorithm as bcrypt's $2b$
     digest = bcrypt.hashpw(password.encode(), bcrypt.gensalt(12)).decode().replace("$2b$", "$2a$", 1)
-    with sqlite3.connect(db_path) as db:
+    with closing(sqlite3.connect(db_path)) as db, db:
         db.execute("UPDATE users SET username = ?, password_hash = ?, failed_login_attempts = 0, lockout_end = NULL, updated_at = ?",
                    (user, digest, datetime.now(timezone.utc).isoformat()))
         db.execute("DELETE FROM refresh_tokens")  # sign out existing sessions
@@ -219,7 +221,7 @@ def require_login(cfg: Config) -> None:
             raise err("Cleanuparr didn't stop, so its login requirement couldn't be turned on; stopping here "
                       "(stop it with 'nix run .#restart -- cleanuparr' and re-run)")
     try:
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn, conn:
             conn.execute("UPDATE general_configs SET auth_disable_auth_for_local_addresses = 0 WHERE auth_disable_auth_for_local_addresses = 1")
             left = conn.execute("SELECT COUNT(*) FROM general_configs WHERE auth_disable_auth_for_local_addresses = 1").fetchone()[0]
     except sqlite3.Error:
