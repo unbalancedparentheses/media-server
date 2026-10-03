@@ -127,6 +127,7 @@ stereo_audio = true       # add a stereo track browsers play directly when the a
 ocr_subtitles = true      # read Blu-ray picture subtitles into text .srt files
 drop_picture_subtitles = true   # remove a picture subtitle track when its language is there as text
                                 # (players otherwise pick the picture one, burned into the video)
+default_tracks = true     # make each file's default audio/subtitles your preferences ([playback], [subtitles])
 
 # ─── Indexers (Prowlarr) ───────────────────────────────────────
 

@@ -53,6 +53,7 @@ Environment: POSTIMPORT_CONFIG (~/media/config), POSTIMPORT_STATE
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -84,6 +85,7 @@ DEFAULTS = {
     "anime_audio_language": "jpn",
     "anime_dir": "",
     "drop_picture_subtitles": True,
+    "default_tracks": True,
     "subtitle_languages": ["en"],
     "want": "first",
     "min_free_gb": 10,
@@ -100,6 +102,15 @@ PICTURE_SUBTITLES = {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle"}
 FIX_VERSION = 5
 SIDECAR_SUBTITLES = {".srt", ".ass", ".ssa", ".vtt", ".sub"}
 NOTHING_FOUND_AFTER = 6 * 3600
+# A problem found on import is checked again this much later before the
+# file is deleted (a tool or the disk can fail once)
+CONFIRM_AFTER = 10 * 60
+# An import that can't be checked (a service down) is retried, with growing
+# pauses, this many times
+IMPORT_TRIES = 10
+# A fix that fails is retried this often, at most every RETRY_FIX_AFTER
+FIX_TRIES = 3
+RETRY_FIX_AFTER = 3600
 SWEEP_PER_ROUND = 3
 
 # ISO 639-1 → the ISO 639-2 codes files are tagged with (B and T forms)
@@ -142,19 +153,42 @@ def notify(title, message):
 
 # ─── Inspecting files ────────────────────────────────────────────
 
-def probe(path):
-    """ffprobe's streams and format, or None when it can't read the file"""
-    result = subprocess.run(
-        ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)],
-        capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        return None
+class ToolTrouble(Exception):
+    """ffprobe/ffmpeg themselves don't work (missing, crashing): nothing can
+    be concluded about the file, so nothing is rejected"""
+
+
+def tools_work() -> bool:
     try:
-        info = json.loads(result.stdout)
-    except ValueError:
-        return None
-    info.setdefault("streams", [])
-    return info
+        return all(subprocess.run([tool, "-version"], capture_output=True, check=False, timeout=30).returncode == 0
+                   for tool in ("ffprobe", "ffmpeg"))
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def probe(path, tries: int = 3):
+    """ffprobe's streams and format, or None when it can't read the file
+    (after <tries> attempts: a file still being moved or a busy disk can
+    fail once). Raises ToolTrouble when ffprobe itself doesn't work."""
+    for attempt in range(tries):
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)],
+                capture_output=True, text=True, check=False, timeout=120)
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is not None and result.returncode == 0:
+            try:
+                info = json.loads(result.stdout)
+                info.setdefault("streams", [])
+                return info
+            except ValueError:
+                pass
+        if attempt + 1 < tries:
+            time.sleep(2)
+    if not tools_work():
+        raise ToolTrouble("ffprobe/ffmpeg don't run")
+    return None
 
 
 def duration(info):
@@ -174,13 +208,22 @@ def decodes(path, length):
     gives no picture at all (damaged or cut short). Glitches right after a
     seek are normal and don't count."""
     points = [0.0] if length < 90 else [10.0, length / 2, max(length - 60, 0)]
-    for start in points:
-        result = subprocess.run(background(
-            ["ffmpeg", "-nostdin", "-v", "error", "-hwaccel", "videotoolbox", "-ss", f"{start:.0f}",
-             "-progress", "pipe:1", "-i", str(path), "-map", "0:v:0", "-t", "8", "-f", "null", "-"]),
-            capture_output=True, text=True, check=False)
+
+    def frames_at(start: float, hardware: bool) -> int:
+        cmd = ["ffmpeg", "-nostdin", "-v", "error"] + (["-hwaccel", "videotoolbox"] if hardware else []) + [
+            "-ss", f"{start:.0f}", "-progress", "pipe:1", "-i", str(path), "-map", "0:v:0", "-t", "8", "-f", "null", "-"]
+        try:
+            result = subprocess.run(background(cmd), capture_output=True, text=True, check=False, timeout=300)
+        except (OSError, subprocess.TimeoutExpired):
+            return 0
         frames = [int(m) for m in re.findall(r"^frame=(\d+)", result.stdout, re.M)]
-        if result.returncode != 0 or not frames or frames[-1] == 0:
+        return frames[-1] if result.returncode == 0 and frames else 0
+    for start in points:
+        # The hardware decoder can fail where the file is fine (busy, an
+        # unusual profile): only a failure in software too counts
+        if frames_at(start, True) == 0 and frames_at(start, False) == 0:
+            if not tools_work():
+                raise ToolTrouble("ffmpeg doesn't run")
             return False
     return True
 
@@ -257,6 +300,11 @@ def stereo_command(path, out, info, source, encoder):
             "-disposition:a", "0", "-disposition:a:0", "default"]
     if fmt == "mp4":
         cmd += ["-movflags", "+faststart"]
+    else:
+        # Exactly the flags given: by default the MKV writer flags the first
+        # track of a type "default" when none is, which undid "no default
+        # subtitles" (and the next check redid it)
+        cmd += ["-default_mode", "passthrough"]
     return cmd + ["-f", fmt, str(out)]
 
 
@@ -428,6 +476,11 @@ def defaults_command(path, out, info, plan: dict, dropped: list | None = None):
                 cmd += [f"-disposition:{letter}:{indexes.index(index)}", flag]
     if fmt == "mp4":
         cmd += ["-movflags", "+faststart"]
+    else:
+        # Exactly the flags given: by default the MKV writer flags the first
+        # track of a type "default" when none is, which undid "no default
+        # subtitles" (and the next check redid it)
+        cmd += ["-default_mode", "passthrough"]
     return cmd + ["-f", fmt, str(out)]
 
 
@@ -451,11 +504,26 @@ def sidecar_languages(path):
         return found
     for f in siblings:
         if f.suffix.lower() in SIDECAR_SUBTITLES and f.name.startswith(path.stem + "."):
-            for part in f.name[len(path.stem) + 1:].split(".")[:-1]:
+            parts = [x.lower() for x in f.name[len(path.stem) + 1:].split(".")[:-1]]
+            # Forced/signs files cover only part of the dialogue
+            if any(x in ("forced", "signs", "songs") for x in parts):
+                continue
+            for part in parts:
                 if language_of(part):
                     found.add(language_of(part))
                     break
     return found
+
+
+def sidecar_files(path) -> list:
+    """Names of the subtitle files next to the video (they change what the
+    fixes decide, e.g. when Bazarr adds one)"""
+    path = Path(path)
+    try:
+        return sorted(f.name for f in path.parent.iterdir()
+                      if f.suffix.lower() in SIDECAR_SUBTITLES and f.name.startswith(path.stem + "."))
+    except OSError:
+        return []
 
 
 def is_forced(stream):
@@ -493,11 +561,12 @@ def ocr_targets(info, path, languages, want):
 
 
 def ocr(path, lang, stream):
-    """Read a PGS track into Movie.<lang>.srt next to the video; True if written"""
+    """Read a PGS track into Movie.<lang>.srt next to the video. Returns
+    "written", "skipped" (already there) or "failed"."""
     path = Path(path)
     dest = path.with_name(f"{path.stem}.{lang}.srt")
     if dest.exists():
-        return False
+        return "skipped"
     with tempfile.TemporaryDirectory(dir=STATE) as tmp:
         sup = Path(tmp) / f"subtitles.{lang}.sup"
         extract = subprocess.run(background(
@@ -505,18 +574,18 @@ def ocr(path, lang, stream):
              "-c", "copy", str(sup)]), capture_output=True, text=True, check=False)
         if extract.returncode != 0:
             log(f"couldn't extract the {lang} picture subtitles of {path.name}")
-            return False
+            return "failed"
         subprocess.run(background(["pgsrip", "-l", lang, "-w", "2", str(sup)]),
                        capture_output=True, text=True, check=False)
         srt = sup.with_suffix(".srt")
         text = srt.read_text(errors="replace") if srt.exists() else ""
         if text.count("-->") < 10:
             log(f"reading the {lang} picture subtitles of {path.name} gave nothing usable")
-            return False
+            return "failed"
         tmp_dest = dest.with_name(f".{dest.name}.tmp")
         tmp_dest.write_text(text)
         os.replace(tmp_dest, dest)
-    return True
+    return "written"
 
 
 # ─── Sonarr and Radarr ───────────────────────────────────────────
@@ -543,10 +612,17 @@ class Arr:
             raw = resp.read()
         return json.loads(raw) if raw else {}
 
-    def imports_after(self, last_id):
-        """Import events newer than last_id, oldest first"""
-        page = self.call("GET", "history?page=1&pageSize=50&sortKey=date&sortDirection=descending&eventType=3")
-        return sorted((r for r in page.get("records", []) if r["id"] > last_id), key=lambda r: r["id"])
+    def imports_after(self, last_id, page_size=50, max_pages=100):
+        """Every import event newer than last_id (paging back as far as
+        needed, not just the latest page), oldest first"""
+        found = []
+        for page in range(1, max_pages + 1):
+            records = self.call("GET", f"history?page={page}&pageSize={page_size}&sortKey=date"
+                                       f"&sortDirection=descending&eventType=3").get("records", [])
+            found += [r for r in records if r["id"] > last_id]
+            if len(records) < page_size or any(r["id"] <= last_id for r in records):
+                break
+        return sorted(found, key=lambda r: r["id"])
 
     def latest_import_id(self):
         page = self.call("GET", "history?page=1&pageSize=1&sortKey=date&sortDirection=descending&eventType=3")
@@ -622,53 +698,86 @@ def jellyfin_updated(path):
 class Worker:
     def __init__(self, apps, settings, state):
         self.apps, self.settings, self.state = apps, settings, state
-        self.state.setdefault("last_import", {})
-        self.state.setdefault("rejections", {})
-        self.state.setdefault("seen", {})
-        self.state.setdefault("recent", [])
+        for key, empty in (("last_import", {}), ("rejections", {}), ("seen", {}), ("recent", []),
+                           ("pending", {}), ("failures", {})):
+            self.state.setdefault(key, empty)
 
     def remember(self, title, what):
         self.state["recent"] = ([{"time": int(time.time()), "title": title, "what": what}]
                                 + self.state["recent"])[:30]
         log(f"{title}: {what}")
 
-    def fix(self, path, info, title):
-        """Steps 2 to 4; True if anything changed. A file that can't be
-        rewritten for lack of space isn't marked done, so it's retried."""
+    def mark(self, path, st=None):
+        """What marks a file as done: its size and time, the subtitle files
+        next to it and the settings that decide the fixes (any change looks
+        at it again), and the fixes known then (FIX_VERSION)"""
         s = self.settings
-        changed, done = False, True
+        decides = [self.audio_language_for(path), s.get("subtitle_languages"), s.get("want"), s.get("stereo_audio"),
+                   s.get("ocr_subtitles"), s.get("default_tracks", True), s.get("drop_picture_subtitles", True),
+                   sidecar_files(path)]
+        fingerprint = hashlib.sha1(json.dumps(decides, sort_keys=True).encode()).hexdigest()[:12]
+        return seen_mark(path, st) + [fingerprint]
+
+    def fix(self, path, info, title):
+        """Steps 2 to 4; True if anything changed. A file isn't marked done
+        while a fix couldn't run (no space) or failed: it's retried later
+        (a failing fix FIX_TRIES times, at most every RETRY_FIX_AFTER)."""
+        s = self.settings
+        changed, done, failed = False, True, []
         audio_language = self.audio_language_for(path)
         if s["stereo_audio"] and path.suffix.lower() in VIDEO_EXTENSIONS:
             source = needs_stereo(info, audio_language)
             if source is not None and not room_for(path, s):
                 done = False
-            elif source is not None and add_stereo(path, info, source):
-                changed = True
-                self.remember(title, f"added stereo audio (from {source.get('codec_name')}) so browsers play it directly")
-                info = probe(path) or info
+            elif source is not None:
+                if add_stereo(path, info, source):
+                    changed = True
+                    self.remember(title, f"added stereo audio (from {source.get('codec_name')}) so browsers play it directly")
+                    info = probe(path) or info
+                else:
+                    failed.append("stereo audio")
         if s["ocr_subtitles"]:
             for lang, stream in ocr_targets(info, path, s["subtitle_languages"], s["want"]):
-                if ocr(path, lang, stream):
+                result = ocr(path, lang, stream)
+                if result == "written":
                     self.remember(title, f"turned the {lang} picture subtitles into text")
                     changed = True
+                elif result == "failed":
+                    failed.append(f"{lang} subtitles from pictures")
         # The preferred audio and subtitles as the file's defaults
-        if path.suffix.lower() in VIDEO_EXTENSIONS:
+        if path.suffix.lower() in VIDEO_EXTENSIONS and (s.get("default_tracks", True) or s.get("drop_picture_subtitles", True)):
             info = probe(path) or info
             dropped = redundant_pictures(info, path) if s.get("drop_picture_subtitles", True) else []
-            plan = default_tracks(without(info, dropped), path, audio_language, s["subtitle_languages"])
+            plan = default_tracks(without(info, dropped), path, audio_language, s["subtitle_languages"]) \
+                if s.get("default_tracks", True) else {}
             if (plan or dropped) and not room_for(path, s):
                 done = False
-            elif (plan or dropped) and set_defaults(path, info, plan, dropped):
-                changed = True
-                if dropped:
-                    langs = ", ".join(sorted({stream_language(st) or "?" for st in dropped}))
-                    self.remember(title, f"removed the {langs} picture subtitles (there as text)")
-                if plan:
-                    self.remember(title, "set the default " + describe_defaults(probe(path) or info, path))
+            elif plan or dropped:
+                if set_defaults(path, info, plan, dropped):
+                    changed = True
+                    if dropped:
+                        langs = ", ".join(sorted({stream_language(st) or "?" for st in dropped}))
+                        self.remember(title, f"removed the {langs} picture subtitles (there as text)")
+                    if plan:
+                        self.remember(title, "set the default " + describe_defaults(probe(path) or info, path))
+                else:
+                    failed.append("default tracks")
         if changed:
             jellyfin_updated(path)
+        key = str(path)
+        if failed:
+            f = self.state["failures"].get(key, {"count": 0})
+            f = {"count": f["count"] + 1, "last": int(time.time()), "what": failed}
+            if f["count"] >= FIX_TRIES:
+                self.remember(title, f"gave up on {', '.join(failed)} after {f['count']} tries (see the log)")
+                self.state["failures"].pop(key, None)
+            else:
+                self.state["failures"][key] = f
+                done = False
+        else:
+            self.state["failures"].pop(key, None)
         if done:
-            self.state["seen"][str(path)] = seen_mark(path)
+            self.state["seen"][key] = self.mark(path)
         return changed
 
     def audio_language_for(self, path) -> str:
@@ -679,28 +788,42 @@ class Worker:
             return self.settings.get("anime_audio_language", "")
         return self.settings.get("audio_language", "")
 
-    def handle_import(self, app, record):
+    def handle_import(self, app, record, entry) -> bool:
+        """Check and fix one imported file; True when finished with it, False
+        to look again later. A problem is confirmed CONFIRM_AFTER later before
+        the file is deleted: one failed read or decode isn't proof."""
         path = Path((record.get("data") or {}).get("importedPath", ""))
         if not path.is_file():
-            return  # replaced or deleted since
+            return True  # replaced or deleted since
         title, minutes, japanese, key = app.item(record)
         info = probe(path)
         rejection = self.state["rejections"].get(key)
         if self.settings["check_downloads"]:
             problem = problem_with(info, path, minutes, japanese and self.settings["block_dubs"])
+            suspect = entry.get("suspect")
+            if problem and not suspect:
+                entry["suspect"] = {"problem": problem, "since": int(time.time())}
+                entry["next"] = int(time.time()) + CONFIRM_AFTER
+                log(f"{title}: {problem}? checking again in {CONFIRM_AFTER // 60} minutes before replacing it")
+                return False
+            if problem and time.time() - suspect["since"] < CONFIRM_AFTER:
+                entry["next"] = suspect["since"] + CONFIRM_AFTER
+                return False
             if problem:
                 tries = (rejection or {}).get("count", 0)
                 if tries >= self.settings["max_replacements"]:
-                    self.state["rejections"][key] = dict(rejection, status="kept", reason=problem, time=int(time.time()))
+                    self.state["rejections"][key] = dict(rejection or {}, title=title, status="kept", reason=problem, time=int(time.time()))
                     self.remember(title, f"kept although {problem}: {tries} other releases weren't better")
                     notify("Media server: no good release", f"{title}: kept although {problem}; tried {tries} other releases.")
                 elif app.reject(record):
                     self.state["rejections"][key] = {"title": title, "count": tries + 1, "reason": problem,
                                                      "time": int(time.time()), "status": "looking"}
                     self.remember(title, f"replaced because {problem}; {app.name} is looking for another release")
-                    return
+                    return True
                 else:
                     self.remember(title, f"{problem} (imported by hand, so left alone)")
+            elif suspect:
+                log(f"{title}: fine on a second look (first: {suspect['problem']})")
         # A release that passed (or was kept) after an earlier rejection
         rejection = self.state["rejections"].get(key)
         if rejection and rejection.get("status") == "looking":
@@ -710,6 +833,7 @@ class Worker:
                 app.rescan(record)
             except (OSError, urllib.error.URLError):
                 pass
+        return True
 
     def check_rejections(self):
         """Notify once about rejected releases nothing replaced"""
@@ -732,6 +856,10 @@ class Worker:
                                     if r.get("status") == "looking" or now - r["time"] < 30 * 86400}
 
     def new_imports(self):
+        """New imports go into a queue (kept in state.json) before the
+        history position moves on, so none is missed; each is checked until
+        it's done, with growing pauses while it can't be"""
+        pending = self.state["pending"]
         for app in self.apps:
             last = self.state["last_import"].get(app.name)
             try:
@@ -743,12 +871,33 @@ class Worker:
                 log(f"couldn't read {app.name}'s history: {e}")
                 continue
             for record in records:
-                try:
-                    self.handle_import(app, record)
-                except (OSError, urllib.error.URLError, ValueError, KeyError) as e:
-                    log(f"couldn't check import {record.get('id')} from {app.name}: {e}")
-                self.state["last_import"][app.name] = record["id"]
+                pending.setdefault(f"{app.name}:{record['id']}", {"app": app.name, "record": record, "attempts": 0, "next": 0})
+            if records:
+                self.state["last_import"][app.name] = records[-1]["id"]
                 save(self.state)
+        by_name = {a.name: a for a in self.apps}
+        now = time.time()
+        for key in sorted(pending, key=lambda k: pending[k]["record"]["id"]):
+            entry = pending[key]
+            app = by_name.get(entry["app"])
+            if app is None or entry.get("next", 0) > now:
+                continue
+            try:
+                finished = self.handle_import(app, entry["record"], entry)
+            except ToolTrouble as e:
+                log(f"can't check imports right now ({e}); retrying")
+                break
+            except (OSError, urllib.error.URLError, ValueError, KeyError) as e:
+                entry["attempts"] += 1
+                entry["next"] = int(now) + 300 * entry["attempts"]
+                finished = entry["attempts"] >= IMPORT_TRIES
+                log(f"couldn't check import {entry['record'].get('id')} from {app.name}: {e}"
+                    + (" (giving up)" if finished else f" (retrying, {entry['attempts']}/{IMPORT_TRIES})"))
+            if finished:
+                pending.pop(key, None)
+            save(self.state)
+            if operation_running():
+                return
 
     def sweep(self):
         """Steps 2 to 4 for files already in the library, a few per round"""
@@ -765,11 +914,18 @@ class Worker:
                         st = path.stat()
                     except OSError:
                         continue
-                    if seen.get(str(path)) == seen_mark(path, st):
+                    if seen.get(str(path)) == self.mark(path, st):
                         continue
-                    info = probe(path)
+                    failure = self.state["failures"].get(str(path))
+                    if failure and time.time() - failure["last"] < RETRY_FIX_AFTER:
+                        continue
+                    try:
+                        info = probe(path)
+                    except ToolTrouble as e:
+                        log(f"can't look at the library right now ({e})")
+                        return
                     if info is None:
-                        seen[str(path)] = seen_mark(path, st)
+                        seen[str(path)] = self.mark(path, st)
                         continue
                     if self.fix(path, info, display_name(path)):
                         done += 1
@@ -778,6 +934,7 @@ class Worker:
                         return
         # Forget files that are gone
         self.state["seen"] = {p: v for p, v in seen.items() if os.path.exists(p)}
+        self.state["failures"] = {p: v for p, v in self.state["failures"].items() if os.path.exists(p)}
 
     def status(self):
         rejections = self.state["rejections"].values()
@@ -864,9 +1021,14 @@ def main():
         else:
             waiting = False
             worker = Worker(apps, load_settings(), read_json(STATE / "state.json", {}))
-            worker.new_imports()
-            worker.check_rejections()
-            worker.sweep()
+            try:
+                worker.new_imports()
+                worker.check_rejections()
+                worker.sweep()
+            except ToolTrouble as e:
+                log(f"skipping this round: {e}")
+            except Exception as e:  # keep running; what's saved so far stays
+                log(f"round failed: {e!r}")
             save(worker.state)
             c.write_json(STATE / "status.json", worker.status())
         time.sleep(int(os.environ.get("POSTIMPORT_INTERVAL", "60")))

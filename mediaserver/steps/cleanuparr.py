@@ -72,35 +72,39 @@ class Cleanuparr:
                     self.call("PUT", f"configuration/{app}/instances/{ids[0]}", body)
                 else:
                     self.call("POST", f"configuration/{app}/instances", body)
+                ok(f"{name} connected")
             except ApiError:
                 warn(f"Cleanuparr: could not {'update' if ids else 'add'} {name}")
-            ok(f"{name} connected")
 
     def connect_qbittorrent(self) -> None:
         body = {"enabled": True, "name": "qBittorrent", "typeName": "qBittorrent", "type": "Torrent",
                 "host": "http://localhost:8081", "username": self.cfg.qbit_user, "password": self.cfg.qbit_pass}
+        # Unreadable is not "none": qBittorrent would be added twice
         try:
             clients = (self.call("GET", "configuration/download_client") or {}).get("clients") or []
         except ApiError:
-            clients = []
+            warn("Cleanuparr: couldn't read its download clients; skipped (retried next run)")
+            return
         ids = [x["id"] for x in clients if x.get("typeName") == "qBittorrent"]
         try:
             if ids:
                 self.call("PUT", f"configuration/download_client/{ids[0]}", body)
             else:
                 self.call("POST", "configuration/download_client", body)
+            ok("qBittorrent connected")
         except ApiError:
             warn(f"Cleanuparr: could not {'update' if ids else 'add'} qBittorrent")
-        ok("qBittorrent connected")
 
     def stall_rule(self) -> None:
         """Stalled: 6 strikes at one check every 5 minutes = removed after
         about 30 minutes without progress; any progress resets the count"""
         strikes = self.cfg.get("cleanuparr.stalled_strikes", 6)
+        # Unreadable is not "none": the rule would be added twice
         try:
             rule = next((r for r in self.call("GET", "queue-rules/stall") or [] if r.get("name") == "Stalled"), None)
         except ApiError:
-            rule = None
+            warn("Cleanuparr: couldn't read its queue rules; the stall rule wasn't checked (retried next run)")
+            return
         try:
             if rule is None:
                 self.call("POST", "queue-rules/stall", {"name": "Stalled", "enabled": True, "maxStrikes": strikes, "privacyType": "Public",

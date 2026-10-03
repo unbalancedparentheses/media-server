@@ -326,7 +326,7 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 | `stereo_audio` | `true` | Add a stereo AAC track, first, when the audio is only in formats browsers can't play (Dolby Digital/Atmos, DTS, TrueHD); the original tracks stay |
 | `ocr_subtitles` | `true` | Read picture subtitles (Blu-ray PGS) into a text `.srt` next to the file, for the `subtitles.languages` that have no text subtitles yet (only the first with `want = "first"`) |
 | `drop_picture_subtitles` | `true` | Remove a picture subtitle track (Blu-ray PGS) when its language is also there as text. Moonfin picks picture subtitles over text ones whatever the file says, and Jellyfin has to burn them into the video (two subtitles at once, heavy on the CPU). Picture tracks in other languages, and forced ones, stay |
-| (always) | | Each file's default tracks follow your preferences, so every player picks them: the audio above, and subtitles in the first of `subtitles.languages` that's there as text (English, else Spanish). Text wins over picture subtitles in the same language (a default picture track would be burned into the video while the player shows the text one) |
+| `default_tracks` | `true` | Each file's default tracks follow your preferences, so every player picks them: the audio above, and subtitles in the first of `subtitles.languages` that's there as text (English, else Spanish). Text wins over picture subtitles in the same language (a default picture track would be burned into the video while the player shows the text one) |
 
 By hand: `nix run .#postimport -- --check FILE` says what it would do; `--fix FILE` does it now.
 

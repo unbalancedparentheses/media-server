@@ -175,10 +175,24 @@ class Imports(unittest.TestCase):
     def worker(self, **settings):
         return pi.Worker([], {**pi.DEFAULTS, **settings}, {})
 
-    def test_bad_file_is_replaced(self):
+    def check(self, w, app, record):
+        """handle_import as the queue runs it: a problem is looked at again
+        CONFIRM_AFTER later (the clock is moved on here)"""
+        entry: dict = {"record": record, "attempts": 0, "next": 0}
+        if w.handle_import(app, record, entry):
+            return True
+        entry["suspect"]["since"] -= pi.CONFIRM_AFTER
+        return w.handle_import(app, record, entry)
+
+    def test_bad_file_is_replaced_once_confirmed(self):
         app, w = FakeArr(), self.worker()
+        entry: dict = {"record": self.record(), "attempts": 0, "next": 0}
         with mock.patch.object(pi, "problem_with", return_value="the video is damaged"):
-            w.handle_import(app, self.record())
+            self.assertFalse(w.handle_import(app, self.record(), entry))  # first sighting: look again later
+            self.assertEqual(app.rejected, [])
+            self.assertFalse(w.handle_import(app, self.record(), entry))  # too soon
+            entry["suspect"]["since"] -= pi.CONFIRM_AFTER
+            self.assertTrue(w.handle_import(app, self.record(), entry))
         self.assertEqual(app.rejected, [1])
         r = w.state["rejections"]["radarr:7"]
         self.assertEqual((r["count"], r["status"]), (1, "looking"))
@@ -187,7 +201,7 @@ class Imports(unittest.TestCase):
         app, w = FakeArr(), self.worker(max_replacements=2)
         with mock.patch.object(pi, "problem_with", return_value="it's dubbed (no Japanese audio)"):
             for n in (1, 2, 3):
-                w.handle_import(app, self.record(n))
+                self.check(w, app, self.record(n))
         self.assertEqual(app.rejected, [1, 2])
         self.assertEqual(w.state["rejections"]["radarr:7"]["status"], "kept")
         self.assertEqual(len(self.notes), 1)
@@ -195,22 +209,57 @@ class Imports(unittest.TestCase):
     def test_hand_imported_file_is_left_alone(self):
         app, w = FakeArr(known_release=False), self.worker()
         with mock.patch.object(pi, "problem_with", return_value="the video is damaged"):
-            w.handle_import(app, self.record())
+            self.check(w, app, self.record())
         self.assertNotIn("radarr:7", w.state["rejections"])
         self.assertTrue(self.video.exists())
 
     def test_checks_off_means_no_rejection(self):
         app, w = FakeArr(), self.worker(check_downloads=False)
         with mock.patch.object(pi, "problem_with", return_value="the video is damaged"):
-            w.handle_import(app, self.record())
+            self.check(w, app, self.record())
         self.assertEqual(app.rejected, [])
 
     def test_good_replacement_settles_it(self):
         app, w = FakeArr(), self.worker()
         w.state["rejections"]["radarr:7"] = {"title": "Film", "count": 1, "reason": "x", "time": 0, "status": "looking"}
         with mock.patch.object(pi, "problem_with", return_value=None):
-            w.handle_import(app, self.record())
+            self.check(w, app, self.record())
         self.assertEqual(w.state["rejections"]["radarr:7"]["status"], "replaced")
+
+    def test_fine_on_the_second_look_isnt_replaced(self):
+        app, w = FakeArr(), self.worker()
+        answers = iter(["the file can't be read", None])
+        with mock.patch.object(pi, "problem_with", side_effect=lambda *a, **k: next(answers)):
+            self.check(w, app, self.record())
+        self.assertEqual(app.rejected, [])
+
+    def test_failed_imports_stay_queued(self):
+        """An import that can't be checked (a service down) stays queued
+        while the history position moves on; nothing is missed"""
+        app = FakeArr()
+        app.name = "Radarr"
+        app.imports_after = lambda last: [self.record(5)]
+        w = pi.Worker([app], dict(pi.DEFAULTS), {"last_import": {"Radarr": 4}, "pending": {}})
+        with mock.patch.object(FakeArr, "item", side_effect=OSError("Radarr down")), mock.patch.object(pi, "save"):
+            w.new_imports()
+        self.assertEqual(w.state["last_import"]["Radarr"], 5)
+        entry: dict = w.state["pending"]["Radarr:5"]
+        self.assertEqual(entry["attempts"], 1)
+        entry["next"] = 0
+        app.imports_after = lambda last: []
+        with mock.patch.object(pi, "problem_with", return_value=None), mock.patch.object(pi, "save"):
+            w.new_imports()
+        self.assertNotIn("Radarr:5", w.state["pending"])
+
+    def test_tool_trouble_rejects_nothing(self):
+        app = FakeArr()
+        app.name = "Radarr"
+        app.imports_after = lambda last: [self.record(5)]
+        w = pi.Worker([app], dict(pi.DEFAULTS), {"last_import": {"Radarr": 4}, "pending": {}})
+        with mock.patch.object(pi, "problem_with", side_effect=pi.ToolTrouble("ffprobe broken")), mock.patch.object(pi, "save"):
+            w.new_imports()
+        self.assertEqual(app.rejected, [])
+        self.assertIn("Radarr:5", w.state["pending"])
 
     def test_nothing_found_is_notified_once(self):
         app = FakeArr(has_file=False)
@@ -411,3 +460,89 @@ class PictureDefaultsRealFile(unittest.TestCase):
             after = pi.probe(video)
         self.assertEqual(pi.streams(after, "subtitle")[0]["disposition"]["default"], 0)
         self.assertEqual(len(after["streams"]), 2)
+
+
+class Robustness(unittest.TestCase):
+    """What a failed tool, a failed fix or changed settings do"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.video = self.dir / "Film.mkv"
+        self.video.write_bytes(b"x")
+        patcher = mock.patch.object(pi, "STATE", self.dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_probe_retries_and_blames_broken_tools(self):
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd[0])
+            return mock.Mock(returncode=1, stdout="")
+        with mock.patch.object(pi.subprocess, "run", run), mock.patch.object(pi.time, "sleep"):
+            with self.assertRaises(pi.ToolTrouble):
+                pi.probe(self.video)
+        self.assertEqual(calls.count("ffprobe"), 4)  # 3 tries + the "-version" check
+
+    def test_hardware_decode_failure_retried_in_software(self):
+        def run(cmd, **kw):
+            hardware = "videotoolbox" in cmd
+            return mock.Mock(returncode=1 if hardware else 0, stdout="" if hardware else "frame=50\n")
+        with mock.patch.object(pi.subprocess, "run", run):
+            self.assertTrue(pi.decodes(self.video, 30))
+
+    def test_failed_fix_is_retried_then_given_up(self):
+        w = pi.Worker([], {**pi.DEFAULTS, "ocr_subtitles": False, "default_tracks": False, "drop_picture_subtitles": False}, {})
+        info = media(audio(1, "eac3", "eng"))
+        with mock.patch.object(pi, "add_stereo", return_value=False), mock.patch.object(pi, "room_for", return_value=True):
+            for n in range(1, pi.FIX_TRIES):
+                w.fix(self.video, info, "Film")
+                self.assertNotIn(str(self.video), w.state["seen"])  # not done: retried later
+                self.assertEqual(w.state["failures"][str(self.video)]["count"], n)
+            w.fix(self.video, info, "Film")
+        self.assertIn(str(self.video), w.state["seen"])  # gave up
+        self.assertIn("gave up", w.state["recent"][0]["what"])
+
+    def test_forced_sidecars_dont_count_as_full_subtitles(self):
+        (self.dir / "Film.en.forced.srt").touch()
+        (self.dir / "Film.es.srt").touch()
+        self.assertEqual(pi.sidecar_languages(self.video), {"es"})
+
+    def test_new_settings_or_subtitles_look_again(self):
+        w = pi.Worker([], dict(pi.DEFAULTS), {})
+        before = w.mark(self.video)
+        (self.dir / "Film.en.srt").touch()       # Bazarr added a subtitle
+        after = w.mark(self.video)
+        self.assertNotEqual(before, after)
+        w.settings["subtitle_languages"] = ["es"]  # preferences changed
+        self.assertNotEqual(after, w.mark(self.video))
+
+    def test_default_tracks_off_means_no_rewrite(self):
+        w = pi.Worker([], {**pi.DEFAULTS, "stereo_audio": False, "ocr_subtitles": False, "default_tracks": False,
+                           "drop_picture_subtitles": False}, {})
+        info = media(audio(1, "aac", "eng", default=False), audio(2, "aac", "jpn"))
+        with mock.patch.object(pi, "set_defaults") as rewrite:
+            w.fix(self.video, info, "Film")
+        rewrite.assert_not_called()
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+class NoDefaultStaysNoDefault(unittest.TestCase):
+    def test_all_subtitle_defaults_off_survives_the_rewrite(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        video, srt = d / "Film.mkv", d / "in.srt"
+        srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=5", "-i", str(srt), "-i", str(srt),
+                        "-map", "0", "-map", "1", "-map", "2", "-c:v", "mpeg4", "-c:s", "srt",
+                        "-metadata:s:s:0", "language=eng", "-metadata:s:s:1", "language=spa",
+                        "-disposition:s:0", "default", str(video)], check=True)
+        with mock.patch.object(pi, "STATE", d):
+            info = pi.probe(video)
+            first = pi.streams(info, "subtitle")[0]["index"]
+            self.assertTrue(pi.set_defaults(video, info, {first: "0"}, [pi.streams(info, "subtitle")[0]]))
+            after = pi.probe(video)
+        subs = pi.streams(after, "subtitle")
+        self.assertEqual([pi.stream_language(st) for st in subs], ["es"])
+        self.assertEqual(subs[0]["disposition"]["default"], 0)  # not made default by the muxer

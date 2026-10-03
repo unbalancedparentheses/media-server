@@ -14,6 +14,7 @@ def settings(cfg: Config) -> dict:
         "stereo_audio": cfg.flag("library.stereo_audio", True),
         "ocr_subtitles": cfg.flag("library.ocr_subtitles", True),
         "drop_picture_subtitles": cfg.flag("library.drop_picture_subtitles", True),
+        "default_tracks": cfg.flag("library.default_tracks", True),
         "max_replacements": cfg.get("library.max_replacements", 3),
         "block_dubs": cfg.flag("quality.anime_block_dubs", True),
         "audio_language": cfg.get("playback.audio_language", ""),
@@ -35,5 +36,7 @@ def run(cfg: Config) -> None:
         c.write_json(path, new, mode=0o600)
         ok("Settings written")
     on = [what for flag, what in (("check_downloads", "bad downloads replaced"), ("stereo_audio", "stereo audio added"),
-                                  ("ocr_subtitles", "picture subtitles read into text")) if new[flag]]
+                                  ("ocr_subtitles", "picture subtitles read into text"),
+                                  ("default_tracks", "default tracks set to your preferences"),
+                                  ("drop_picture_subtitles", "picture subtitles removed when there as text")) if new[flag]]
     ok("After each download: " + (", ".join(on) if on else "nothing (all off in [library])"))

@@ -135,6 +135,22 @@ class CleanuparrLogin(unittest.TestCase):
             run(cu.set_login)
         self.assertEqual(creds.get(cfg.paths.state, "cleanuparr", "password"), "new")
 
+    def test_unreadable_lists_add_nothing(self):
+        """A failed read isn't "none there": no second qBittorrent or stall rule"""
+        cfg = scratch()
+        self.addCleanup(shutil.rmtree, cfg.paths.media)
+        cu = cleanuparr.Cleanuparr(cfg)
+        posted = []
+
+        def call(method, path, body=None):
+            if method == "GET":
+                raise api.ApiError("down")
+            posted.append(path)
+        cu.call = call
+        out = run(cu.connect_qbittorrent) + run(cu.stall_rule)
+        self.assertEqual(posted, [])
+        self.assertNotIn("qBittorrent connected", out)
+
     def test_queue_cleaner_settings(self):
         want = cleanuparr.queue_cleaner_settings(
             {"enabled": False, "downloadingMetadataMaxStrikes": 0, "failedImport": {"maxStrikes": 5, "patterns": []}, "other": 1}, True)
