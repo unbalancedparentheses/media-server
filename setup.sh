@@ -46,14 +46,12 @@ MAX_BACKUPS=10
 . "$SCRIPT_DIR/scripts/launchd.sh"
 # shellcheck source=scripts/setup-services.sh
 . "$SCRIPT_DIR/scripts/setup-services.sh"
-# shellcheck source=scripts/verify.sh
-. "$SCRIPT_DIR/scripts/verify.sh"
 # shellcheck source=scripts/maintenance.sh
 . "$SCRIPT_DIR/scripts/maintenance.sh"
 # shellcheck source=scripts/e2e.sh
 . "$SCRIPT_DIR/scripts/e2e.sh"
-# shellcheck source=scripts/doctor.sh
-. "$SCRIPT_DIR/scripts/doctor.sh"
+# The parts already in Python (mediaserver/): python3 -m mediaserver <command>
+py() { PYTHONPATH="$SCRIPT_DIR" MEDIA_DIR="$MEDIA_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -m mediaserver "$@"; }
 for step in "$SCRIPT_DIR"/scripts/steps/*.sh; do
   # shellcheck source=/dev/null
   . "$step"
@@ -251,21 +249,20 @@ if [ "$MODE" = "test" ] || [ "$MODE" = "status" ] || [ "$MODE" = "e2e" ] || [ "$
   read_setup_config
   read_api_keys
   if [ "$MODE" = "status" ]; then do_status; exit 0; fi
-  if [ "$MODE" = "doctor" ]; then DOCTOR_EXIT=0; do_doctor || DOCTOR_EXIT=$?; exit "$DOCTOR_EXIT"; fi
+  if [ "$MODE" = "doctor" ]; then DOCTOR_EXIT=0; py doctor || DOCTOR_EXIT=$?; exit "$DOCTOR_EXIT"; fi
   if [ "$MODE" = "e2e" ]; then
     E2E_EXIT=0
     do_e2e || E2E_EXIT=$?
     exit "$E2E_EXIT"
   fi
   VERIFY_EXIT=0
-  run_verification || VERIFY_EXIT=$?
+  py test || VERIFY_EXIT=$?
   exit "$VERIFY_EXIT"
 fi
 
 run_setup
-# Called from a || list: run_verification relies on errexit being off inside
 VERIFY_FAILED=0
-run_verification || VERIFY_FAILED=$?
+py test || VERIFY_FAILED=$?
 if [ "$VERIFY_FAILED" -gt 0 ]; then
   printf "\n\033[1;31m  Setup finished, but %s verification check(s) failed (see above).\033[0m\n" "$VERIFY_FAILED"
   echo "  Fix the cause and re-run 'nix run .#install', or check again with 'nix run .#test'."

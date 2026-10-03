@@ -2,14 +2,13 @@
 # Intro Skipper: a Jellyfin plugin that detects intros and credits (by audio
 # fingerprint) and marks them as media segments, so players show "Skip".
 
-# Pinned like Moonbase: the manifest at a fixed commit (Jellyfin checks each
-# download against its checksum) and the version to install. To update,
-# point both at a newer commit/version of intro-skipper/manifest (the 12/
-# folder is for Jellyfin 12).
-INTRO_SKIPPER_COMMIT="70d9a498f6204b2eb3b978a3112a275371d7e775"
-INTRO_SKIPPER_VERSION="12.0.4.0"
-INTRO_SKIPPER_REPO_URL="https://raw.githubusercontent.com/intro-skipper/manifest/$INTRO_SKIPPER_COMMIT/12/manifest.json"
-INTRO_SKIPPER_GUID="c83d86bb-a1e0-4c35-a113-e2101cf4ee6b"
+# Pinned in mediaserver/pins.json like Moonbase (the manifest's 12/ folder
+# is for Jellyfin 12)
+INTRO_SKIPPER_COMMIT=$(jq -r .intro_skipper.commit "$SCRIPT_DIR/mediaserver/pins.json")
+INTRO_SKIPPER_VERSION=$(jq -r .intro_skipper.version "$SCRIPT_DIR/mediaserver/pins.json")
+INTRO_SKIPPER_REPO_URL=$(jq -r '.intro_skipper.manifest' "$SCRIPT_DIR/mediaserver/pins.json")
+INTRO_SKIPPER_REPO_URL="${INTRO_SKIPPER_REPO_URL//\{commit\}/$INTRO_SKIPPER_COMMIT}"
+INTRO_SKIPPER_GUID=$(jq -r .intro_skipper.guid "$SCRIPT_DIR/mediaserver/pins.json")
 
 configure_intro_skipper() {
   info "Configuring Intro Skipper..."

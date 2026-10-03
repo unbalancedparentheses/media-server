@@ -2,13 +2,13 @@
 # Moonbase: the Jellyfin plugin behind the Moonfin apps. It serves the Moonfin
 # web app at /Moonfin/Web/ and connects Moonfin to Seerr for requests.
 
-# Pinned: the manifest at a fixed commit (it lists each version's download
-# and checksum, which Jellyfin verifies), and the version to install. To
-# update, point both at a newer commit/version of Moonfin-Client/Plugin.
-MOONBASE_COMMIT="06a4c18112330a34a27912805b421396cf319b70"
-MOONBASE_VERSION="2.3.0.0"
-MOONBASE_REPO_URL="https://raw.githubusercontent.com/Moonfin-Client/Plugin/$MOONBASE_COMMIT/manifest.json"
-MOONBASE_GUID="8c5d0e91-4f2a-4b6d-9e3f-1a7c8d9e0f2b"
+# Pinned in mediaserver/pins.json: the manifest at a fixed commit and the
+# version to install
+MOONBASE_COMMIT=$(jq -r .moonbase.commit "$SCRIPT_DIR/mediaserver/pins.json")
+MOONBASE_VERSION=$(jq -r .moonbase.version "$SCRIPT_DIR/mediaserver/pins.json")
+MOONBASE_REPO_URL=$(jq -r '.moonbase.manifest' "$SCRIPT_DIR/mediaserver/pins.json")
+MOONBASE_REPO_URL="${MOONBASE_REPO_URL//\{commit\}/$MOONBASE_COMMIT}"
+MOONBASE_GUID=$(jq -r .moonbase.guid "$SCRIPT_DIR/mediaserver/pins.json")
 
 configure_moonbase() {
   info "Configuring Moonbase (Moonfin)..."

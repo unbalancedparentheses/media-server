@@ -132,6 +132,49 @@ def http(url: str, headers: dict | None = None, method: str = "GET", body: Any =
         return resp.read()
 
 
+class Response:
+    def __init__(self, status: int, headers: dict, body: bytes):
+        self.status, self.headers, self.body = status, headers, body
+
+    def json(self, default: Any = None) -> Any:
+        try:
+            return json.loads(self.body) if self.body else default
+        except ValueError:
+            return default
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status < 300
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def request(url: str, method: str = "GET", headers: dict | None = None, body: Any = None,
+            form: dict | None = None, timeout: float = 15, follow: bool = True) -> Response:
+    """Any answer as a Response (status 0 when nothing answered); with
+    follow=False, redirects come back as they are (status 30x + Location)"""
+    data, hdrs = None, dict(headers or {})
+    if form is not None:
+        data = urllib.parse.urlencode(form).encode()
+        hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    elif body is not None:
+        data = (body if isinstance(body, (bytes, str)) else json.dumps(body))
+        data = data.encode() if isinstance(data, str) else data
+        hdrs.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
+    opener = urllib.request.build_opener() if follow else urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            return Response(resp.status, dict(resp.headers), resp.read())
+    except urllib.error.HTTPError as e:
+        return Response(e.code, dict(e.headers or {}), e.read() if e.fp else b"")
+    except (OSError, ValueError):
+        return Response(0, {}, b"")
+
+
 def get_json(url: str, headers: dict | None = None, timeout: float = 15) -> Any:
     raw = http(url, headers, timeout=timeout)
     return json.loads(raw) if raw else {}
@@ -146,14 +189,8 @@ def try_json(url: str, headers: dict | None = None, default: Any = None, timeout
 
 
 def status_code(url: str, timeout: float = 5) -> int:
-    """The HTTP status (0 when nothing answers)"""
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            return resp.status
-    except urllib.error.HTTPError as e:
-        return e.code
-    except (OSError, ValueError):
-        return 0
+    """The HTTP status, redirects not followed (0 when nothing answers)"""
+    return request(url, timeout=timeout, follow=False).status
 
 
 # ─── macOS ───────────────────────────────────────────────────────

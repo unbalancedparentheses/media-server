@@ -1,0 +1,15 @@
+{
+  "_comment": "Pinned Jellyfin plugins: setup installs exactly these and the checks expect them. Each manifest is read at a fixed commit (it lists every version's download and checksum, which Jellyfin verifies). To update, point commit and version at a newer release. Read by mediaserver/pins.py and the bash steps.",
+  "moonbase": {
+    "commit": "06a4c18112330a34a27912805b421396cf319b70",
+    "version": "2.3.0.0",
+    "guid": "8c5d0e91-4f2a-4b6d-9e3f-1a7c8d9e0f2b",
+    "manifest": "https://raw.githubusercontent.com/Moonfin-Client/Plugin/{commit}/manifest.json"
+  },
+  "intro_skipper": {
+    "commit": "70d9a498f6204b2eb3b978a3112a275371d7e775",
+    "version": "12.0.4.0",
+    "guid": "c83d86bb-a1e0-4c35-a113-e2101cf4ee6b",
+    "manifest": "https://raw.githubusercontent.com/intro-skipper/manifest/{commit}/12/manifest.json"
+  }
+}
