@@ -46,9 +46,9 @@ class Rounds(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root)
-        patcher = mock.patch.object(c, "try_json", return_value=[])
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (mock.patch.object(c, "try_json", return_value=[]), mock.patch.object(c, "status_code", return_value=200)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def test_failed_media_data_is_retried_a_minute_later(self):
         """Right after a restart part of the media data fails: it's asked
@@ -221,3 +221,22 @@ class MediaCarryOver(unittest.TestCase):
         fresh = dashmedia.carry_over(None, {"media_failed": ["health"], "media_updated": 5})
         self.assertNotIn("health", fresh)
         self.assertNotIn("health", fresh["media_ages"])
+
+
+class AttentionScope(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        self.col = Collector(self.root / "config", self.root / "state", self.root, 50, 10)
+
+    def test_watching_problems_on_home_the_rest_on_manage(self):
+        fast = {"jellyfin_up": False, "downloads": {"answering": {"qbittorrent": False}},
+                "playing": [{"user": "admin", "title": "Skyfall", "method": "Transcode", "reasons": ["SubtitleCodecNotSupported"]}]}
+        items = self.col.attention(fast, {"disk": {"free_gb": 5, "warn_gb": 50, "min_gb": 10}}, [])
+        scopes = {a["text"].split(":")[0]: a["scope"] for a in items}
+        self.assertEqual(items[0]["text"], "Jellyfin isn't answering: nothing can be played right now")
+        self.assertEqual(scopes["Jellyfin isn't answering"], "watch")
+        self.assertEqual(scopes["qBittorrent isn't answering"], "manage")
+        self.assertEqual(scopes["Only 5 GB free"], "manage")
+        self.assertTrue(any(a["scope"] == "watch" and "burned into the video" in a["text"] for a in items))
+        self.assertTrue(all("scope" in a for a in items))

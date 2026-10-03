@@ -99,6 +99,59 @@ def continue_watching():
     return items[:16]
 
 
+def minutes_of(item: dict) -> int:
+    return int((item.get("RunTimeTicks") or 0) // 600_000_000)
+
+
+def length_text(minutes: int) -> str:
+    return "" if not minutes else f"{minutes} min" if minutes < 60 else f"{minutes // 60} h {minutes % 60:02d} min"
+
+
+def tonight(limit: int = 24) -> list:
+    """Watch tonight: what's in the library and not started yet, films you
+    haven't watched and series you haven't begun (Continue watching has the
+    rest), newest first. Each says film, series or anime (from its folder),
+    how long it is, and for a series how much of it is here."""
+    users = jellyfin("Users")
+    if not users:
+        return []
+    uid = users[0]["Id"]   # one viewer for now
+    anime_dir = str(STATE.parent / "anime") + "/"
+    common = (f"userId={uid}&Recursive=true&IsPlayed=false&EnableImageTypes=Primary&SortBy=DateCreated&SortOrder=Descending"
+              "&Fields=Path,UserData,RecursiveItemCount,ProviderIds,CommunityRating&Limit=60")
+    films = jellyfin(f"Items?IncludeItemTypes=Movie&{common}").get("Items", [])
+    shows = jellyfin(f"Items?IncludeItemTypes=Series&{common}").get("Items", [])
+    # Begun = in Continue watching: an episode in progress (none finished
+    # still counts every episode as unplayed) or a next one up
+    begun = {i.get("SeriesId") for path in (f"UserItems/Resume?userId={uid}&Limit=100&MediaTypes=Video",
+                                            f"Shows/NextUp?userId={uid}&Limit=100")
+             for i in jellyfin(path).get("Items", [])}
+    sonarr_series = {str(s.get("tvdbId")): s for s in sonarr("series")}
+    out = []
+    for item in films:
+        data = item.get("UserData") or {}
+        if data.get("PlaybackPositionTicks"):
+            continue   # started: it's in Continue watching
+        minutes = minutes_of(item)
+        out.append({**card(item), "kind": "anime" if (item.get("Path") or "").startswith(anime_dir) else "film",
+                    "minutes": minutes, "added": item.get("DateCreated", ""),
+                    "detail": " · ".join(x for x in (str(item.get("ProductionYear") or ""), length_text(minutes)) if x)})
+    for item in shows:
+        data = item.get("UserData") or {}
+        have = item.get("RecursiveItemCount") or 0
+        if not have or (data.get("UnplayedItemCount") or 0) < have or item["Id"] in begun:
+            continue   # nothing to play, or already begun (Continue watching)
+        minutes = minutes_of(item)
+        stats = (sonarr_series.get(str((item.get("ProviderIds") or {}).get("Tvdb"))) or {}).get("statistics") or {}
+        aired = stats.get("episodeCount") or 0
+        count = f"{have} of {aired} episodes" if aired > have else f"{have} episode{'s' if have != 1 else ''}"
+        out.append({**card(item), "kind": "anime" if (item.get("Path") or "").startswith(anime_dir) else "series",
+                    "minutes": minutes, "added": item.get("DateCreated", ""), "partial": aired > have,
+                    "detail": " · ".join(x for x in (count, f"{length_text(minutes)} each" if minutes else "") if x)})
+    out.sort(key=lambda x: x["added"], reverse=True)
+    return out[:limit]
+
+
 def latest():
     data = jellyfin("Items?Recursive=true&SortBy=DateCreated&SortOrder=Descending&Limit=80"
                     "&IncludeItemTypes=Movie,Episode&Fields=DateCreated&EnableImageTypes=Primary")
@@ -606,7 +659,7 @@ def health():
     return out
 
 
-MEDIA_PARTS = ("continue", "latest", "requests_live", "upcoming", "health", "recommended")
+MEDIA_PARTS = ("continue", "tonight", "latest", "requests_live", "upcoming", "health", "recommended")
 
 
 def carry_over(previous: dict | None, new: dict) -> dict:
@@ -627,7 +680,7 @@ def carry_over(previous: dict | None, new: dict) -> dict:
 
 def collect() -> dict:
     result, failed = {}, []
-    for name, part in (("continue", continue_watching), ("latest", latest), ("requests_live", requests),
+    for name, part in (("continue", continue_watching), ("tonight", tonight), ("latest", latest), ("requests_live", requests),
                        ("upcoming", upcoming), ("health", health), ("recommended", recommended)):
         try:
             result[name] = part()

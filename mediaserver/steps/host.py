@@ -147,7 +147,9 @@ def nginx(cfg: Config, mime_types: str) -> None:
     proxy = cfg.paths.config / "nginx/api-proxy.conf"
     if not proxy.exists():
         proxy.touch()
-    for page, target in (("landing.html", "index.html"), ("admin.html", "admin.html")):
+    # classic.html: the homepage before the Home/Manage split, kept until
+    # the new one has been checked on desktop and phone
+    for page, target in (("landing.html", "index.html"), ("admin.html", "admin.html"), ("landing-classic.html", "classic.html")):
         c.write_atomic(www / target, (REPO / page).read_text(), 0o644)
     settings = {"adminLocalOnly": admin_bind(cfg) == "127.0.0.1"}
     c.write_atomic(www / "settings.js", f"window.MEDIA_SETTINGS={json.dumps(settings, separators=(',', ':'))};\n", 0o644)

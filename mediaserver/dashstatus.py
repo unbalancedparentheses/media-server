@@ -284,10 +284,16 @@ class Collector:
             out.append({"level": "warn", "text": f"Kept {r['title']} although {r['reason']}", "action": "No better release found; Interactive Search to pick one"})
         if (self.state / "e2e/paused-indexers.json").exists():
             out.append({"level": "error", "text": "An end-to-end test left Radarr indexers paused", "action": "Run nix run .#install"})
+        # What affects watching is shown on the main page; the rest on Manage
+        for item in out:
+            item["scope"] = "manage"
+        if fast.get("jellyfin_up") is False:
+            out.insert(0, {"level": "error", "text": "Jellyfin isn't answering: nothing can be played right now",
+                           "action": "nix run .#restart -- jellyfin; nix run .#logs -- jellyfin", "scope": "watch"})
         for p in fast.get("playing") or []:
             if p["method"] == "Transcode" and "SubtitleCodecNotSupported" in p["reasons"]:
                 out.append({"level": "info", "text": f"{p['user']} is watching {p['title']} with picture subtitles burned into the video (heavy on the CPU)",
-                            "action": "Pick a text subtitle (External/SRT) in the player"})
+                            "action": "Pick a text subtitle (External/SRT) in the player", "scope": "watch"})
         return out
 
     # ─── Rounds ──────────────────────────────────────────────────
@@ -309,6 +315,7 @@ class Collector:
         fast = {"system": system, "usage": self.services_usage(system.get("cpus") or 1, system.get("mem_total") or 0),
                 "playing": self.playing(), "downloads": self.downloads(torrents),
                 "connection": c.read_text(self.state / "netwatch/connection") or "unknown",
+                "jellyfin_up": 200 <= c.status_code(f"{local('jellyfin')}/health") < 400,
                 "fixing": dashmedia.fixing_now(self.state)}
         slow = self.slow or {}
         status = {**fast, **slow, **(self.media_data or {}), "attention": self.attention(fast, slow, torrents or []),

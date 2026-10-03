@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Media Server</title>
+<title>Media Server (classic)</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127916;</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -106,17 +106,6 @@
   .step-now{font-size:0.68rem;color:var(--text2);margin-top:0.3rem}
   .fix-bar{max-width:16rem;margin-top:0.3rem}
   .worth-label{font-size:0.72rem;color:var(--text2);margin:0.9rem 0 0.5rem}
-  .tabs{display:flex;gap:0.25rem;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:0.2rem}
-  .tabs a{padding:0.45rem 0.85rem;border-radius:8px;color:var(--text2);text-decoration:none;font-size:0.82rem;white-space:nowrap}
-  .tabs a.on{background:var(--surface2);color:var(--text)}
-  .tabs a:focus-visible,.chips button:focus-visible,.btn:focus-visible,.poster:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
-  .tab-count{display:inline-block;margin-left:0.3rem;color:var(--amber);font-family:var(--mono);font-size:0.7rem}
-  .chips{display:flex;flex-wrap:wrap;gap:0.5rem 1rem;margin:-0.2rem 0 0.8rem}
-  .chip-group{display:flex;gap:0.3rem;flex-wrap:wrap}
-  .chips button{background:var(--surface);border:1px solid var(--border);color:var(--text2);border-radius:999px;padding:0.35rem 0.8rem;font:inherit;font-size:0.75rem;cursor:pointer;min-height:2rem}
-  .chips button.on{border-color:var(--gold);color:var(--text)}
-  .sr-act{flex-shrink:0;font-size:0.72rem;color:var(--text2)}.sr-act.play{color:var(--green)}.sr-act.dim{color:var(--text3)}
-  @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
   .worth-label:first-child{margin-top:0}
   .fix-bar i{transition:width 1s linear}
   .step-now b{color:var(--blue);font-weight:500}
@@ -194,7 +183,6 @@
     .search-wrap{order:3;max-width:none;flex-basis:100%;margin:0}
     .actions{margin-left:auto}
     .btn.label-hide span{display:none}
-    .tabs a{padding:0.45rem 0.6rem}
     .row{grid-auto-columns:112px;gap:0.7rem}
     .np-grid{grid-template-columns:1fr}
     .tiles{grid-template-columns:repeat(2,1fr)}
@@ -218,14 +206,12 @@
       <div class="actions">
         <a class="btn primary" id="watch-btn" href="#">▶ Watch</a>
         <a class="btn label-hide" id="request-btn" href="#">＋<span> Request</span></a>
-        <nav class="tabs" aria-label="Views"><a href="#" data-view="home">Home</a><a href="#manage" data-view="manage">Manage<span class="tab-count" id="manage-count"></span></a></nav>
+        <a class="btn label-hide" href="/admin.html">⚙<span> Admin</span></a>
       </div>
     </div>
   </div>
 
   <div class="content">
-    <!-- Home: what to watch. Manage (#manage): the server -->
-    <div id="view-home">
     <div class="section" id="attention"></div>
 
     <div class="section hidden" id="playing-sec">
@@ -238,24 +224,20 @@
       <div class="row" id="continue"></div>
     </div>
 
-    <div class="section hidden" id="tonight-sec">
-      <div class="section-title">Watch tonight <span class="more" style="cursor:default">in your library, not started yet</span></div>
-      <div class="chips" id="tonight-filters" role="toolbar" aria-label="Filter">
-        <span class="chip-group"><button data-kind="all">All</button><button data-kind="film">Films</button><button data-kind="series">Series</button><button data-kind="anime">Anime</button></span>
-        <span class="chip-group"><button data-len="0">Any length</button><button data-len="30">Under 30 min</button><button data-len="120">Under 2 h</button></span>
-      </div>
-      <div class="row" id="tonight"></div>
-    </div>
-
     <div class="section hidden" id="latest-sec">
       <div class="section-title">Recently added <a class="more" id="library-link" href="#">Open library →</a></div>
       <div class="row" id="latest"></div>
     </div>
 
+    <div class="section hidden" id="worth-sec">
+      <div class="section-title">Worth watching <span class="more" style="cursor:default">out in the last 4 months or trending · by Rotten Tomatoes and IMDb (TMDB when neither has it)</span></div>
+      <div id="worth"></div>
+    </div>
+
     <div class="section">
       <div class="cols">
         <div class="panel">
-          <div class="p-head"><div class="p-head-title">Your requests</div><div class="p-head-sub" id="req-sub"></div></div>
+          <div class="p-head"><div class="p-head-title">Requests &amp; progress</div><div class="p-head-sub" id="req-sub"></div></div>
           <div id="requests"><div class="empty">Loading…</div></div>
         </div>
         <div class="stack">
@@ -263,18 +245,13 @@
             <div class="p-head"><div class="p-head-title">Coming up</div><div class="p-head-sub" id="up-sub"></div></div>
             <div id="upcoming"><div class="empty">Loading…</div></div>
           </div>
+          <div class="panel hidden" id="health-sec">
+            <div class="p-head"><div class="p-head-title">Library health</div><div class="p-head-sub" id="health-sub"></div></div>
+            <div id="health"></div>
+          </div>
         </div>
       </div>
     </div>
-
-    <div class="section hidden" id="worth-sec">
-      <div class="section-title">Worth watching <span class="more" style="cursor:default">out in the last 4 months or trending · by Rotten Tomatoes and IMDb (TMDB when neither has it)</span></div>
-      <div id="worth"></div>
-    </div>
-    </div>
-
-    <div id="view-manage" class="hidden">
-    <div class="section" id="attention-manage"></div>
 
     <div class="section">
       <div class="panel">
@@ -284,20 +261,11 @@
     </div>
 
     <div class="section">
-      <div class="panel hidden" id="health-sec">
-        <div class="p-head"><div class="p-head-title">Library health</div><div class="p-head-sub" id="health-sub"></div></div>
-        <div id="health"></div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Server <a class="more" href="/admin.html">Admin pages (Sonarr, Radarr, …) →</a></div>
+      <div class="section-title">Server</div>
       <div class="tiles" id="tiles"><div class="tile"><div class="t-label">Loading…</div></div></div>
       <div class="panel uptime"><details id="uptime-box"><summary class="up-sum" id="up-sum">Checking services…</summary><div id="up-list"></div></details></div>
+      <div class="updated" id="updated"></div>
     </div>
-    </div>
-
-    <div class="updated" id="updated"></div>
   </div>
 
   <script src="/settings.js"></script>
@@ -370,69 +338,24 @@
     // ── Attention (dismissed alerts come back when they change, or after a day) ──
     var lastStatus=null;
     function dismissed(){var d=store('dismissed')||{},now=Date.now(),out={};for(var k in d)if(now-d[k]<86400000)out[k]=d[k];return out;}
-    // Home shows what affects watching (and how many other things need a
-    // look, one click away); Manage shows everything
-    function alertHtml(a){
-      return'<div class="alert '+a.level+'"><span class="a-ico">'+(a.level==='error'?'✗':a.level==='info'?'ℹ':'!')+'</span><div class="a-body">'+esc(a.text)
-        +(a.action?'<div class="a-act">→ '+esc(a.action)+'</div>':'')+'</div><button class="dismiss" data-text="'+esc(a.text)+'" title="Hide for a day">✕</button></div>';
-    }
     function renderAttention(s){
-      var d=dismissed(),offline=s.connection==='offline',hiddenCount=0,home='',manage='',others=0;
-      var banner=offline?'<div class="alert offline"><span class="a-ico">⚠</span><div class="a-body"><b>Offline.</b> Everything already downloaded still plays. New downloads, requests and subtitle searches wait for the connection.</div></div>':'';
+      var d=dismissed(),html='',hiddenCount=0;
+      if(s.connection==='offline')html+='<div class="alert offline"><span class="a-ico">⚠</span><div class="a-body"><b>Offline.</b> Everything already downloaded still plays. New downloads, requests and subtitle searches wait for the connection.</div></div>';
       (s.attention||[]).forEach(function(a){
-        if(offline&&/offline/.test(a.text))return;
+        if(s.connection==='offline'&&/offline/.test(a.text))return;
         if(d[a.text]){hiddenCount++;return;}
-        manage+=alertHtml(a);
-        if(a.scope==='watch')home+=alertHtml(a);else others++;
+        html+='<div class="alert '+a.level+'"><span class="a-ico">'+(a.level==='error'?'✗':a.level==='info'?'ℹ':'!')+'</span><div class="a-body">'+esc(a.text)
+          +(a.action?'<div class="a-act">→ '+esc(a.action)+'</div>':'')+'</div><button class="dismiss" data-text="'+esc(a.text)+'" title="Hide for a day">✕</button></div>';
       });
-      if(others)home+='<div class="hidden-note">'+plural(others,'thing')+' about the server need a look · <a class="i-link" href="#manage">Manage →</a></div>';
-      if(hiddenCount)manage+='<div class="hidden-note">'+plural(hiddenCount,'notice')+' hidden · <button id="unhide">show</button></div>';
-      document.getElementById('attention').innerHTML=banner+home;show('attention',!!(banner+home));
-      document.getElementById('attention-manage').innerHTML=banner+manage;show('attention-manage',!!(banner+manage));
-      document.getElementById('manage-count').textContent=others?' '+others:'';
+      if(hiddenCount)html+='<div class="hidden-note">'+plural(hiddenCount,'notice')+' hidden · <button id="unhide">show</button></div>';
+      var el=document.getElementById('attention');el.innerHTML=html;show('attention',!!html);
     }
-    function onAlertClick(e){
+    document.getElementById('attention').addEventListener('click',function(e){
       var b=e.target.closest('.dismiss');
       if(b){var d=dismissed();d[b.getAttribute('data-text')]=Date.now();store('dismissed',d);}
       else if(e.target.id==='unhide')store('dismissed',{});
       else return;
       if(lastStatus)renderAttention(lastStatus);
-    }
-    document.getElementById('attention').addEventListener('click',onAlertClick);
-    document.getElementById('attention-manage').addEventListener('click',onAlertClick);
-
-    // ── Views: Home (#) and Manage (#manage); the back button works ──
-    function currentView(){return location.hash==='#manage'?'manage':'home';}
-    function applyView(){
-      var v=currentView();
-      show('view-home',v==='home');show('view-manage',v==='manage');
-      document.querySelectorAll('.tabs a').forEach(function(a){a.classList.toggle('on',a.getAttribute('data-view')===v);a.setAttribute('aria-current',a.getAttribute('data-view')===v?'page':'false');});
-      document.title=v==='manage'?'Media Server · Manage':'Media Server';
-      if(v==='manage')refreshDownloads();
-    }
-    window.addEventListener('hashchange',function(){applyView();window.scrollTo(0,0);});
-
-    // ── Watch tonight: filters remembered on this device ──
-    var tonightKind=store('tonightKind')||'all',tonightLen=store('tonightLen')||0;
-    function renderTonight(){
-      if(!lastStatus||!lastStatus.tonight)return;
-      var items=lastStatus.tonight.filter(function(t){
-        return(tonightKind==='all'||t.kind===tonightKind)&&(!tonightLen||(t.minutes&&t.minutes<tonightLen));
-      });
-      show('tonight-sec',lastStatus.tonight.length>0);
-      document.querySelectorAll('#tonight-filters button').forEach(function(b){
-        var on=b.hasAttribute('data-kind')?b.getAttribute('data-kind')===tonightKind:+b.getAttribute('data-len')===+tonightLen;
-        b.classList.toggle('on',on);b.setAttribute('aria-pressed',on?'true':'false');
-      });
-      document.getElementById('tonight').innerHTML=items.length?items.map(function(t){
-        return posterCard(t,{badge:t.kind==='anime'?'Anime':t.partial?'Some episodes':''});
-      }).join(''):'<div class="empty">Nothing matches these filters</div>';
-    }
-    document.getElementById('tonight-filters').addEventListener('click',function(e){
-      var b=e.target.closest('button');if(!b)return;
-      if(b.hasAttribute('data-kind')){tonightKind=b.getAttribute('data-kind');store('tonightKind',tonightKind);}
-      else{tonightLen=+b.getAttribute('data-len');store('tonightLen',tonightLen);}
-      renderTonight();
     });
 
     // Why Jellyfin converts, in plain words
@@ -527,8 +450,6 @@
         show('latest-sec',s.latest.length>0);
         document.getElementById('latest').innerHTML=s.latest.map(function(c){return posterCard(c,{badge:c.new>1?c.new+' new':''});}).join('');
       }
-
-      renderTonight();
 
       // Three rows: anime, series, films (an empty one isn't shown)
       if(s.recommended&&!Array.isArray(s.recommended)){
@@ -641,7 +562,7 @@
     // (every few minutes), indexers and disk; a part that failed to refresh
     // says so and how old what's shown is; a status file that stopped
     // updating is a warning, not a quiet old timestamp
-    var PART_NAMES={'continue':'continue watching',tonight:'watch tonight',latest:'recently added',requests_live:'requests',upcoming:'coming up',health:'library health',recommended:'worth watching'};
+    var PART_NAMES={'continue':'continue watching',latest:'recently added',requests_live:'requests',upcoming:'coming up',health:'library health',recommended:'worth watching'};
     function when(t){return t?ago(new Date(t*1000).toISOString()):'never';}
     function freshness(s){
       var age=Date.now()/1000-(s.updated||0),parts=[];
@@ -717,9 +638,7 @@
         document.getElementById('dl-stats').innerHTML='<span style="color:var(--green)">↓ '+(d.qbOk&&d.sabOk?fmtSpeed(d.down):'–')+'</span><span style="color:var(--blue)">↑ '+(d.qbOk?fmtSpeed(d.up):'–')+'</span>';
       });
     }
-    // Polled only while Manage is open
-    setInterval(function(){if(currentView()==='manage')refreshDownloads();},5000);
-    applyView();
+    refreshDownloads();setInterval(refreshDownloads,5000);
 
     // ── Greeting and clock ──
     function tick(){
@@ -742,22 +661,14 @@
         fetch('/api/jellyfin/Items?Recursive=true&Limit=6&IncludeItemTypes=Movie,Series&SearchTerm='+encodeURIComponent(q)).then(function(r){return r.json()}).catch(function(){return{Items:[]}}),
         fetch('/api/seerr/search?page=1&query='+encodeURIComponent(q)).then(function(r){return r.json()}).catch(function(){return{results:[]}})
       ]).then(function(res){
-        // One list: what you can play, then what you can ask for; a title in
-        // both shows once, with what you can do with it
-        var lib=res[0].Items||[],ask=(res[1].results||[]).filter(function(x){return x.mediaType==='movie'||x.mediaType==='tv';}),html='';
-        var here={};lib.forEach(function(i){here[(i.Name||'').toLowerCase()+'|'+(i.ProductionYear||'')]=1;});
-        ask=ask.filter(function(x){
-          var key=(x.title||x.name||'').toLowerCase()+'|'+(x.releaseDate||x.firstAirDate||'').slice(0,4);
-          return!(here[key]&&(x.mediaInfo||{}).status===5);
-        }).slice(0,8);
-        function action(label,cls){return'<span class="sr-act '+(cls||'')+'">'+label+'</span>';}
+        var lib=res[0].Items||[],ask=(res[1].results||[]).filter(function(x){return x.mediaType==='movie'||x.mediaType==='tv';}).slice(0,8),html='';
         if(lib.length)html+='<div class="sr-group">In your library</div>'+lib.map(function(i){
-          return'<a class="sr-item" href="'+watchUrl(i.Id)+'"><span>'+esc(i.Name)+' <span class="tag">'+(i.ProductionYear||'')+' · '+(i.Type==='Series'?'series':'film')+'</span></span>'+action('▶ Play','play')+'</a>';
+          return'<a class="sr-item" href="'+watchUrl(i.Id)+'"><span>'+esc(i.Name)+'</span><span class="tag">'+(i.ProductionYear||'')+' · '+(i.Type==='Series'?'series':'movie')+' · watch</span></a>';
         }).join('');
-        if(ask.length)html+='<div class="sr-group">Not in your library</div>'+ask.map(function(x){
+        if(ask.length)html+='<div class="sr-group">Request</div>'+ask.map(function(x){
           var title=x.title||x.name,yr=(x.releaseDate||x.firstAirDate||'').slice(0,4),st=(x.mediaInfo||{}).status;
-          var act=st===5?action('▶ Play','play'):st===4?action('Some episodes · request the rest'):st===2||st===3?action('Requested','dim'):action('＋ Request');
-          return'<a class="sr-item" href="'+seerrBase+'/'+x.mediaType+'/'+x.id+'"><span>'+esc(title)+' <span class="tag">'+yr+' · '+(x.mediaType==='tv'?'series':'film')+'</span></span>'+act+'</a>';
+          var state=st===5?'available':st===2||st===3?'requested':st===4?'partly available':'request';
+          return'<a class="sr-item" href="'+seerrBase+'/'+x.mediaType+'/'+x.id+'"><span>'+esc(title)+'</span><span class="tag">'+yr+' · '+(x.mediaType==='tv'?'series':'movie')+' · '+state+'</span></a>';
         }).join('');
         sr.innerHTML=html||'<div class="sr-group">No results</div>';
         sr.style.display='block';

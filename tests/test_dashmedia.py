@@ -284,3 +284,53 @@ class StuckDownloads(unittest.TestCase):
         self.assertIn("getting the torrent's details", dm.queue_progress(meta)[1])
         fine = [{"size": 100, "sizeleft": 50, "trackedDownloadState": "downloading", "timeleft": "00:10:00"}]
         self.assertEqual(dm.queue_progress(fine), ("downloading", "50% · 00:10:00 left"))
+
+
+class Tonight(unittest.TestCase):
+    def setUp(self):
+        import tempfile, shutil
+        self.media = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.media)
+        patcher = mock.patch.object(dm, "STATE", self.media / ".state")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        h = 600_000_000   # ticks in a minute
+        anime = str(self.media / "anime")
+        self.films = [
+            {"Id": "f1", "Name": "Unwatched Film", "Type": "Movie", "ProductionYear": 2024, "RunTimeTicks": 135 * h,
+             "Path": "/m/movies/U.mkv", "DateCreated": "2026-09-03", "ImageTags": {"Primary": "t"}, "UserData": {}},
+            {"Id": "f2", "Name": "Started Film", "Type": "Movie", "RunTimeTicks": 90 * h, "Path": "/m/movies/S.mkv",
+             "DateCreated": "2026-09-05", "UserData": {"PlaybackPositionTicks": 5}},
+            {"Id": "f3", "Name": "Anime Film", "Type": "Movie", "RunTimeTicks": 100 * h, "Path": anime + "/Film/F.mkv",
+             "DateCreated": "2026-09-01", "UserData": {}}]
+        self.shows = [
+            {"Id": "s1", "Name": "Fresh Show", "Type": "Series", "RunTimeTicks": 24 * h, "Path": anime + "/Fresh",
+             "RecursiveItemCount": 8, "UserData": {"UnplayedItemCount": 8}, "ProviderIds": {"Tvdb": "100"}, "DateCreated": "2026-09-04"},
+            {"Id": "s2", "Name": "Begun Show", "Type": "Series", "RecursiveItemCount": 10, "UserData": {"UnplayedItemCount": 4},
+             "DateCreated": "2026-09-06"},
+            {"Id": "s4", "Name": "Half An Episode", "Type": "Series", "RecursiveItemCount": 5, "UserData": {"UnplayedItemCount": 5},
+             "DateCreated": "2026-09-07"},
+            {"Id": "s3", "Name": "Full Show", "Type": "Series", "RunTimeTicks": 50 * h, "Path": "/m/tv/Full",
+             "RecursiveItemCount": 6, "UserData": {"UnplayedItemCount": 6}, "ProviderIds": {"Tvdb": "200"}, "DateCreated": "2026-09-02"}]
+
+    def jellyfin(self, path):
+        if path == "Users":
+            return [{"Id": "u1", "Name": "admin"}]
+        if path.startswith("UserItems/Resume"):
+            return {"Items": [{"Id": "e1", "SeriesId": "s4"}]}   # an episode half watched, none finished
+        if path.startswith("Shows/NextUp"):
+            return {"Items": []}
+        if "IncludeItemTypes=Movie" in path:
+            return {"Items": self.films}
+        return {"Items": self.shows}
+
+    def test_only_what_you_havent_started(self):
+        sonarr = [{"tvdbId": 100, "statistics": {"episodeCount": 24}}, {"tvdbId": 200, "statistics": {"episodeCount": 6}}]
+        with mock.patch.object(dm, "jellyfin", self.jellyfin), mock.patch.object(dm, "sonarr", return_value=sonarr):
+            items = dm.tonight()
+        self.assertEqual([(i["title"], i["kind"]) for i in items],
+                         [("Fresh Show", "anime"), ("Unwatched Film", "film"), ("Full Show", "series"), ("Anime Film", "anime")])
+        by = {i["title"]: i for i in items}
+        self.assertEqual((by["Unwatched Film"]["minutes"], by["Unwatched Film"]["detail"]), (135, "2024 · 2 h 15 min"))
+        self.assertEqual((by["Fresh Show"]["detail"], by["Fresh Show"]["partial"]), ("8 of 24 episodes · 24 min each", True))
+        self.assertEqual((by["Full Show"]["detail"], by["Full Show"]["partial"]), ("6 episodes · 50 min each", False))
