@@ -494,3 +494,13 @@ do_e2e() {
   echo "   Log: $log"
   return "$E2E_FAILED"
 }
+
+JF_HEADER='Authorization: MediaBrowser Client="setup", Device="script", DeviceId="setup-script", Version="1.0"'
+
+# Sets JELLYFIN_TOKEN (empty if the login fails)
+jellyfin_login() {
+  local resp
+  resp=$(api_retry api POST "$JELLYFIN_URL/Users/AuthenticateByName" -H "$JF_HEADER" \
+    -d "$(jq -nc --arg u "$JELLYFIN_USER" --arg p "$JELLYFIN_PASS" '{Username:$u,Pw:$p}')" || echo "")
+  JELLYFIN_TOKEN=$(echo "$resp" | jq -r '.AccessToken // empty' 2>/dev/null || echo "")
+}

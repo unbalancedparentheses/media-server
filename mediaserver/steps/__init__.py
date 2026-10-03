@@ -20,6 +20,7 @@ STEPS = {
     "bazarr": "bazarr",
     "seerr": "seerr",
     "prowlarr": "prowlarr",
+    "jellyfin": "jellyfin",
     "qbittorrent": "downloads:qbittorrent",
     "sabnzbd": "downloads:sabnzbd",
     "usenet-providers": "downloads:usenet_providers",

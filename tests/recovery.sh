@@ -88,39 +88,6 @@ test_arr_login_advances_only_when_verified() {
   expect_eq "$(creds_get sonarr password)" new "after reload"
 }
 
-# Jellyfin's password change is interrupted: the old password stays
-# recorded (Jellyfin needs it to change the password later), and the next
-# run finishes the change
-test_jellyfin_change_retried_after_interruption() {
-  JELLYFIN_USER=admin JELLYFIN_PASS=new MOVIES_DIR=/m TV_DIR=/t ANIME_DIR=/a
-  creds_load
-  creds_set jellyfin admin old
-  echo old > "$FAKE/jf_pass"
-  curl() { :; }  # the startup wizard is done
-  api() {
-    local method="$1" url="$2"; shift 2
-    case "$method $url" in
-      "POST "*/Users/AuthenticateByName)
-        local body="${*: -1}"
-        [ "$(jq -r .Pw <<< "$body")" = "$(cat "$FAKE/jf_pass")" ] && echo '{"AccessToken":"tok"}' || return 22 ;;
-      "GET "*/Users/Me) echo '{"Id":"u1"}' ;;
-      "POST "*/Users/u1/Password)
-        [ -f "$FAKE/change_ok" ] || return 22
-        echo new > "$FAKE/jf_pass" ;;
-      "GET "*/Library/VirtualFolders) echo '[]' ;;
-      *) return 22 ;;
-    esac
-  }
-
-  configure_jellyfin >/dev/null
-  expect_eq "$(creds_get jellyfin password)" old "change failed"
-
-  touch "$FAKE/change_ok"
-  configure_jellyfin >/dev/null
-  expect_eq "$(cat "$FAKE/jf_pass")" new "Jellyfin's password"
-  expect_eq "$(creds_get jellyfin password)" new "record after the retry"
-}
-
 # The older credentials file (one shared login) upgrades per service,
 # without guessing Cleanuparr's password
 test_credentials_upgrade_from_shared_record() {

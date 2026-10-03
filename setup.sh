@@ -127,7 +127,8 @@ run_setup() {
   # Radarr indexers an interrupted e2e test left paused
   e2e_resume_radarr_indexers || true
   timed py step qbittorrent
-  timed configure_jellyfin
+  timed py step jellyfin
+  load_jellyfin_key
   timed py step sabnzbd
   timed configure_arrs
   timed configure_junk_filters

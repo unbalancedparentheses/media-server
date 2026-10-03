@@ -20,6 +20,7 @@ from mediaserver import api, arr, creds, jellyfin, launchd, logins
 from mediaserver import common as c
 from mediaserver.config import Config, Keys, Paths
 from mediaserver.steps import bazarr, cleanuparr, downloads, introskipper, moonbase, postimport_settings, prowlarr, seerr, unpackerr
+from mediaserver.steps import jellyfin as jellyfin_step
 from mediaserver.ui import SetupError
 
 
@@ -405,3 +406,43 @@ class Downloads(unittest.TestCase):
         with self.sab(lambda mode, section, form: None), mock.patch.object(downloads.time, "sleep"):
             out = run(downloads.usenet_providers, self.cfg)
         self.assertIn("Couldn't read SABnzbd's servers", out)
+
+
+class JellyfinStep(unittest.TestCase):
+    def setUp(self):
+        self.cfg = scratch({"jellyfin": {"username": "admin", "password": "new"}, "playback": {"audio_language": ""}})
+        self.addCleanup(shutil.rmtree, self.cfg.paths.media)
+
+    def test_password_change_retried_after_interruption(self):
+        """The change is interrupted: the old password stays recorded
+        (Jellyfin needs it to change the password later), and the next run
+        finishes the change"""
+        state = self.cfg.paths.state
+        creds.record(state, "jellyfin", "admin", "old")
+        server = {"password": "old", "change_ok": False}
+
+        def login(self, tries=3):
+            self.token = "tok" if self.password == server["password"] else ""
+            return bool(self.token)
+
+        def post(self, path, body=None):
+            if path.endswith("/Password"):
+                if not server["change_ok"]:
+                    raise api.ApiError("failed")
+                server["password"] = body["NewPw"]
+        with mock.patch.object(jellyfin.Jellyfin, "login", login), mock.patch.object(jellyfin.Jellyfin, "post", post), \
+                mock.patch.object(jellyfin.Jellyfin, "get", lambda self, path: {"Id": "u1"}):
+            self.assertIsNone(run_value(jellyfin_step.sign_in, self.cfg))
+            self.assertEqual(creds.get(state, "jellyfin", "password"), "old")
+            server["change_ok"] = True
+            self.assertIsNotNone(run_value(jellyfin_step.sign_in, self.cfg))
+        self.assertEqual((server["password"], creds.get(state, "jellyfin", "password")), ("new", "new"))
+
+    def test_playback_and_policy(self):
+        want = jellyfin_step.playback_config({"Other": 1}, self.cfg)
+        self.assertEqual((want.get("AudioLanguagePreference"), want["PlayDefaultAudioTrack"], want["RememberAudioSelections"]), (None, True, False))
+        self.assertNotIn("AudioLanguagePreference", jellyfin_step.playback_config({"AudioLanguagePreference": "jpn"}, self.cfg))
+        self.assertEqual(want["Other"], 1)
+        policy = jellyfin_step.policy_config({"EnablePlaybackRemuxing": True}, False)
+        self.assertEqual((policy["EnablePlaybackRemuxing"], policy["EnableContentDownloading"]), (False, True))
+        self.assertEqual(jellyfin_step.encoding_config({}, True)["HardwareAccelerationType"], "videotoolbox")

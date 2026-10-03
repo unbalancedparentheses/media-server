@@ -350,6 +350,10 @@ validate_config_semantics() {
   py validate-config || exit 1
 }
 
+# Setup's Jellyfin API key, written by the jellyfin step (mediaserver),
+# for the steps still in bash
+load_jellyfin_key() { JELLYFIN_API_KEY=$(cat "$STATE_DIR/dashstatus/jellyfin-key" 2>/dev/null || true); }
+
 # The parts already in Python (mediaserver/): python3 -m mediaserver <command>
 py() { PYTHONPATH="$SCRIPT_DIR" MEDIA_DIR="$MEDIA_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -m mediaserver "$@"; }
 
