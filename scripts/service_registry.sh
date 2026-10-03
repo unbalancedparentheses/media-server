@@ -17,7 +17,7 @@ init_service_registry() {
   BYPARR_URL="http://127.0.0.1:8191"
   CLEANUPARR_URL="http://$admin:11011"
   DASHBOARD_PORT="${DASHBOARD_PORT:-80}"
-  DASHBOARD_URL="http://localhost:$DASHBOARD_PORT"
+  DASHBOARD_URL="http://localhost$([ "$DASHBOARD_PORT" = 80 ] || echo ":$DASHBOARD_PORT")"
 
   # How the services reach each other (all on this machine)
   SONARR_INTERNAL="http://localhost:8989"

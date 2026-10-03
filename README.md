@@ -137,6 +137,7 @@ Every setting is explained in [`config.toml.example`](config.toml.example) and u
 Start with these:
 
 ```bash
+nix run .#open                # open the dashboard (the first install does it for you)
 nix run .#doctor              # is it working? findings with evidence and what to do
 nix run .#status              # which services are running, and free disk space
 nix run .#test                # about 120 checks that the setup is correct

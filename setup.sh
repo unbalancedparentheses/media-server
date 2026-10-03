@@ -74,7 +74,7 @@ NON_INTERACTIVE=false
 DRY_RUN=false
 PURGE=false
 E2E_KEEP=false
-USAGE="Usage: setup.sh [--yes] [--dry-run] [--preflight|--check-config|--test|--e2e [--keep]|--status|--doctor|--logs <service>|--restart [service]|--update|--backup|--restore <file>|--uninstall [--purge]]"
+USAGE="Usage: setup.sh [--yes] [--dry-run] [--preflight|--check-config|--test|--e2e [--keep]|--status|--doctor|--open|--logs <service>|--restart [service]|--update|--backup|--restore <file>|--uninstall [--purge]]"
 set_mode() {
   [ -n "$MODE" ] && err "Only one mode can be used at a time"
   MODE="$1"
@@ -85,7 +85,7 @@ while [ "$#" -gt 0 ]; do
     --dry-run) DRY_RUN=true ;;
     --purge) PURGE=true ;;
     --keep) E2E_KEEP=true ;;
-    --preflight|--check-config|--test|--e2e|--status|--doctor|--update|--backup|--uninstall)
+    --preflight|--check-config|--test|--e2e|--status|--doctor|--open|--update|--backup|--uninstall)
       MODE_NAME="${1#--}"
       set_mode "${MODE_NAME//-/_}"
       ;;
@@ -145,6 +145,18 @@ run_setup() {
   timed configure_cleanuparr
   timed configure_postimport
   timed write_api_proxy
+}
+
+# The first install that succeeds opens the dashboard; later runs are
+# usually config changes, so they don't. Never with --yes, in CI or without
+# a terminal (scripted installs).
+open_dashboard_once() {
+  local marker="$STATE_DIR/dashboard-opened"
+  [ -e "$marker" ] && return 0
+  touch "$marker"
+  if [ "$NON_INTERACTIVE" = true ] || [ -n "${CI:-}" ] || [ ! -t 1 ]; then return 0; fi
+  info "Opening the dashboard ($DASHBOARD_URL); next time: nix run .#open"
+  open "$DASHBOARD_URL" >/dev/null 2>&1 || true
 }
 
 print_summary() {
@@ -223,6 +235,13 @@ case "$MODE" in
 esac
 
 # The remaining modes need a valid config
+if [ "$MODE" = "open" ]; then
+  [ -f "$CONFIG_FILE" ] || err "$CONFIG_FILE not found — run 'nix run .#install' first"
+  CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
+  load_runtime_settings
+  open "$DASHBOARD_URL" || err "Couldn't open $DASHBOARD_URL"
+  exit 0
+fi
 if [ "$MODE" = "test" ] || [ "$MODE" = "status" ] || [ "$MODE" = "e2e" ] || [ "$MODE" = "doctor" ]; then
   [ -f "$CONFIG_FILE" ] || err "$CONFIG_FILE not found — run 'nix run .#install' first"
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
@@ -254,3 +273,4 @@ if [ "$VERIFY_FAILED" -gt 0 ]; then
   exit 1
 fi
 print_summary
+open_dashboard_once

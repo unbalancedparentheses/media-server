@@ -383,6 +383,7 @@
         uninstall = app pkgs [ "--uninstall" ];
         status = app pkgs [ "--status" ];
         doctor = app pkgs [ "--doctor" ];
+        open = app pkgs [ "--open" ];
         logs = app pkgs [ "--logs" ];
         restart = app pkgs [ "--restart" ];
         test = app pkgs [ "--test" ];
