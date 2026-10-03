@@ -280,6 +280,21 @@ class MainLoop(Scratch):
         self.assertTrue((self.dir / ".state/state.json").exists())
         self.assertTrue((self.dir / ".state/status.json").exists())
 
+    def test_a_full_round_also_looks_at_whats_stuck(self):
+        """Stubbed: a test must never reach the real Sonarr/Radarr"""
+        (self.dir / "netwatch").mkdir()
+        with mock.patch.object(pi, "STATE", self.dir / "postimport"), mock.patch.object(pi.sys, "argv", ["postimport"]), \
+                mock.patch.object(pi, "operation_running", return_value=False), \
+                mock.patch.object(pi.Worker, "new_imports"), mock.patch.object(pi.Worker, "check_rejections"), \
+                mock.patch.object(pi.Worker, "sweep"), mock.patch.object(pi.stuck, "run") as run, \
+                mock.patch.object(pi.time, "sleep", self.rounds(1)), self.assertRaises(KeyboardInterrupt):
+            (self.dir / "netwatch/connection").write_text("offline\n")
+            pi.main()
+        apps, settings, state_file, offline = run.call_args[0]
+        self.assertEqual([a.name for a in apps], ["Sonarr", "Radarr", "Prowlarr"])
+        self.assertEqual(state_file, self.dir / "postimport/stuck.json")
+        self.assertTrue(offline)
+
     def test_waits_while_an_install_runs(self):
         with mock.patch.object(pi.sys, "argv", ["postimport"]), mock.patch.object(pi, "operation_running", return_value=True), \
                 mock.patch.object(pi.Worker, "new_imports") as work, mock.patch.object(pi.time, "sleep", self.rounds(1)), \

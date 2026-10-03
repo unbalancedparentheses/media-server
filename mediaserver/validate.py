@@ -101,6 +101,7 @@ SCHEMA = {
         "prefer_english_audio": boolean,
         "anime_block_dubs": boolean,
         "anime_release_groups": boolean,
+        "fallback_profile": one_of("", *BUILTIN_PROFILES),
     },
     "playback": {
         "subtitle_mode": one_of("Always", "Smart", "OnlyForced", "Default", "None"),
@@ -125,6 +126,7 @@ SCHEMA = {
         "drop_picture_subtitles": boolean,
         "default_tracks": boolean,
         "max_replacements": integer(lo=0, hi=20),
+        "search_missing": boolean,
     },
 }
 INDEXER = {

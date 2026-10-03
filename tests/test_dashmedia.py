@@ -274,3 +274,13 @@ class Recommended(unittest.TestCase):
         asked = len(self.rating_calls)
         self.run_it(down=True)
         self.assertEqual(len(self.rating_calls), asked)
+
+
+class StuckDownloads(unittest.TestCase):
+    def test_why_a_download_isnt_moving(self):
+        stalled = [{"size": 100, "sizeleft": 100, "trackedDownloadState": "downloading", "errorMessage": "The download is stalled with no connections"}]
+        self.assertIn("stalled: nobody is sharing it", dm.queue_progress(stalled)[1])
+        meta = [{"size": 0, "sizeleft": 0, "trackedDownloadState": "downloading", "errorMessage": "qBittorrent is downloading metadata"}]
+        self.assertIn("getting the torrent's details", dm.queue_progress(meta)[1])
+        fine = [{"size": 100, "sizeleft": 50, "trackedDownloadState": "downloading", "timeleft": "00:10:00"}]
+        self.assertEqual(dm.queue_progress(fine), ("downloading", "50% · 00:10:00 left"))

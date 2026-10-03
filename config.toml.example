@@ -59,6 +59,8 @@ prefer_english_audio = true   # movies and TV: prefer releases with English audi
 anime_block_dubs = true       # anime: never grab English-dub-only releases
                               # (Japanese audio + subtitles; dual audio is fine)
 anime_release_groups = true   # anime: prefer well-rated release groups (TRaSH tiers)
+fallback_profile = ""         # "" = never. A profile (e.g. "HD-720p") to switch a title to after a
+                              # week of releases turned down only for their quality
 
 # ─── Playback (Jellyfin user defaults) ──────────────────────────
 # subtitle_mode: "Always", "Smart" (only when the audio isn't your
@@ -128,6 +130,8 @@ ocr_subtitles = true      # read Blu-ray picture subtitles into text .srt files
 drop_picture_subtitles = true   # remove a picture subtitle track when its language is there as text
                                 # (players otherwise pick the picture one, burned into the video)
 default_tracks = true     # make each file's default audio/subtitles your preferences ([playback], [subtitles])
+search_missing = true     # search again for what's still missing (Sonarr/Radarr only do it once):
+                          # hourly at most, waiting longer each time, within your profiles and filters
 
 # ─── Indexers (Prowlarr) ───────────────────────────────────────
 

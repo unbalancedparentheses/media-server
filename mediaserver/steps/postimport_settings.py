@@ -25,6 +25,8 @@ def settings(cfg: Config) -> dict:
         "min_free_gb": cfg.disk_min_gb,
         "warn_free_gb": cfg.disk_warn_gb,
         "library_dirs": [str(p.movies), str(p.tv), str(p.anime)],
+        "search_missing": cfg.flag("library.search_missing", True),
+        "fallback_profile": cfg.get("quality.fallback_profile", ""),
     }
 
 

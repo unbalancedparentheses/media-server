@@ -154,6 +154,12 @@ def queue_progress(queue: list) -> tuple[str, str]:
     pct = int((size - left) * 100 / size) if size else 0
     eta = next((q.get("timeleft") for q in queue if q.get("timeleft")), "")
     count = f"{len(queue)} episodes · " if len(queue) > 1 else ""
+    # Why it isn't moving, when it isn't: no one sharing it, no metadata yet
+    why = " ".join(q.get("errorMessage") or "" for q in queue).lower()
+    if "stalled" in why or "no connections" in why:
+        return "downloading", f"{count}{pct}% · stalled: nobody is sharing it right now; Cleanuparr replaces it if it stays that way"
+    if "metadata" in why:
+        return "downloading", f"{count}{pct}% · getting the torrent's details from other peers (can take a while with few seeders)"
     return "downloading", f"{count}{pct}%" + (f" · {eta} left" if eta and eta != "00:00:00" else "")
 
 
@@ -336,23 +342,46 @@ def requests():
     return out
 
 
+def stuck_items() -> dict:
+    """What the postimport service found out about titles that aren't arriving"""
+    return (c.read_json(STATE / "postimport/stuck.json", {}) or {}).get("items") or {}
+
+
+def with_diagnosis(stages: list, items: list) -> list:
+    """On the active Search stage: why nothing is arriving and what's done
+    about it (the stuck items of this film, or of this series' seasons)"""
+    from mediaserver import stuck
+    texts = [(f"season {i['season']}: " if "season" in i and len(items) > 1 else "") + t
+             for i, t in ((i, stuck.explain(i)) for i in items) if t]
+    if texts:
+        for st in stages:
+            if st["name"] == "searching" and st["state"] == "active" and not st["detail"].startswith("not out yet"):
+                st["detail"] = "; ".join(texts[:2])
+                st["diagnosed"] = True
+    return stages
+
+
 def movie_pipeline(movie: dict, requested, queue_m: dict, current: dict, queued: list, subs: dict, today: str) -> list:
     upcoming = ""
     if movie and not movie.get("hasFile") and not movie.get("isAvailable"):
         nxt = next_release(movie, today)
         upcoming = f"not out yet · {nxt[1]} {short_day(nxt[0])}" if nxt else "not out yet"
-    return with_progress(pipeline(requested, bool(movie.get("hasFile")), "", queue_m.get(movie.get("id"), []), upcoming,
-                                  checking_for(current, queued, movie.get("path", ""), "Radarr", movie.get("id")),
-                                  subs.get(movie.get("id"), 0)), current, movie.get("path", ""))
+    stages = with_progress(pipeline(requested, bool(movie.get("hasFile")), "", queue_m.get(movie.get("id"), []), upcoming,
+                                    checking_for(current, queued, movie.get("path", ""), "Radarr", movie.get("id")),
+                                    subs.get(movie.get("id"), 0)), current, movie.get("path", ""))
+    item = stuck_items().get(f"radarr:{movie.get('id')}")
+    return with_diagnosis(stages, [item] if item else [])
 
 
 def series_pipeline(show: dict, requested, queue_s: dict, current: dict, queued: list, subs: dict) -> list:
     stats = show.get("statistics") or {}
     have, aired = stats.get("episodeFileCount") or 0, stats.get("episodeCount") or 0
     partial = f"{have} of {aired} episodes" if have and aired and have < aired else ""
-    return with_progress(pipeline(requested, have > 0, partial, queue_s.get(show.get("id"), []), "",
-                                  checking_for(current, queued, show.get("path", ""), "Sonarr", show.get("id")),
-                                  subs.get(show.get("id"), 0)), current, show.get("path", ""))
+    stages = with_progress(pipeline(requested, have > 0, partial, queue_s.get(show.get("id"), []), "",
+                                    checking_for(current, queued, show.get("path", ""), "Sonarr", show.get("id")),
+                                    subs.get(show.get("id"), 0)), current, show.get("path", ""))
+    seasons = [i for k, i in sorted(stuck_items().items()) if k.startswith(f"sonarr:{show.get('id')}:")]
+    return with_diagnosis(stages, seasons)
 
 
 def downloading(queue):

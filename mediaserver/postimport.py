@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import Any
 
 from mediaserver import common as c
+from mediaserver import stuck
 from mediaserver.config import local
 from mediaserver.common import background, log, read_json
 
@@ -92,6 +93,8 @@ DEFAULTS = {
     "min_free_gb": 10,
     "warn_free_gb": 50,
     "library_dirs": [],
+    "search_missing": True,
+    "fallback_profile": "",
 }
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".m4v"}
 # Audio every browser plays; anything else makes Jellyfin convert
@@ -706,8 +709,8 @@ def ocr(path, lang, stream):
 class Arr:
     """A Sonarr/Radarr API client; key from its config.xml"""
 
-    def __init__(self, name, url, kind):
-        self.name, self.url, self.kind = name, url, kind  # kind: "series" | "movie"
+    def __init__(self, name, url, kind, version="v3"):
+        self.name, self.url, self.kind, self.version = name, url, kind, version  # kind: "series" | "movie"
 
     def key(self):
         try:
@@ -719,7 +722,7 @@ class Arr:
     def call(self, method, path, body=None) -> Any:
         """The decoded JSON answer ({} when there's no body)"""
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(f"{self.url}/api/v3/{path}", data=data, method=method,
+        req = urllib.request.Request(f"{self.url}/api/{self.version}/{path}", data=data, method=method,
                                      headers={"X-Api-Key": self.key(), "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read()
@@ -1213,6 +1216,7 @@ def main():
     if len(sys.argv) == 3 and sys.argv[1] in ("--check", "--fix"):
         return by_hand(sys.argv[1], sys.argv[2])
     apps = [Arr("Sonarr", local("sonarr"), "series"), Arr("Radarr", local("radarr"), "movie")]
+    prowlarr = Arr("Prowlarr", local("prowlarr"), "", "v1")
     waiting = stopped = False
     while True:
         if operation_running():
@@ -1236,6 +1240,9 @@ def main():
                 worker.new_imports()
                 worker.check_rejections()
                 worker.sweep()
+                # What isn't arriving: searched again, and why (hourly)
+                offline = c.read_text(STATE.parent / "netwatch/connection") == "offline"
+                stuck.run(apps + [prowlarr], worker.settings, STATE / "stuck.json", offline)
             except ToolTrouble as e:
                 log(f"skipping this round: {e}")
             except Exception as e:  # keep running; what's saved so far stays

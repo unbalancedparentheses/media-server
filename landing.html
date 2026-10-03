@@ -400,7 +400,7 @@
       if(days<2)return stages;
       var app=r.type==='tv'?'Sonarr':'Radarr';
       return stages.map(function(st){
-        if(st.name!=='searching'||st.state!=='active'||/^not out yet/.test(st.detail||''))return st;
+        if(st.name!=='searching'||st.state!=='active'||st.diagnosed||/^not out yet/.test(st.detail||''))return st;
         return Object.assign({},st,{detail:(st.detail||'looking for a good release')+' · nothing suitable in '+days+' days; try Interactive Search in '+app});
       });
     }

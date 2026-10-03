@@ -1,0 +1,302 @@
+"""Requests that aren't arriving: why, and bounded recovery.
+
+Sonarr and Radarr search once when something is added, then only take what
+shows up in their RSS feeds; they never search again for what's still
+missing. So, run from the postimport service:
+
+- Recovery: films and seasons still missing (released, monitored) are
+  searched again through Sonarr/Radarr, so your quality profiles, language
+  and size rules and release filters all apply as always. Each one waits
+  longer after every search (1 h, 2 h, 4 h, … up to a day), at most
+  SEARCHES_PER_RUN an hour, never while offline or during an install.
+  Indexers switched off after failures are re-tested every 6 hours.
+- Diagnosis: for one missing for over a day, a release search that grabs
+  nothing (Sonarr/Radarr's interactive search) shows what's out there and
+  why each release was turned down: nothing found, indexers down, quality,
+  language, size, the release filters, no seeders, blocklisted. That's what
+  the dashboard shows, with what to do.
+- Lower resolution only if you ask for it: with quality.fallback_profile
+  set, a title stuck for a week whose releases are turned down only for
+  their quality is switched to that profile (recorded and shown).
+
+State: stuck.json next to postimport's own record.
+"""
+from __future__ import annotations
+
+import time
+from typing import Any
+
+from mediaserver import common as c
+
+RUN_EVERY = 3600
+SEARCHES_PER_RUN = 3
+DIAGNOSES_PER_RUN = 2
+DIAGNOSE_AFTER = 86400          # missing this long before it's looked into
+DIAGNOSE_EVERY = 12 * 3600      # and not again sooner (it queries the indexers)
+MAX_WAIT = 86400                # the longest pause between searches
+RETEST_INDEXERS_EVERY = 6 * 3600
+FALLBACK_AFTER = 7 * 86400
+
+# Words in Sonarr/Radarr's rejection reasons → what kind of reason it is
+REASONS = [
+    ("queued", ("in queue",)),
+    ("blocklisted", ("blocklist",)),
+    ("size", ("size", "larger than", "smaller than")),
+    ("language", ("language",)),
+    ("filters", ("custom format", "score")),
+    ("peers", ("seeder", "peers")),
+    ("quality", ("quality", "not wanted in profile")),
+    ("mismatch", ("unknown", "wasn't requested", "not monitored", "match", "parse")),
+]
+EXPLAIN = {
+    "no_results": ("No releases found on your indexers",
+                   "Searched again regularly; Interactive Search later, or add indexers in Prowlarr"),
+    "indexers_down": ("Your indexers aren't answering",
+                      "Being re-tested every 6 hours; Prowlarr → Indexers → Test All to try now"),
+    "quality": ("Releases found, but none in a quality your profile takes",
+                "Interactive Search to pick one, or set quality.fallback_profile to accept lower"),
+    "language": ("Releases found, but none in your language",
+                 "Interactive Search to pick one; dual-audio releases count"),
+    "size": ("Releases found, but all outside the size limits", "Interactive Search to pick one"),
+    "filters": ("Releases found, but all blocked by the release filters (junk, low score)",
+                "Interactive Search to see them; the filters are in [quality]"),
+    "peers": ("Releases found, but nobody is sharing them (no seeders)", "Searched again regularly; new uploads appear"),
+    "blocklisted": ("The releases found already failed once (blocklisted)", "Searched again regularly for new ones"),
+    "mismatch": ("Releases found, but they don't match this title", "Interactive Search to check"),
+    "usable": ("A usable release is out there", "It's grabbed with the next search"),
+    "queued": ("A release is already downloading", "See its progress under Download"),
+}
+
+
+def kind_of(reason: str) -> str:
+    low = reason.lower()
+    return next((k for k, words in REASONS if any(w in low for w in words)), "other")
+
+
+def classify(releases: list, indexers_down: bool) -> dict:
+    """{"code", "text", "action", "found", …} from an interactive search's results"""
+    if not releases:
+        code = "indexers_down" if indexers_down else "no_results"
+        text, action = EXPLAIN[code]
+        return {"code": code, "text": text, "action": action, "found": 0}
+    approved = [r for r in releases if r.get("approved")]
+    if approved:
+        alive = [r for r in approved if r.get("protocol") != "torrent" or (r.get("seeders") or 0) > 0]
+        code = "usable" if alive else "peers"
+        text, action = EXPLAIN[code]
+        return {"code": code, "text": text, "action": action, "found": len(releases)}
+    counts: dict = {}
+    for r in releases:
+        kinds = {kind_of(x) for x in r.get("rejections") or []} or {"other"}
+        for k in kinds:
+            counts[k] = counts.get(k, 0) + 1
+    code = max(counts, key=lambda k: (counts[k], k != "other"))
+    out = {"found": len(releases), "kinds": counts}
+    if code == "other":
+        reason = next((x for r in releases for x in r.get("rejections") or []), "turned down")
+        out.update(code="other", text=f"{len(releases)} releases found, none suitable: {reason}",
+                   action="Interactive Search to see them")
+        return out
+    text, action = EXPLAIN[code]
+    if code == "quality":
+        qualities = sorted({((r.get("quality") or {}).get("quality") or {}).get("name", "") for r in releases} - {""})
+        if qualities:
+            text += f" (found: {', '.join(qualities[:4])})"
+    out.update(code=code, text=f"{text} ({len(releases)} found)" if code != "quality" else text, action=action,
+               only_quality=set(counts) == {"quality"})
+    return out
+
+
+def timestamp(iso: str | None) -> float | None:
+    """Sonarr/Radarr's "2026-09-28T12:00:00Z" as seconds"""
+    if not iso:
+        return None
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def wait_after(searches: int) -> int:
+    return min(3600 * 2 ** max(searches - 1, 0), MAX_WAIT)
+
+
+class Stuck:
+    def __init__(self, apps: list, settings: dict, state: dict, now: float | None = None):
+        self.apps = {a.name: a for a in apps}
+        self.settings, self.state = settings, state
+        self.now = time.time() if now is None else now
+        state.setdefault("items", {})
+
+    # ─── What's missing ──────────────────────────────────────────
+
+    def missing(self) -> dict:
+        """key → {"app", "title", "query", "search", "series"/"movie"}:
+        released, monitored films without a file; aired, monitored episodes
+        grouped by season (one season search finds packs and episodes)"""
+        out: dict = {}
+        radarr, sonarr = self.apps.get("Radarr"), self.apps.get("Sonarr")
+        if radarr:
+            # Already downloading isn't missing: not searched or diagnosed
+            downloading = {q.get("movieId") for q in (radarr.call("GET", "queue?pageSize=500") or {}).get("records") or []}
+            for m in radarr.call("GET", "movie") or []:
+                if m.get("monitored") and not m.get("hasFile") and m.get("isAvailable") and m["id"] not in downloading:
+                    out[f"radarr:{m['id']}"] = {"app": "Radarr", "title": f"{m.get('title')} ({m.get('year')})", "movie": m["id"],
+                                                "added": timestamp(m.get("added")),
+                                                "query": f"release?movieId={m['id']}",
+                                                "search": {"name": "MoviesSearch", "movieIds": [m["id"]]}}
+        if sonarr:
+            downloading = {q.get("episodeId") for q in (sonarr.call("GET", "queue?pageSize=500") or {}).get("records") or []}
+            page = sonarr.call("GET", "wanted/missing?page=1&pageSize=500&monitored=true&includeSeries=true") or {}
+            for e in page.get("records") or []:
+                if e.get("id") in downloading:
+                    continue
+                sid, season = e.get("seriesId"), e.get("seasonNumber")
+                key = f"sonarr:{sid}:{season}"
+                item = out.setdefault(key, {"app": "Sonarr", "series": sid, "season": season, "episodes": 0,
+                                            "title": f"{(e.get('series') or {}).get('title', 'Series')} season {season}",
+                                            "query": f"release?seriesId={sid}&seasonNumber={season}",
+                                            "search": {"name": "SeasonSearch", "seriesId": sid, "seasonNumber": season}})
+                item["episodes"] += 1
+                aired = timestamp(e.get("airDateUtc"))
+                if aired and (item.get("added") is None or aired < item["added"]):
+                    item["added"] = aired
+        return out
+
+    def indexers_down(self, app) -> bool:
+        """Every enabled indexer switched off after failures"""
+        try:
+            enabled = [i for i in app.call("GET", "indexer") or [] if i.get("enableAutomaticSearch") or i.get("enableRss")]
+            statuses = app.call("GET", "indexerstatus") or []
+        except c.HTTP_ERRORS:
+            return False
+        off = {s.get("indexerId") for s in statuses if (s.get("disabledTill") or "") > time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(self.now))}
+        return bool(enabled) and all(i["id"] in off for i in enabled)
+
+    # ─── A round ─────────────────────────────────────────────────
+
+    def run(self) -> None:
+        if "last_run" in self.state and self.now - self.state["last_run"] < RUN_EVERY:
+            return
+        self.state["last_run"] = self.now
+        missing = self.missing()
+        items = self.state["items"]
+        # Forget what arrived (or was unmonitored, deleted)
+        for key in [k for k in items if k not in missing]:
+            items.pop(key)
+        for key, m in missing.items():
+            # Missing since it was added (or aired), not since we first looked
+            added = m.get("added")
+            since = min(self.now, added if added is not None else self.now)
+            item = items.setdefault(key, {"since": since, "searches": 0, "next_search": self.now})
+            item.update(title=m["title"], app=m["app"], **{k: m[k] for k in ("movie", "series", "season", "episodes") if k in m})
+        if self.settings.get("search_missing", True):
+            self.search(missing)
+        self.diagnose(missing)
+        self.fallback(missing)
+        self.retest_indexers()
+
+    def search(self, missing: dict) -> None:
+        items = self.state["items"]
+        due = sorted((k for k in missing if items[k]["next_search"] <= self.now), key=lambda k: items[k]["next_search"])
+        for key in due[:SEARCHES_PER_RUN]:
+            m, item = missing[key], items[key]
+            try:
+                self.apps[m["app"]].call("POST", "command", m["search"])
+            except c.HTTP_ERRORS:
+                continue   # tried again next round
+            item["searches"] += 1
+            item["last_search"] = self.now
+            item["next_search"] = self.now + wait_after(item["searches"])
+            c.log(f"searching again for {m['title']} (search {item['searches']}; next in {wait_after(item['searches']) // 3600} h)")
+
+    def diagnose(self, missing: dict) -> None:
+        items = self.state["items"]
+        due = [k for k in missing if self.now - items[k]["since"] >= DIAGNOSE_AFTER
+               and self.now - items[k].get("diagnosed_at", 0) >= DIAGNOSE_EVERY]
+        due.sort(key=lambda k: items[k].get("diagnosed_at", 0))
+        for key in due[:DIAGNOSES_PER_RUN]:
+            m, item = missing[key], items[key]
+            app = self.apps[m["app"]]
+            try:
+                releases = app.call("GET", m["query"]) or []
+            except c.HTTP_ERRORS:
+                continue
+            item["diagnosis"] = classify(releases if isinstance(releases, list) else [], self.indexers_down(app))
+            item["diagnosed_at"] = self.now
+            if item["diagnosis"]["code"] == "usable":
+                item["next_search"] = self.now   # it'd be grabbed: search now rather than wait
+            c.log(f"{m['title']}: {item['diagnosis']['text']}")
+
+    def fallback(self, missing: dict) -> None:
+        """quality.fallback_profile: only when set, after a week of releases
+        turned down for nothing but their quality"""
+        profile_name = self.settings.get("fallback_profile") or ""
+        if not profile_name:
+            return
+        for key, m in missing.items():
+            item = self.state["items"][key]
+            d = item.get("diagnosis") or {}
+            if item.get("fallback") or d.get("code") != "quality" or not d.get("only_quality") \
+                    or self.now - item["since"] < FALLBACK_AFTER:
+                continue
+            app = self.apps[m["app"]]
+            try:
+                profile = next((p for p in app.call("GET", "qualityprofile") or [] if p.get("name") == profile_name), None)
+                if not profile:
+                    c.log(f"fallback profile {profile_name!r} doesn't exist in {app.name}")
+                    return
+                path = f"movie/{m['movie']}" if "movie" in m else f"series/{m['series']}"
+                current = app.call("GET", path)
+                if current.get("qualityProfileId") != profile["id"]:
+                    app.call("PUT", path, dict(current, qualityProfileId=profile["id"]))
+            except c.HTTP_ERRORS:
+                continue
+            item["fallback"] = profile_name
+            item["next_search"] = self.now
+            c.log(f"{m['title']}: switched to the {profile_name} profile after a week of releases only in other qualities")
+
+    def retest_indexers(self) -> None:
+        """Ask Prowlarr to test the indexers again when some are switched off
+        (it otherwise waits up to a day)"""
+        if "indexers_retested" in self.state and self.now - self.state["indexers_retested"] < RETEST_INDEXERS_EVERY:
+            return
+        prowlarr = self.apps.get("Prowlarr")
+        if not prowlarr:
+            return
+        try:
+            if not (prowlarr.call("GET", "indexerstatus") or []):
+                return
+            prowlarr.call("POST", "indexer/testall")
+        except c.HTTP_ERRORS:
+            pass   # a 400 means some still fail: the test ran
+        self.state["indexers_retested"] = self.now
+
+
+def explain(item: dict, now: float | None = None) -> str:
+    """The dashboard's line for one stuck film or season"""
+    now = time.time() if now is None else now
+    parts = []
+    d = item.get("diagnosis")
+    if d:
+        parts.append(f"{d['text']} · {d['action']}")
+    if item.get("fallback"):
+        parts.append(f"switched to the {item['fallback']} profile")
+    if item.get("searches"):
+        left = item.get("next_search", now) - now
+        nxt = "now" if left <= 60 else f"in {int(left // 3600)} h" if left >= 3600 else f"in {int(left // 60)} min"
+        parts.append(f"searched again {item['searches']}× (next {nxt})")
+    return " · ".join(parts)
+
+
+def run(apps: list, settings: dict, state_file, offline: bool) -> Any:
+    """One round from the postimport loop (it times itself: hourly)"""
+    if offline:
+        return None
+    state = c.read_json(state_file, {}) or {}
+    if not isinstance(state, dict):
+        state = {}
+    Stuck(apps, settings, state).run()
+    c.write_json(state_file, state)
+    return state

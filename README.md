@@ -270,6 +270,7 @@ Picture-based subtitles inside files (Blu-ray PGS, DVD VobSub) don't count: brow
 | `prefer_english_audio` | `true` | Movies and TV: prefer releases with English audio (+50). A preference, not a block. |
 | `anime_block_dubs` | `true` | Anime: never grab English-dub-only releases (dual audio is fine) |
 | `anime_release_groups` | `true` | Anime: rank releases by the TRaSH Guides tiers, Blu-ray groups above web groups |
+| `fallback_profile` | `""` | Off unless set (e.g. `"HD-720p"`): a title stuck for a week whose releases are all turned down only for their quality switches to this profile |
 | `rename_files` | `true` | Name imports `Show - S01E01 - Title` and `Movie (Year)`, so Jellyfin always gets season and episode numbers. Turning it on renames the existing library once; library files are hard links, so seeding is unaffected. |
 
 Always on: BR-DISK images, known-bad groups, upscales, extras-only, 3D, and releases tagged with non-English subtitles (VOSTFR, BIG5, CHS, …) are scored -10000, so they're never grabbed; for anime, raw releases without subtitles and low-quality groups too. See [`custom-formats/`](custom-formats/README.md). Release names and groups make Japanese audio and full subtitles very likely for anime, not certain.
@@ -323,6 +324,7 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 |---|---|---|
 | `check_downloads` | `true` | Reject a new file that won't play, is under half the expected length (a sample or a fake), or is anime made in Japanese without Japanese audio (with `quality.anime_block_dubs`). Sonarr/Radarr blocklist the release and fetch another |
 | `max_replacements` | `3` | Releases rejected for the same episode or movie before the file is kept anyway (you get a notification) |
+| `search_missing` | `true` | Search again for what's still missing (Sonarr and Radarr only search once, when it's added): at most 3 searches an hour, waiting longer each time (1 h up to a day), within your profiles and filters. A title missing for a day also gets a search that grabs nothing, to show on the dashboard why nothing was taken (nothing found, quality, language, size, filters, no seeders, indexers down) |
 | `stereo_audio` | `true` | Add a stereo AAC track, first, when the audio is only in formats browsers can't play (Dolby Digital/Atmos, DTS, TrueHD); the original tracks stay |
 | `ocr_subtitles` | `true` | Read picture subtitles (Blu-ray PGS) into a text `.srt` next to the file, for the `subtitles.languages` that have no text subtitles yet (only the first with `want = "first"`) |
 | `drop_picture_subtitles` | `true` | Remove a picture subtitle track (Blu-ray PGS) when its language is also there as text. Moonfin picks picture subtitles over text ones whatever the file says, and Jellyfin has to burn them into the video (two subtitles at once, heavy on the CPU). Picture tracks in other languages, and forced ones, stay |
