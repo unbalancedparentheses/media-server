@@ -20,8 +20,17 @@ history and, for each newly imported file:
   3. Turns picture subtitles (Blu-ray PGS) into a text .srt next to the
      video (library.ocr_subtitles), for each wanted language that has no
      text subtitles yet, so nothing has to be burned into the video.
+  4. Sets each file's default tracks to your preferences, so every player
+     picks them: audio in playback.anime_audio_language for anime (files
+     in the anime library) or playback.audio_language for the rest (empty:
+     the file's own default), and subtitles in the first of
+     subtitles.languages that's there as text (e.g. English, else
+     Spanish). Text subtitles win over picture ones in the same language:
+     a picture track flagged "default" (common on Blu-rays) gets burned
+     into the video by Jellyfin while players show the text one, so two
+     subtitles appear at once.
 
-Files already in the library get steps 2 and 3 too, a few per round. A file
+Files already in the library get steps 2 to 4 too, a few per round. A file
 whose torrent is still seeding is only rewritten when there's plenty of free
 space, since the torrent keeps its own copy until seeding ends. Nothing runs
 while an install or other operation holds setup's lock.
@@ -35,7 +44,7 @@ config.toml; progress is kept in state.json, and status.json is what the
 dashboard and `nix run .#doctor` show.
 
 By hand: nix run .#postimport -- --check FILE (what's wrong with it,
-changes nothing) or --fix FILE (steps 2 and 3 now).
+changes nothing) or --fix FILE (steps 2 to 4 now).
 
 Environment: POSTIMPORT_CONFIG (~/media/config), POSTIMPORT_STATE
 (~/media/.state/postimport), POSTIMPORT_INTERVAL.
@@ -70,6 +79,8 @@ DEFAULTS = {
     "max_replacements": 3,
     "block_dubs": True,
     "audio_language": "",
+    "anime_audio_language": "jpn",
+    "anime_dir": "",
     "subtitle_languages": ["en"],
     "want": "first",
     "min_free_gb": 10,
@@ -80,6 +91,10 @@ VIDEO_EXTENSIONS = {".mkv", ".mp4", ".m4v"}
 # Audio every browser plays; anything else makes Jellyfin convert
 BROWSER_AUDIO = {"aac", "mp3", "opus", "flac", "vorbis"}
 TEXT_SUBTITLES = {"subrip", "ass", "ssa", "webvtt", "mov_text", "text"}
+PICTURE_SUBTITLES = {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle"}
+# Bumped when fix() learns something new, so files checked before get
+# looked at again (once)
+FIX_VERSION = 3
 SIDECAR_SUBTITLES = {".srt", ".ass", ".ssa", ".vtt", ".sub"}
 NOTHING_FOUND_AFTER = 6 * 3600
 SWEEP_PER_ROUND = 3
@@ -268,20 +283,20 @@ def room_for(path, settings):
     return spare > settings["min_free_gb"] * gb
 
 
-def add_stereo(path, info, source):
-    """Rewrite the file with a stereo AAC track; True when done"""
+def rewrite(path, info, command, expected, what):
+    """Run ffmpeg <command> (a function of the output path) into a new file
+    next to the original, check it (track counts as <expected>, same
+    duration) and only then move it over the original; True when done"""
     path = Path(path)
     st = path.stat()
     before = (st.st_ino, st.st_size, st.st_mtime)
     out = path.with_name(f".{path.name}.postimport")
     try:
-        result = subprocess.run(background(stereo_command(path, out, info, source, aac_encoder())),
-                                capture_output=True, text=True, check=False)
+        result = subprocess.run(background(command(out)), capture_output=True, text=True, check=False)
         if result.returncode != 0:
-            log(f"couldn't add stereo audio to {path.name}: {result.stderr.strip()[-300:]}")
+            log(f"couldn't {what} in {path.name}: {result.stderr.strip()[-300:]}")
             return False
         new = probe(out)
-        expected = dict(track_counts(info), audio=track_counts(info)["audio"] + 1)
         if new is None or track_counts(new) != expected or abs(duration(new) - duration(info)) > 2:
             log(f"the rewritten {path.name} didn't check out; kept the original")
             return False
@@ -293,6 +308,78 @@ def add_stereo(path, info, source):
         return True
     finally:
         out.unlink(missing_ok=True)
+
+
+def add_stereo(path, info, source):
+    """Rewrite the file with a stereo AAC track; True when done"""
+    expected = dict(track_counts(info), audio=track_counts(info)["audio"] + 1)
+    encoder = aac_encoder()
+    return rewrite(path, info, lambda out: stereo_command(path, out, info, source, encoder), expected, "add stereo audio")
+
+
+def text_languages(info, path) -> set:
+    """Languages there as (full, not forced) text subtitles, in the file or
+    next to it"""
+    found = sidecar_languages(path)
+    for st in streams(info, "subtitle"):
+        if st.get("codec_name") in TEXT_SUBTITLES and not is_forced(st):
+            found.add(stream_language(st))
+    found.discard("")
+    return found
+
+
+def default_tracks(info, path, audio_language: str, subtitle_languages: list) -> dict:
+    """{stream index: 0/1} for the "default" flags that need changing so
+    players pick the preferred tracks; empty when they're right already.
+
+    Audio: the first track in <audio_language> (a browser-friendly one, like
+    the added stereo track, first); unchanged when it's empty or not there.
+    Subtitles: the first of <subtitle_languages> there as text. If it's in
+    the file, that track becomes the default; if it's only next to the file,
+    no embedded track stays default, so Jellyfin picks the file next to it.
+    Forced tracks (signs, foreign dialogue) keep their flags. Unchanged when
+    none of the languages is there as text: then a picture track is all
+    there is."""
+    plan: dict[int, int] = {}
+
+    def want(stream, on: bool) -> None:
+        if bool((stream.get("disposition") or {}).get("default")) != on:
+            plan[stream["index"]] = int(on)
+
+    lang = language_of(audio_language)
+    audio = [st for st in streams(info, "audio") if lang and stream_language(st) == lang]
+    if audio:
+        target = next((st for st in audio if st.get("codec_name") in BROWSER_AUDIO), audio[0])
+        for st in streams(info, "audio"):
+            want(st, st is target)
+
+    available = text_languages(info, path)
+    chosen = next((language_of(x) for x in subtitle_languages if language_of(x) in available), None)
+    if chosen:
+        subs = [st for st in streams(info, "subtitle") if not is_forced(st)]
+        target = next((st for st in subs if st.get("codec_name") in TEXT_SUBTITLES and stream_language(st) == chosen), None)
+        for st in subs:
+            want(st, st is target)
+    return plan
+
+
+def defaults_command(path, out, info, plan: dict):
+    fmt = "matroska" if Path(path).suffix.lower() == ".mkv" else "mp4"
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(path), "-map", "0", "-map", "-0:d?",
+           "-map_metadata", "0", "-map_chapters", "0", "-c", "copy"]
+    for kind, letter in (("audio", "a"), ("subtitle", "s")):
+        indexes = [st["index"] for st in streams(info, kind)]
+        for index, on in sorted(plan.items()):
+            if index in indexes:
+                cmd += [f"-disposition:{letter}:{indexes.index(index)}", "default" if on else "0"]
+    if fmt == "mp4":
+        cmd += ["-movflags", "+faststart"]
+    return cmd + ["-f", fmt, str(out)]
+
+
+def set_defaults(path, info, plan: dict) -> bool:
+    return rewrite(path, info, lambda out: defaults_command(path, out, info, plan), track_counts(info),
+                   "set the default tracks")
 
 
 # ─── Subtitles ───────────────────────────────────────────────────
@@ -490,12 +577,13 @@ class Worker:
         log(f"{title}: {what}")
 
     def fix(self, path, info, title):
-        """Steps 2 and 3; True if anything changed. A file that can't be
+        """Steps 2 to 4; True if anything changed. A file that can't be
         rewritten for lack of space isn't marked done, so it's retried."""
         s = self.settings
         changed, done = False, True
+        audio_language = self.audio_language_for(path)
         if s["stereo_audio"] and path.suffix.lower() in VIDEO_EXTENSIONS:
-            source = needs_stereo(info, s["audio_language"])
+            source = needs_stereo(info, audio_language)
             if source is not None and not room_for(path, s):
                 done = False
             elif source is not None and add_stereo(path, info, source):
@@ -507,12 +595,28 @@ class Worker:
                 if ocr(path, lang, stream):
                     self.remember(title, f"turned the {lang} picture subtitles into text")
                     changed = True
+        # The preferred audio and subtitles as the file's defaults
+        if path.suffix.lower() in VIDEO_EXTENSIONS:
+            info = probe(path) or info
+            plan = default_tracks(info, path, audio_language, s["subtitle_languages"])
+            if plan and not room_for(path, s):
+                done = False
+            elif plan and set_defaults(path, info, plan):
+                changed = True
+                self.remember(title, "set the default " + describe_defaults(probe(path) or info, path))
         if changed:
             jellyfin_updated(path)
         if done:
-            st = path.stat()
-            self.state["seen"][str(path)] = [st.st_size, int(st.st_mtime)]
+            self.state["seen"][str(path)] = seen_mark(path)
         return changed
+
+    def audio_language_for(self, path) -> str:
+        """Anime (files in the anime library) and the rest can prefer
+        different audio"""
+        anime = self.settings.get("anime_dir")
+        if anime and str(path).startswith(str(anime).rstrip("/") + "/"):
+            return self.settings.get("anime_audio_language", "")
+        return self.settings.get("audio_language", "")
 
     def handle_import(self, app, record):
         path = Path((record.get("data") or {}).get("importedPath", ""))
@@ -586,7 +690,7 @@ class Worker:
                 save(self.state)
 
     def sweep(self):
-        """Steps 2 and 3 for files already in the library, a few per round"""
+        """Steps 2 to 4 for files already in the library, a few per round"""
         done = 0
         seen = self.state["seen"]
         for root in self.settings["library_dirs"]:
@@ -600,11 +704,11 @@ class Worker:
                         st = path.stat()
                     except OSError:
                         continue
-                    if seen.get(str(path)) == [st.st_size, int(st.st_mtime)]:
+                    if seen.get(str(path)) == seen_mark(path, st):
                         continue
                     info = probe(path)
                     if info is None:
-                        seen[str(path)] = [st.st_size, int(st.st_mtime)]
+                        seen[str(path)] = seen_mark(path, st)
                         continue
                     if self.fix(path, info, display_name(path)):
                         done += 1
@@ -623,6 +727,24 @@ class Worker:
                         for r in rejections if r.get("status") == "looking"],
             "kept": [{"title": r["title"], "reason": r["reason"]} for r in rejections if r.get("status") == "kept"],
         }
+
+
+def describe_defaults(info, path) -> str:
+    """"audio jpn, subtitles en (text)" for the log and dashboard"""
+    parts = []
+    audio = next((st for st in streams(info, "audio") if (st.get("disposition") or {}).get("default")), None)
+    if audio:
+        parts.append(f"audio {stream_language(audio) or 'untagged'}")
+    sub = next((st for st in streams(info, "subtitle") if (st.get("disposition") or {}).get("default") and not is_forced(st)), None)
+    parts.append(f"subtitles {stream_language(sub) or 'untagged'}" if sub else "subtitles from the file next to it")
+    return ", ".join(parts)
+
+
+def seen_mark(path, st=None):
+    """What marks a file as done: its size and time, and the fixes known
+    then (a newer FIX_VERSION looks at it again)"""
+    st = st or os.stat(path)
+    return [st.st_size, int(st.st_mtime), FIX_VERSION]
 
 
 def display_name(path):
@@ -647,10 +769,13 @@ def by_hand(mode, path):
     if mode == "--check":
         print(problem_with(info, path, 0, False) or "plays fine")
         if info:
-            source = needs_stereo(info, settings["audio_language"])
+            worker = Worker([], settings, {})
+            source = needs_stereo(info, worker.audio_language_for(path))
             print(f"needs stereo audio (from {source['codec_name']})" if source else "audio plays in browsers")
             for lang, s in ocr_targets(info, path, settings["subtitle_languages"], settings["want"]):
                 print(f"{lang} subtitles only as pictures (track {s['index']})")
+            plan = default_tracks(info, path, worker.audio_language_for(path), settings["subtitle_languages"])
+            print(f"default tracks to change: {plan}" if plan else "default tracks: as preferred")
         return 0
     if info is None:
         print("can't read the file")

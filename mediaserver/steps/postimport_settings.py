@@ -16,6 +16,8 @@ def settings(cfg: Config) -> dict:
         "max_replacements": cfg.get("library.max_replacements", 3),
         "block_dubs": cfg.flag("quality.anime_block_dubs", True),
         "audio_language": cfg.get("playback.audio_language", ""),
+        "anime_audio_language": cfg.get("playback.anime_audio_language", "jpn"),
+        "anime_dir": str(p.anime),
         "subtitle_languages": cfg.get("subtitles.languages", ["en"]),
         "want": cfg.get("subtitles.want", "first"),
         "min_free_gb": cfg.disk_min_gb,

@@ -69,8 +69,9 @@ anime_release_groups = true   # anime: prefer well-rated release groups (TRaSH t
 
 [playback]
 subtitle_mode = "Always"
-subtitle_language = "eng"
-audio_language = "jpn"
+subtitle_language = "eng"      # what Jellyfin shows first; each file's default follows [subtitles] languages (English, else Spanish)
+audio_language = ""            # everything but anime: "" = the file's own audio (usually the original)
+anime_audio_language = "jpn"   # anime: Japanese audio when the file has it
 hardware_acceleration = true   # convert video with Apple's hardware (VideoToolbox) when a device needs it
 allow_remux = false            # false: devices that can't play a file get it converted, not copied (browsers can stall on copied Blu-ray video)
 

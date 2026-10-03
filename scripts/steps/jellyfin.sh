@@ -148,7 +148,7 @@ set_jellyfin_playback() {
   uid=$(jq -r .Id <<< "$me")
   conf=$(jq -c .Configuration <<< "$me")
   want=$(jq -c --arg mode "$(cfg '.playback.subtitle_mode // "Always"')" --arg sub "$(cfg '.playback.subtitle_language // "eng"')" \
-    --arg audio "$(cfg '.playback.audio_language // "jpn"')" '
+    --arg audio "$(cfg '.playback.audio_language // ""')" '
     .SubtitleMode = $mode | .SubtitleLanguagePreference = $sub
     | .AudioLanguagePreference = (if $audio == "" then null else $audio end)
     # With a preferred audio language, pick by language, not the default flag

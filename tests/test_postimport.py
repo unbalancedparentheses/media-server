@@ -305,3 +305,84 @@ class RealFiles(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefaultTracks(unittest.TestCase):
+    """The preferred audio and subtitles become each file's defaults"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.video = self.dir / "Film.mkv"
+        self.video.touch()
+
+    def flagged(self, stream, on=True):
+        stream["disposition"]["default"] = int(on)
+        return stream
+
+    def plan(self, info, audio="", subs=("en", "es")):
+        return pi.default_tracks(info, self.video, audio, list(subs))
+
+    def test_default_picture_track_loses_to_text(self):
+        """Skyfall: a default English picture track next to English text
+        got burned in while the player showed the text: two subtitles"""
+        info = media(self.flagged(sub(5, "hdmv_pgs_subtitle", "eng")), sub(6, "hdmv_pgs_subtitle", "spa"))
+        self.assertEqual(self.plan(info), {})  # no text anywhere: a picture track is all there is
+        (self.dir / "Film.en.srt").touch()
+        self.assertEqual(self.plan(info), {5: 0})  # the file next to it wins
+
+    def test_embedded_text_in_the_preferred_language(self):
+        info = media(self.flagged(sub(4, "subrip", "chi")), sub(5, "subrip", "eng"), sub(6, "subrip", "spa"))
+        self.assertEqual(self.plan(info), {4: 0, 5: 1})
+
+    def test_spanish_when_no_english(self):
+        info = media(self.flagged(sub(4, "subrip", "chi")), sub(6, "subrip", "spa"))
+        self.assertEqual(self.plan(info), {4: 0, 6: 1})
+        self.assertEqual(self.plan(info, subs=("en",)), {})  # Spanish not wanted: left alone
+
+    def test_forced_tracks_keep_their_flag(self):
+        info = media(self.flagged(sub(4, "subrip", "eng", forced=True)), sub(5, "subrip", "eng"))
+        self.assertEqual(self.plan(info), {5: 1})
+
+    def test_anime_japanese_audio(self):
+        info = media(self.flagged(audio(1, "aac", "eng")), audio(2, "ac3", "jpn"), audio(3, "aac", "jpn"))
+        self.assertEqual(self.plan(info, audio="jpn"), {1: 0, 3: 1})  # the browser-friendly Japanese track
+        self.assertEqual(self.plan(info, audio=""), {})                 # no preference: the file's own default
+        self.assertEqual(self.plan(info, audio="fre"), {})              # not there: unchanged
+
+    def test_anime_library_decides_the_audio(self):
+        w = pi.Worker([], {**pi.DEFAULTS, "anime_dir": "/media/anime", "audio_language": "", "anime_audio_language": "jpn"}, {})
+        self.assertEqual(w.audio_language_for(Path("/media/anime/Show/S01E01.mkv")), "jpn")
+        self.assertEqual(w.audio_language_for(Path("/media/movies/Film (2020)/Film.mkv")), "")
+        self.assertEqual(w.audio_language_for(Path("/media/animeXYZ/a.mkv")), "")
+
+    def test_command_sets_flags_by_track_type(self):
+        info = media(audio(1, "eac3", "eng"), audio(2, "aac", "jpn"), sub(3, "subrip", "chi"), sub(4, "subrip", "eng"))
+        cmd = pi.defaults_command(self.video, "out", info, {1: 0, 2: 1, 3: 0, 4: 1})
+        flags = [(cmd[i], cmd[i + 1]) for i, a in enumerate(cmd) if a.startswith("-disposition")]
+        self.assertEqual(flags, [("-disposition:a:0", "0"), ("-disposition:a:1", "default"),
+                                 ("-disposition:s:0", "0"), ("-disposition:s:1", "default")])
+
+    def test_files_checked_before_are_looked_at_again(self):
+        st = self.video.stat()
+        self.assertNotEqual([st.st_size, int(st.st_mtime)], pi.seen_mark(self.video))  # an older version's mark
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+class PictureDefaultsRealFile(unittest.TestCase):
+    def test_default_flag_cleared(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        video, srt = d / "Film.mkv", d / "in.srt"
+        srt.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+        # A default subtitle track (text here; the rewrite is the same for pictures)
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=5", "-i", str(srt),
+                        "-map", "0", "-map", "1", "-c:v", "mpeg4", "-c:s", "srt", "-metadata:s:s:0", "language=eng",
+                        "-disposition:s:0", "default", str(video)], check=True)
+        with mock.patch.object(pi, "STATE", d):
+            info = pi.probe(video)
+            index = pi.streams(info, "subtitle")[0]["index"]
+            self.assertTrue(pi.set_defaults(video, info, {index: 0}))
+            after = pi.probe(video)
+        self.assertEqual(pi.streams(after, "subtitle")[0]["disposition"]["default"], 0)
+        self.assertEqual(len(after["streams"]), 2)

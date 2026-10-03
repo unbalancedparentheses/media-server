@@ -106,6 +106,7 @@ SCHEMA = {
         "subtitle_mode": one_of("Always", "Smart", "OnlyForced", "Default", "None"),
         "subtitle_language": string(),
         "audio_language": string(nonempty=False),
+        "anime_audio_language": string(nonempty=False),
         "hardware_acceleration": boolean,
         "allow_remux": boolean,
     },

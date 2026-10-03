@@ -280,7 +280,8 @@ Always on: BR-DISK images, known-bad groups, upscales, extras-only, 3D, and rele
 |---|---|---|
 | `subtitle_mode` | `"Always"` | `"Always"`, `"Smart"` (only when the audio isn't your language), `"OnlyForced"`, `"Default"` or `"None"` |
 | `subtitle_language` | `"eng"` | Preferred subtitle language (Jellyfin falls back to another when a file has none in it) |
-| `audio_language` | `"jpn"` | Audio track to use when a file has it (dual-audio anime plays in Japanese); other files play their default track. `""` = always the default track. |
+| `audio_language` | `""` | Audio for everything but anime: `""` = the file's own default track (usually the original language); a language (e.g. `"eng"`) = that track when the file has it |
+| `anime_audio_language` | `"jpn"` | Audio for anime (the anime library) when the file has it: dual-audio anime plays in Japanese |
 | `allow_remux` | `false` | When a device can't play a file directly, convert the video (hardware, a keyframe every 3 s) instead of copying it into a stream. Copied Blu-ray video can have keyframes 10 s apart, and browser players stall on it (playback stopping at the same minute). Devices that play the file directly (Safari, most TV apps) aren't affected. |
 | `hardware_acceleration` | `true` | Convert video with Apple's VideoToolbox (H.264, HEVC, VP9, AV1 including 10-bit; HDR tone mapping) when a device can't play a file directly |
 
@@ -324,6 +325,7 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 | `max_replacements` | `3` | Releases rejected for the same episode or movie before the file is kept anyway (you get a notification) |
 | `stereo_audio` | `true` | Add a stereo AAC track, first, when the audio is only in formats browsers can't play (Dolby Digital/Atmos, DTS, TrueHD); the original tracks stay |
 | `ocr_subtitles` | `true` | Read picture subtitles (Blu-ray PGS) into a text `.srt` next to the file, for the `subtitles.languages` that have no text subtitles yet (only the first with `want = "first"`) |
+| (always) | | Each file's default tracks follow your preferences, so every player picks them: the audio above, and subtitles in the first of `subtitles.languages` that's there as text (English, else Spanish). Text wins over picture subtitles in the same language (a default picture track would be burned into the video while the player shows the text one) |
 
 By hand: `nix run .#postimport -- --check FILE` says what it would do; `--fix FILE` does it now.
 
