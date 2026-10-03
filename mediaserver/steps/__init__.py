@@ -19,6 +19,7 @@ STEPS = {
     "intro-skipper": "introskipper",
     "bazarr": "bazarr",
     "seerr": "seerr",
+    "prowlarr": "prowlarr",
 }
 
 

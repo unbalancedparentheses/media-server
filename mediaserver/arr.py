@@ -1,0 +1,58 @@
+"""Helpers shared by the Sonarr, Radarr and Prowlarr steps (the *arr apps
+have the same API shape)."""
+from __future__ import annotations
+
+from typing import Any
+
+from mediaserver import api, creds, logins
+from mediaserver.api import ApiError
+from mediaserver.config import Config
+from mediaserver.ui import ok, warn
+
+
+def set_login(cfg: Config, label: str, url: str, key: str, version: str, service: str) -> None:
+    """The web login (forms, required) as config.toml's Jellyfin login. The
+    API key allows setting it without the old password. Applied when the
+    record or the app's settings differ, then checked by logging in; only a
+    working login is recorded."""
+    h = {"X-Api-Key": key}
+    user, password = cfg.jellyfin_user, cfg.jellyfin_pass
+    try:
+        host = api.get(f"{url}/api/{version}/config/host", h)
+    except ApiError:
+        warn(f"{label}: could not read its login settings")
+        return
+    if creds.match(cfg.paths.state, service, user, password) and host.get("username") == user \
+            and host.get("authenticationMethod") == "forms":
+        ok(f"{label} login: {user}")
+        return
+    body = dict(host, authenticationMethod="forms", authenticationRequired="enabled", username=user,
+                password=password, passwordConfirmation=password)
+    try:
+        api.call("PUT", f"{url}/api/{version}/config/host/{host['id']}", h, body=body)
+    except ApiError:
+        warn(f"{label}: could not set its login (retried next run)")
+        return
+    if logins.arr(url, user, password):
+        creds.record(cfg.paths.state, service, user, password)
+        ok(f"{label} login set: {user}")
+    else:
+        warn(f"{label}: the new login doesn't work yet (retried next run)")
+
+
+def sync_fields(label: str, resource_url: str, resource_id: Any, fields: dict, key: str) -> None:
+    """Set named fields on an existing resource (a download client, an
+    application...) so changed passwords, API keys and URLs reach it.
+    Secrets read back masked, so the update is sent every run."""
+    h = {"X-Api-Key": key}
+    try:
+        current = api.get(f"{resource_url}/{resource_id}", h)
+    except ApiError:
+        warn(f"{label}: could not read its settings")
+        return
+    current["fields"] = [dict(f, value=fields[f["name"]]) if fields.get(f.get("name")) is not None else f
+                         for f in current.get("fields") or []]
+    try:
+        api.call("PUT", f"{resource_url}/{resource_id}?forceSave=true", h, body=current)
+    except ApiError:
+        warn(f"{label}: could not update its settings")

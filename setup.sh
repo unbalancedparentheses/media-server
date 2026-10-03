@@ -131,7 +131,7 @@ run_setup() {
   timed configure_sabnzbd
   timed configure_arrs
   timed configure_junk_filters
-  timed configure_prowlarr
+  timed py step prowlarr
   timed configure_usenet_providers
   timed py step bazarr
   timed configure_sabnzbd_auth

@@ -521,25 +521,6 @@ test_config_typo_rejected_with_suggestion() {
 
 # ─── Failed reads never become "empty" ───────────────────────────
 
-# Prowlarr's indexer list can't be read: nothing is added (it used to look
-# empty, so every indexer was added a second time)
-test_prowlarr_unreadable_indexers_not_readded() {
-  PROWLARR_KEY=p SONARR_KEY="" RADARR_KEY="" TMPDIR_SETUP="$FAKE"
-  CONFIG_JSON='{"indexers":[{"name":"Nyaa.si","definitionName":"nyaasi","enable":true}]}'
-  api() {
-    case "$1 $2" in
-      "GET "*/api/v1/indexer) return 22 ;;
-      "GET "*/indexer/schema) echo '[{"definitionName":"nyaasi","fields":[]}]' ;;
-      "GET "*/applications|"GET "*/indexerProxy|"GET "*/downloadclient|"GET "*/tag) echo '[]' ;;
-      "POST "*/api/v1/indexer) touch "$FAKE/indexer_added" ;;
-      *) echo '{}' ;;
-    esac
-  }
-  set_arr_login() { :; }
-  configure_prowlarr >/dev/null 2>&1
-  [ ! -f "$FAKE/indexer_added" ] || fail "added an indexer without knowing which exist"
-}
-
 # Sonarr's download clients can't be read: no second qBittorrent client
 test_unreadable_download_clients_not_readded() {
   QBIT_USER=u QBIT_PASS=p SABNZBD_KEY="" JELLYFIN_API_KEY=""
@@ -555,8 +536,6 @@ test_unreadable_download_clients_not_readded() {
   configure_arr sonarr http://s k /tv tvCategory >/dev/null 2>&1
   [ ! -f "$FAKE/client_added" ] || fail "added qBittorrent without knowing it was already there"
 }
-
-# ─── Jellyfin restarts ───────────────────────────────────────────
 
 echo "Failure-path tests"
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do

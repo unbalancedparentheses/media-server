@@ -16,10 +16,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from mediaserver import api, creds, jellyfin, launchd, logins
+from mediaserver import api, arr, creds, jellyfin, launchd, logins
 from mediaserver import common as c
 from mediaserver.config import Config, Keys, Paths
-from mediaserver.steps import bazarr, cleanuparr, introskipper, moonbase, postimport_settings, seerr, unpackerr
+from mediaserver.steps import bazarr, cleanuparr, introskipper, moonbase, postimport_settings, prowlarr, seerr, unpackerr
 from mediaserver.ui import SetupError
 
 
@@ -293,3 +293,63 @@ class SeerrTests(unittest.TestCase):
         conn = seerr.sonarr_connection(self.cfg, "k", {"id": 4, "name": "HD-1080p"}, {"id": 9, "name": "Anime"})
         self.assertEqual((conn["seriesType"], conn["animeSeriesType"], conn["activeAnimeProfileId"]), ("standard", "anime", 9))
         self.assertTrue(conn["enableSearch"])
+
+
+class ProwlarrTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = scratch({"indexers": [{"name": "Nyaa.si", "definitionName": "nyaasi", "enable": True, "flaresolverr": True,
+                                          "fields": {"sort": 2}}]})
+        self.addCleanup(shutil.rmtree, self.cfg.paths.media)
+
+    def test_unreadable_list_adds_nothing(self):
+        """Prowlarr's indexer list can't be read: nothing is added (it used
+        to look empty, so every indexer was added a second time)"""
+        p = prowlarr.Prowlarr(self.cfg, "k")
+        posted = []
+
+        def call(method, path, body=None):
+            if method == "GET" and path == "indexer":
+                raise api.ApiError("down")
+            if method == "POST":
+                posted.append(path)
+            return [{"definitionName": "nyaasi", "fields": []}] if path == "indexer/schema" else []
+        p.call = call
+        run(prowlarr.indexers, p, 7)
+        self.assertEqual(posted, [])
+
+    def test_existing_indexer_follows_config(self):
+        existing = {"id": 1, "name": "Nyaa.si", "enable": False, "tags": [], "fields": [{"name": "sort", "value": 0}, {"name": "x", "value": 1}]}
+        want = prowlarr.updated_indexer(existing, self.cfg.get("indexers")[0], 7)
+        self.assertEqual((want["enable"], want["tags"]), (True, [7]))
+        self.assertEqual(want["fields"], [{"name": "sort", "value": 2}, {"name": "x", "value": 1}])
+        off = prowlarr.updated_indexer(dict(existing, tags=[7, 9]), {"name": "Nyaa.si", "enable": True}, 7)
+        self.assertEqual(off["tags"], [9])
+
+    def test_new_indexer_from_schema(self):
+        body = prowlarr.new_indexer({"id": 5, "definitionName": "nyaasi", "fields": [{"name": "sort", "value": 0}]},
+                                    self.cfg.get("indexers")[0], 7)
+        self.assertNotIn("id", body)
+        self.assertEqual((body["name"], body["enable"], body["tags"], body["fields"][0]["value"]), ("Nyaa.si", True, [7], 2))
+
+
+class ArrLogin(unittest.TestCase):
+    def test_recorded_only_when_verified(self):
+        """The login change fails, then applies but doesn't work, then
+        works: the record only advances at the end"""
+        cfg = scratch({"jellyfin": {"username": "admin", "password": "new"}})
+        self.addCleanup(shutil.rmtree, cfg.paths.media)
+        creds.record(cfg.paths.state, "sonarr", "admin", "old")
+        state = {"put_ok": False, "login_ok": False}
+
+        def call(method, url, headers=None, body=None, form=None, timeout=60):
+            if method == "GET":
+                return {"id": 1, "username": "admin", "authenticationMethod": "forms"}
+            if not state["put_ok"]:
+                raise api.ApiError("PUT failed")
+        with mock.patch.object(api, "call", call), mock.patch.object(logins, "arr", lambda u, user, p: state["login_ok"]):
+            for change in ("put_ok", "login_ok", None):
+                run(arr.set_login, cfg, "Sonarr", "http://s", "k", "v3", "sonarr")
+                expected = "new" if change is None else "old"
+                self.assertEqual(creds.get(cfg.paths.state, "sonarr", "password"), expected)
+                if change:
+                    state[change] = True
