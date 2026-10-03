@@ -150,8 +150,7 @@ slow_json() {
   jq -nc --argjson sonarr "$(arr_json http://127.0.0.1:8989 "$sk")" --argjson radarr "$(arr_json http://127.0.0.1:7878 "$rk")" \
     --argjson idx "$indexers" --argjson st "$statuses" --argjson counts "$counts" --argjson badges "$badges" --argjson req "$requests" \
     --argjson stats "${stats:-{\}}" --argjson ts "${tailscale:-{\}}" --argjson up "$(uptime_json)" --argjson watched "${watched:-[]}" --argjson rr "${recent_requests:-[]}" \
-    --argjson total "${total_kb:-0}" --argjson free "${free_kb:-0}" --argjson warn "${DISK_WARN_GB:-50}" --argjson min "${DISK_MIN_GB:-10}" \
-    --argjson media "$(python3 "${DASH_MEDIA_SCRIPT:-$(dirname "${BASH_SOURCE[0]}")/dashmedia.py}" 2>/dev/null || echo '{}')" '
+    --argjson total "${total_kb:-0}" --argjson free "${free_kb:-0}" --argjson warn "${DISK_WARN_GB:-50}" --argjson min "${DISK_MIN_GB:-10}" '
     ($idx | map({key: (.id | tostring), value: .name}) | from_entries) as $names
     | [$idx[] | select(.enable) | .id] as $on
     | {sonarr: $sonarr, radarr: $radarr,
@@ -162,8 +161,13 @@ slow_json() {
        subtitles: {missing_episodes: ($badges.episodes // null), missing_movies: ($badges.movies // null)},
        indexer_stats: $stats, tailscale: $ts, uptime: $up, watched: $watched, recent_requests: $rr,
        requests: {pending: ($req.pending // null), processing: ($req.processing // null), available: ($req.available // null), total: ($req.total // null)},
-       disk: {total_gb: ($total / 1048576 | floor), free_gb: ($free / 1048576 | floor), warn_gb: $warn, min_gb: $min}}
-      + $media' 2>/dev/null || echo '{}'
+       disk: {total_gb: ($total / 1048576 | floor), free_gb: ($free / 1048576 | floor), warn_gb: $warn, min_gb: $min}}' 2>/dev/null || echo '{}'
+}
+
+# The media side (scripts/dashmedia.py): continue watching, latest,
+# requests' real state, upcoming releases, library health
+media_json() {
+  python3 "${DASH_MEDIA_SCRIPT:-$(dirname "${BASH_SOURCE[0]}")/dashmedia.py}" 2>/dev/null || echo '{"media_failed": ["all"]}'
 }
 
 # 24-hour availability per service: a sample every slow round (5 minutes),
@@ -210,9 +214,17 @@ attention_json() {  # fast slow torrents
 
 dashstatus_round() {  # updates DASH_SLOW (cached slow data) every DASH_SLOW_EVERY rounds
   local fast torrents now_s
-  if [ $(( DASH_ROUND % ${DASH_SLOW_EVERY:-20} )) -eq 0 ] || [ -z "${DASH_SLOW:-}" ]; then
+  local slow_due=""
+  if [ $(( DASH_ROUND % ${DASH_SLOW_EVERY:-20} )) -eq 0 ] || [ -z "${DASH_SLOW:-}" ]; then slow_due=1; fi
+  if [ -n "$slow_due" ]; then
     DASH_SLOW=$(slow_json)
     DASH_SLOW_AT=$(date +%s)
+  fi
+  # The media part with it, and every minute while part of it fails (e.g.
+  # the services are still starting after a restart)
+  if [ -n "$slow_due" ] || { [ $(( DASH_ROUND % 4 )) -eq 0 ] && \
+      [ "$(jq -r '(.media_failed // ["?"]) | length' <<< "${DASH_MEDIA:-{\}}" 2>/dev/null || echo 1)" != 0 ]; }; then
+    DASH_MEDIA=$(media_json)
   fi
   DASH_ROUND=$((DASH_ROUND + 1))
   torrents=$(get "http://127.0.0.1:8081/api/v2/torrents/info" || echo '[]')
@@ -221,15 +233,15 @@ dashstatus_round() {  # updates DASH_SLOW (cached slow data) every DASH_SLOW_EVE
     '{system: $system, playing: $playing, downloads: $downloads, connection: $conn}')
   now_s=$(date +%s)
   mkdir -p "$(dirname "$out")"
-  jq -nc --argjson f "$fast" --argjson s "${DASH_SLOW:-{\}}" --argjson a "$(attention_json "$fast" "${DASH_SLOW:-{\}}" "$torrents")" \
+  jq -nc --argjson f "$fast" --argjson s "${DASH_SLOW:-{\}}" --argjson m "${DASH_MEDIA:-{\}}" --argjson a "$(attention_json "$fast" "${DASH_SLOW:-{\}}" "$torrents")" \
     --argjson now "$now_s" --argjson slow_at "${DASH_SLOW_AT:-$now_s}" \
-    '$f + $s + {attention: $a, updated: $now, slow_updated: $slow_at}' > "$out.tmp.$$" && mv -f "$out.tmp.$$" "$out"
+    '$f + $s + $m + {attention: $a, updated: $now, slow_updated: $slow_at}' > "$out.tmp.$$" && mv -f "$out.tmp.$$" "$out"
   chmod 644 "$out" 2>/dev/null
   return 0
 }
 
 dashstatus_main() {
-  DASH_ROUND=0 DASH_SLOW=""
+  DASH_ROUND=0 DASH_SLOW="" DASH_MEDIA=""
   while :; do
     dashstatus_round
     sleep "${DASH_INTERVAL:-15}"

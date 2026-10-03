@@ -14,8 +14,8 @@ status.json, so the API keys stay on the server.
   health     what the post-import checks fixed and rejected, and anime made
              in Japanese whose files have no Japanese audio
 
-Each part is independent: one that fails is left out and the page shows
-what it has. Environment: DASH_CONFIG, DASH_STATE (as dashstatus.sh).
+Each part is independent: one that fails is left out (and listed in
+media_failed, so dashstatus retries soon) and the page shows what it has. Environment: DASH_CONFIG, DASH_STATE (as dashstatus.sh).
 """
 import json
 import os
@@ -278,13 +278,17 @@ def health():
 
 
 def main():
-    result = {}
+    result, failed = {}, []
     for name, part in (("continue", continue_watching), ("latest", latest), ("requests_live", requests),
                        ("upcoming", upcoming), ("health", health)):
         try:
             result[name] = part()
         except Exception as e:  # one broken source mustn't blank the others
             print(f"dashmedia: {name}: {e}", file=sys.stderr)
+            failed.append(name)
+    # dashstatus asks again next round instead of in 5 minutes (e.g. right
+    # after the services restart)
+    result["media_failed"] = failed
     result["media_updated"] = int(datetime.now(timezone.utc).timestamp())
     print(json.dumps(result, separators=(",", ":")))
 

@@ -704,6 +704,31 @@ test_jellyfin_restart_waits_for_login() {
   expect_eq "$(cat "$FAKE/logins")" 3 "login attempts"
 }
 
+# ─── Dashboard data ──────────────────────────────────────────────
+
+# Right after a restart the services aren't answering yet, so part of the
+# media data fails: it's asked for again a minute later (every 4th round),
+# not after the 5-minute slow round, and the slow round itself (which also
+# records uptime samples) isn't repeated
+test_dashstatus_retries_failed_media_data() {
+  # shellcheck source=/dev/null
+  DASHSTATUS_LIB=1 DASH_OUT="$FAKE/status.json" . "$ROOT/scripts/dashstatus.sh"
+  echo 0 > "$FAKE/slow"; echo 0 > "$FAKE/media"
+  slow_json() { echo $(( $(cat "$FAKE/slow") + 1 )) > "$FAKE/slow"; echo '{}'; }
+  media_json() {
+    local n; n=$(( $(cat "$FAKE/media") + 1 )); echo "$n" > "$FAKE/media"
+    if [ "$n" -lt 3 ]; then echo '{"media_failed": ["requests_live"]}'; else echo '{"requests_live": [], "media_failed": []}'; fi
+  }
+  system_json() { echo '{}'; }; playing_json() { echo '[]'; }; downloads_json() { echo '{}'; }
+  attention_json() { echo '[]'; }; get() { echo '[]'; }
+  DASH_ROUND=0 DASH_SLOW="" DASH_MEDIA=""
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do dashstatus_round; done
+  expect_eq "$(cat "$FAKE/slow")" 1 "slow rounds in 12 rounds"
+  expect_eq "$(cat "$FAKE/media")" 3 "media asks (rounds 0 and 4 fail, 8 works, then it waits)"
+  expect_eq "$(jq -c .requests_live "$FAKE/status.json")" "[]" "status.json has the media data"
+}
+
 echo "Failure-path tests"
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
   run_test "$t"
