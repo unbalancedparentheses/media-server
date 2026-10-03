@@ -9,3 +9,5 @@ result-*
 # Leftovers from the Docker version; never commit secrets
 config.toml
 .env
+__pycache__/
+*.pyc
