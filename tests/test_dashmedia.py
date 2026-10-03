@@ -158,3 +158,32 @@ class Fixing(unittest.TestCase):
         # Another title's folder isn't touched (a prefix isn't enough)
         other = dm.movie_pipeline({"id": 2, "hasFile": True, "path": "/m/Film"}, None, {}, current, [], {}, "2026-01-01")
         self.assertNotIn("progress", next(st for st in other if st["name"] == "checking"))
+
+
+class Display(unittest.TestCase):
+    def test_quality_stripped(self):
+        from mediaserver import common as c
+        for name, want in (("Kaiji - S01E02 - Open Fire WEBDL-1080p v2", "Kaiji - S01E02 - Open Fire"),
+                           ("Skyfall (2012) Bluray-1080p Proper", "Skyfall (2012)"),
+                           ("Lain - S01E01 - Weird HDTV-720p Repack v3", "Lain - S01E01 - Weird"),
+                           ("No quality here", "No quality here")):
+            self.assertEqual(c.strip_quality(name), want)
+
+    def test_fixes_grouped_per_series(self):
+        what = "set the default audio en"
+        recent = [{"title": "Kaiji - S01E02 - Open Fire WEBDL-1080p v2", "what": what, "time": 5},
+                  {"title": "Skyfall (2012)", "what": what, "time": 4},
+                  {"title": "Kaiji - S01E04 - Failure WEBDL-1080p v2", "what": what, "time": 3},
+                  {"title": "Kaiji - S01E07 - Proclamation", "what": "added stereo audio", "time": 2},
+                  {"title": "Kaiji - S01E19 - Limit", "what": what, "time": 1}]
+        out = dm.grouped_fixes(recent)
+        self.assertEqual([(f["title"], f["episodes"], f["what"]) for f in out],
+                         [("Kaiji", 3, what), ("Skyfall (2012)", 1, what), ("Kaiji - S01E07 - Proclamation", 1, "added stereo audio")])
+        self.assertEqual(out[0]["time"], 5)   # the newest
+
+    def test_partly_there_series(self):
+        """What's there went through every step; only the search is still on"""
+        show = {"id": 1, "path": "/tv/Kaiji", "statistics": {"episodeFileCount": 26, "episodeCount": 52}}
+        stages = {st["name"]: st["state"] for st in dm.series_pipeline(show, {"status": 2, "by": "admin"}, {}, {}, [], {})}
+        self.assertEqual(stages, {"requested": "done", "searching": "active", "downloading": "done", "importing": "done",
+                                  "checking": "done", "subtitles": "done", "ready": "done"})

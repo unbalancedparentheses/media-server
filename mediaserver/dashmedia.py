@@ -19,6 +19,7 @@ media_failed, so dashstatus retries soon) and the page shows what it has.
 """
 from __future__ import annotations
 
+import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -182,7 +183,8 @@ def pipeline(requested: dict | None, has_file: bool, partial: str, queue: list, 
     if checking:
         reached = 2
     for k, name in enumerate(order):
-        if reached > k or (reached == -1 and has_file and not partial and not checking):
+        # A partly there series: the episodes it has went through every step
+        if reached > k or (reached == -1 and has_file and not checking):
             out.append(stage(name, "done"))
         elif reached == k:
             state = "problem" if where == "stuck" and name == "importing" else "active"
@@ -416,10 +418,32 @@ def upcoming():
     return sorted(out, key=lambda x: x["date"])[:20]
 
 
+def grouped_fixes(recent: list) -> list:
+    """One line per title and fix: the same fix on several episodes of a
+    series is "Kaiji · 4 episodes" (newest first, as given)"""
+    out: list = []
+    by_key: dict = {}
+    for r in recent:
+        title = c.strip_quality(r.get("title", ""))
+        m = re.match(r"(.+?) - S\d+E\d+", title)
+        series = m.group(1) if m else None
+        key = (series or title, r.get("what"))
+        if key in by_key:
+            by_key[key]["episodes"] += 1
+            continue
+        entry = {"title": title, "what": r.get("what", ""), "time": r.get("time", 0), "episodes": 1, "series": series}
+        by_key[key] = entry
+        out.append(entry)
+    for e in out:
+        if e["series"] and e["episodes"] > 1:
+            e["title"] = e["series"]
+    return out
+
+
 def health():
     status = c.read_json(STATE / "postimport/status.json", {}) or {}
     week = time.time() - 7 * 86400
-    out = {"fixed": [r for r in status.get("recent", []) if r.get("time", 0) > week][:6],
+    out = {"fixed": grouped_fixes([r for r in status.get("recent", []) if r.get("time", 0) > week])[:6],
            "looking": status.get("looking", []), "kept": status.get("kept", []),
            "checks_running": bool(status) and time.time() - status.get("updated", 0) < 3600}
     # Anime made in Japanese whose files have no Japanese audio (dubs);

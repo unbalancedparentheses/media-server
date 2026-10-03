@@ -1028,7 +1028,7 @@ def seen_mark(path, st=None):
 def display_name(path):
     """"Movie (2020) Bluray-1080p Proper" → "Movie (2020)"; episodes keep
     "Show - S01E02 - Title" (Sonarr/Radarr's naming, quality last)"""
-    return re.sub(r" (Remux|Bluray|WEBDL|WEBRip|HDTV|DVD|SDTV|Raw-HD|BR-DISK)-\S+( Proper| Repack)*$", "", Path(path).stem)
+    return c.strip_quality(Path(path).stem)
 
 
 def save(state):

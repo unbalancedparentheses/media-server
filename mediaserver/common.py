@@ -116,6 +116,18 @@ def jellyfin_auth(state: Path) -> dict:
     return {"Authorization": f'MediaBrowser Token="{key}"'} if key else {}
 
 
+# ─── Names ───────────────────────────────────────────────────────
+
+QUALITY_SUFFIX = re.compile(r" (Remux|Bluray|WEBDL|WEBRip|HDTV|DVD|SDTV|Raw-HD|BR-DISK)-\S+( Proper| Repack| v\d+)*$")
+
+
+def strip_quality(name: str) -> str:
+    """"Movie (2020) Bluray-1080p Proper" → "Movie (2020)", "Show - S01E02 -
+    Title WEBDL-1080p v2" → "Show - S01E02 - Title" (Sonarr/Radarr's naming,
+    quality last)"""
+    return QUALITY_SUFFIX.sub("", name)
+
+
 # ─── HTTP ────────────────────────────────────────────────────────
 
 def http(url: str, headers: dict | None = None, method: str = "GET", body: Any = None,

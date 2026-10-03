@@ -370,6 +370,17 @@
         return st.name==='ready'?Object.assign({},st,{state:'todo'}):st;
       });
     }
+    // Searching for days without finding anything usually needs a person:
+    // the automatic search only takes releases that pass the filters
+    function stalled(r,stages){
+      var days=r.date?Math.floor((Date.now()-new Date(r.date))/86400000):0;
+      if(days<2)return stages;
+      var app=r.type==='tv'?'Sonarr':'Radarr';
+      return stages.map(function(st){
+        if(st.name!=='searching'||st.state!=='active'||/^not out yet/.test(st.detail||''))return st;
+        return Object.assign({},st,{detail:(st.detail||'looking for a good release')+' · nothing suitable in '+days+' days; try Interactive Search in '+app});
+      });
+    }
     function stepper(stages){
       if(!stages.length)return'';
       if(finished(stages))return'<div class="steps"><span class="step st-done"><i>✓</i>Ready to watch</span></div>';
@@ -420,7 +431,9 @@
       // Requests and what's on its way, each with where it is in the pipeline
       var rq=s.requests_live;
       if(rq){
-        var busy=rq.filter(function(r){return (r.stages||[]).some(function(st){return st.state==='active'&&st.name!=='subtitles';});}).length;
+        // Moving now: not subtitles alone, and not what isn't released yet
+        var busy=rq.filter(function(r){return (r.stages||[]).some(function(st){
+          return st.state==='active'&&st.name!=='subtitles'&&!/^not out yet/.test(st.detail||'');});}).length;
         document.getElementById('req-sub').innerHTML='<span>'+(busy?busy+' in progress · ':'')+num((s.requests||{}).total)+' requested</span>';
         // What's moving first, then the rest in request order
         rq=rq.map(function(r,i){return{r:r,i:i};}).sort(function(a,b){
@@ -432,7 +445,7 @@
           var fix=r.state!=='available'&&adminUrl(r.admin);
           var sub=(r.type==='tv'?'Series':'Movie')+(r.by?' · requested by '+esc(r.by):r.date?'':' · on its way')+(r.date?' · '+ago(r.date):'');
           return'<div class="item link req">'+thumb+'<div class="i-info"><a href="'+href+'"><div class="i-title">'+esc(r.title)+(r.year?' ('+r.year+')':'')+'</div>'
-            +'<div class="i-sub">'+sub+'</div></a>'+stepper(live(r,s.fixing))+'</div>'
+            +'<div class="i-sub">'+sub+'</div></a>'+stepper(stalled(r,live(r,s.fixing)))+'</div>'
             +'<div class="i-right">'+(r.state==='available'?'<a class="i-link" href="'+href+'">Watch →</a>':fix?'<a class="i-link" href="'+fix+'">Open in '+(r.type==='tv'?'Sonarr':'Radarr')+' →</a>':'')+'</div></div>';
         }).join(''):'<div class="empty">No requests yet · <a class="i-link" href="'+seerrBase+'">request something</a></div>';
       }
@@ -466,7 +479,7 @@
           rows+='<div class="h-row"><span class="h-ico t-warn">!</span><div class="i-info"><div>'+esc(d.title)+': '+plural(d.episodes,'episode')+' without Japanese audio</div><div class="i-sub">A dub. For Japanese audio, pick a Dual Audio or Japanese release'
             +(u?' · <a class="i-link" href="'+u+'">Open in Sonarr →</a>':' in Sonarr')+'</div></div></div>';
         });
-        week.forEach(function(f){rows+='<div class="h-row"><span class="h-ico t-good">✓</span><div class="i-info"><div>'+esc(f.title.replace(/ (Remux|Bluray|WEBDL|WEBRip|HDTV|DVD|SDTV)-\S+( Proper| Repack)*$/,''))+'</div><div class="i-sub">'+esc(f.what)+' · '+ago(new Date(f.time*1000))+'</div></div></div>';});
+        week.forEach(function(f){rows+='<div class="h-row"><span class="h-ico t-good">✓</span><div class="i-info"><div>'+esc(f.title)+(f.episodes>1?' <span style="color:var(--text3)">· '+f.episodes+' episodes</span>':'')+'</div><div class="i-sub">'+esc(f.what)+' · '+ago(new Date(f.time*1000))+'</div></div></div>';});
         show('health-sec',!!rows||hl.checks_running===false);
         if(!hl.checks_running)rows='<div class="h-row"><span class="h-ico t-warn">!</span><div class="i-info"><div>The checks after each download aren\'t running</div><div class="i-sub">nix run .#logs -- postimport shows why</div></div></div>'+rows;
         document.getElementById('health-sub').innerHTML=week.length?'<span>'+plural(week.length,'fix')+' this week</span>':'';
