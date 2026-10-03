@@ -31,12 +31,14 @@ class FakeClients:
     def __init__(self):
         self.mode, self.sab_limit, self.qbit_up = "0", "0", True
         self.prefs = {"alt_dl_limit": 10240, "alt_up_limit": 10240, "dl_limit": 0, "up_limit": 102400}
-        self.sab_refuses = self.toggle_fails = False
+        self.sab_refuses = self.toggle_fails = self.sab_unreadable = self.mode_unreadable = False
 
     def request(self, url, method="GET", headers=None, body=None, form=None, timeout=15, follow=True):
         if not self.qbit_up:
             return c.Response(0, {}, b"")
         if url.endswith("transfer/speedLimitsMode"):
+            if self.mode_unreadable:
+                return c.Response(500, {}, b"")
             return c.Response(200, {}, self.mode.encode())
         if url.endswith("transfer/toggleSpeedLimitsMode"):
             if self.toggle_fails:
@@ -58,6 +60,8 @@ class FakeClients:
                 return None
             self.sab_limit = url.split("value=")[1].split("&")[0]
             return {"status": True}
+        if "mode=queue" in url and self.sab_unreadable:
+            return None
         if "mode=queue" in url:
             kib = int(self.sab_limit[:-1]) if self.sab_limit.endswith("K") else 0
             return {"queue": {"speedlimit_abs": str(kib * 1024)}}
@@ -98,6 +102,18 @@ class Apply(unittest.TestCase):
         state = self.speed.set(True, 5120, 512)
         self.assertTrue(state["limited"])
         self.assertIn("SABnzbd didn't take it", state["warning"])
+
+    def test_unreadable_sabnzbd_limit_isnt_taken_as_cleared(self):
+        self.speed.set(True, 5120, 512)
+        self.fake.sab_unreadable = True
+        state = self.speed.set(False)
+        self.assertIn("SABnzbd didn't take it", state.get("warning", ""))
+
+    def test_limits_written_but_mode_unknown_says_so(self):
+        self.fake.mode_unreadable = True
+        result = self.speed.set(True, 5120, 512)
+        self.assertIn("took the new limits", result["error"])
+        self.assertEqual(self.fake.prefs["alt_dl_limit"], 5120 * 1024)   # they were written
 
     def test_mode_switch_failing_is_an_error(self):
         self.fake.toggle_fails = True

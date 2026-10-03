@@ -71,7 +71,8 @@ class Speed:
                     return {"error": "qBittorrent didn't accept the limits; nothing changed"}
             mode = self.qbit("transfer/speedLimitsMode")
             if not mode.ok:
-                return {"error": "qBittorrent isn't answering; nothing changed"}
+                return {"error": "qBittorrent took the new limits but its mode couldn't be checked; they may be active"
+                        if limited else "qBittorrent isn't answering; nothing changed"}
             if (mode.body.strip() == b"1") != limited and not self.qbit("transfer/toggleSpeedLimitsMode", {}).ok:
                 return {"error": "qBittorrent didn't switch its limits"}
             # SABnzbd: the same download limit, or none ("0")
@@ -82,8 +83,10 @@ class Speed:
             return {"error": "qBittorrent stopped answering; check its state in Manage"}
         if state["limited"] != limited or (limited and (state["down"], state["up"]) != (down, up)):
             problems.append("qBittorrent")
+        # Only a limit actually read back counts: unknown isn't "no limit"
         want_sab = down if limited else 0
-        if c.sabnzbd_key(self.config) and (sab_answer is None or (state.get("sabnzbd_limit") or 0) != want_sab):
+        if c.sabnzbd_key(self.config) and (sab_answer is None or state.get("sabnzbd_limit") is None
+                                           or state["sabnzbd_limit"] != want_sab):
             problems.append("SABnzbd")
         if problems == ["qBittorrent"] or problems == ["qBittorrent", "SABnzbd"]:
             return {"error": f"{' and '.join(problems)} didn't take it", **state}
