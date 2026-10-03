@@ -17,6 +17,7 @@ STEPS = {
     "cleanuparr-require-login": "cleanuparr:run_require_login",
     "moonbase": "moonbase",
     "intro-skipper": "introskipper",
+    "bazarr": "bazarr",
 }
 
 

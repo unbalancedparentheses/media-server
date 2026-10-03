@@ -1,8 +1,11 @@
+# Tests use possibly-None results directly (a None fails the test anyway):
+# pyright: reportOptionalSubscript=false, reportArgumentType=false
 """Tests for setup's Python steps (mediaserver/steps/), against a scratch
 ~/media with launchd replaced by fakes.
 
 Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
+import hashlib
 import io
 import json
 import shutil
@@ -15,8 +18,8 @@ from unittest import mock
 
 from mediaserver import api, creds, jellyfin, launchd, logins
 from mediaserver import common as c
-from mediaserver.config import Config, Paths
-from mediaserver.steps import cleanuparr, introskipper, moonbase, postimport_settings, unpackerr
+from mediaserver.config import Config, Keys, Paths
+from mediaserver.steps import bazarr, cleanuparr, introskipper, moonbase, postimport_settings, unpackerr
 from mediaserver.ui import SetupError
 
 
@@ -229,3 +232,36 @@ class MoonfinWebApp(unittest.TestCase):
         self.assertEqual(want["MediaSegmentProviderOrder"], ["Intro Skipper", "Other"])
         self.assertEqual(want["DisabledMediaSegmentProviders"], ["X"])
         self.assertEqual(want["Keep"], 1)
+
+
+class Bazarr(unittest.TestCase):
+    def test_settings_keep_the_rest(self):
+        current = {"general": {"theme": "dark", "use_sonarr": False}, "sonarr": {"apikey": "old", "other": 1}}
+        want = bazarr.settings(current, Keys(sonarr="s", radarr=""), ["opensubtitlescom"], ["en"], "127.0.0.1")
+        self.assertEqual(want["sonarr"], {"apikey": "s", "other": 1, "ip": "localhost", "port": 8989, "base_url": "", "ssl": False})
+        self.assertNotIn("radarr", want)
+        self.assertEqual(want["general"]["theme"], "dark")
+        self.assertTrue(want["general"]["use_sonarr"] and want["general"]["ignore_pgs_subs"])
+        self.assertEqual(want["general"]["ip"], "127.0.0.1")
+        self.assertEqual(current["sonarr"]["apikey"], "old")  # the original isn't modified
+        self.assertEqual(bazarr.settings(want, Keys(sonarr="s"), ["opensubtitlescom"], ["en"], "127.0.0.1"), want)
+
+    def test_language_profiles(self):
+        """English first, Spanish as a fallback: cutoff on the first item
+        (id 1; Bazarr treats 0 as no cutoff), flags as strings"""
+        other = {"profileId": 3, "name": "Kids", "items": []}
+        created = bazarr.language_profiles([other], ["en", "es"], "first")
+        default = created[-1]
+        self.assertEqual((default["profileId"], default["cutoff"]), (4, 1))
+        self.assertEqual([i["id"] for i in default["items"]], [1, 2])
+        self.assertEqual(default["items"][0]["hi"], "False")
+        self.assertEqual(created[0], other)
+        self.assertIsNone(bazarr.language_profiles(created, ["en", "es"], "first"))  # already right
+        self.assertIsNone(bazarr.language_profiles(created, ["en", "es"], "all")[-1]["cutoff"])
+
+    def test_login_settings(self):
+        hashed = hashlib.md5(b"pw").hexdigest()
+        self.assertEqual(bazarr.login_settings({}, "admin", "pw")["auth"], {"type": "form", "username": "admin", "password": hashed})
+        self.assertIsNone(bazarr.login_settings({"auth": {"type": "form", "username": "admin", "password": hashed, "apikey": "k"}}, "admin", "pw"))
+        # "forms" (an older setup's typo) isn't a type Bazarr knows
+        self.assertIsNotNone(bazarr.login_settings({"auth": {"type": "forms", "username": "admin", "password": hashed}}, "admin", "pw"))

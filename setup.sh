@@ -133,7 +133,7 @@ run_setup() {
   timed configure_junk_filters
   timed configure_prowlarr
   timed configure_usenet_providers
-  timed configure_bazarr
+  timed py step bazarr
   timed configure_sabnzbd_auth
   timed configure_seerr
   timed py step moonbase
