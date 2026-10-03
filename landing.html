@@ -263,7 +263,7 @@
       var i=ref.indexOf(':');return 'http://'+h+':'+ADMIN_PORTS[ref.slice(0,i)]+ref.slice(i+1);
     }
     function admin(port,path){return adminOffHere?null:'http://'+h+':'+port+(path||'');}
-    function watchUrl(id){return id?moonfin+'item/'+id:moonfin;}
+    function watchUrl(id){return id?moonfin+'#/item/'+id:moonfin;}  // Moonfin routes after the #
     function img(id,tag,height){return id&&tag?jfBase+'/Items/'+id+'/Images/Primary?fillHeight='+(height||330)+'&quality=85&tag='+tag:null;}
 
     // ── Helpers ──
