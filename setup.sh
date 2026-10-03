@@ -139,7 +139,7 @@ run_setup() {
   timed configure_moonbase
   timed configure_intro_skipper
   timed py step unpackerr
-  timed configure_cleanuparr
+  timed py step cleanuparr
   timed py step postimport
   timed write_api_proxy
 }

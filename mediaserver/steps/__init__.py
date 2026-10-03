@@ -7,10 +7,14 @@ import importlib
 
 from mediaserver.config import Config
 
-# step name → module in this package (each has run(cfg))
+# step name → module in this package, and its function (run by default),
+# which takes the Config
 STEPS = {
     "unpackerr": "unpackerr",
     "postimport": "postimport_settings",
+    "cleanuparr": "cleanuparr",
+    # Before the services start, too (see cleanuparr.require_login)
+    "cleanuparr-require-login": "cleanuparr:run_require_login",
 }
 
 
@@ -21,5 +25,6 @@ def main(argv: list[str]) -> int:
         return 2
     cfg = Config.load()
     for name in argv:
-        importlib.import_module(f"mediaserver.steps.{STEPS[name]}").run(cfg)
+        module, _, function = STEPS[name].partition(":")
+        getattr(importlib.import_module(f"mediaserver.steps.{module}"), function or "run")(cfg)
     return 0

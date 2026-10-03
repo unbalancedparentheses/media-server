@@ -300,31 +300,6 @@ test_migration_leaves_existing_series_alone() {
   [ -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "not marked complete"
 }
 
-# ─── Cleanuparr's login safeguard ────────────────────────────────
-
-cleanuparr_db() {
-  mkdir -p "$CONFIG_DIR/cleanuparr"
-  sqlite3 "$CONFIG_DIR/cleanuparr/cleanuparr.db" "CREATE TABLE general_configs (auth_disable_auth_for_local_addresses INTEGER); INSERT INTO general_configs VALUES (1);"
-  sqlite3 "$CONFIG_DIR/cleanuparr/users.db" "CREATE TABLE users (api_key TEXT); INSERT INTO users VALUES ('k');"
-}
-
-# Not running: the login requirement is turned on in its database
-test_cleanuparr_login_turned_on_while_stopped() {
-  cleanuparr_db
-  cleanuparr_require_login >/dev/null
-  expect_eq "$(sqlite3 "$CONFIG_DIR/cleanuparr/cleanuparr.db" 'SELECT auth_disable_auth_for_local_addresses FROM general_configs')" 0 "bypass"
-}
-
-# Running, not answering, and won't stop: setup must stop, not carry on
-test_cleanuparr_safeguard_stops_setup() {
-  cleanuparr_db
-  svc_loaded() { [ "$1" = cleanuparr ]; }
-  svc_stop() { return 1; }
-  api() { return 22; }
-  ( cleanuparr_require_login >/dev/null 2>&1; echo "carried on" ) | grep -q "carried on" && fail "setup carried on with the login bypass on"
-  return 0
-}
-
 # ─── Tailscale ───────────────────────────────────────────────────
 
 # A route published for an old dashboard port is still removed

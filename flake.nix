@@ -397,7 +397,10 @@
                 gnugrep
                 gawk
                 jq
-                python3
+                (python3.withPackages (ps: [
+                  ps.pyyaml
+                  ps.bcrypt
+                ]))
                 sqlite
                 jellyfin-ffmpeg
               ];
@@ -419,7 +422,10 @@
             nginx
             nixfmt
             pyright
-            python3
+            (python3.withPackages (ps: [
+              ps.pyyaml
+              ps.bcrypt
+            ]))
           ];
         };
       });

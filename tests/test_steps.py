@@ -6,15 +6,18 @@ Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 import io
 import json
 import shutil
+import sqlite3
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from mediaserver import launchd
+from mediaserver import api, creds, launchd, logins
+from mediaserver import common as c
 from mediaserver.config import Config, Paths
-from mediaserver.steps import postimport_settings, unpackerr
+from mediaserver.steps import cleanuparr, postimport_settings, unpackerr
+from mediaserver.ui import SetupError
 
 
 def scratch(data=None) -> Config:
@@ -23,7 +26,7 @@ def scratch(data=None) -> Config:
 
 
 def run(fn, *args):
-    with redirect_stdout(io.StringIO()) as out:
+    with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
         fn(*args)
     return out.getvalue()
 
@@ -70,3 +73,80 @@ class PostimportSettings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CleanuparrSafeguard(unittest.TestCase):
+    """The "no login for local addresses" bypass must be off before
+    Cleanuparr runs; if that can't be done, setup stops"""
+
+    def setUp(self):
+        self.cfg = scratch()
+        self.addCleanup(shutil.rmtree, self.cfg.paths.media)
+        d = self.cfg.paths.config / "cleanuparr"
+        d.mkdir(parents=True)
+        self.db = d / "cleanuparr.db"
+        with sqlite3.connect(self.db) as db:
+            db.execute("CREATE TABLE general_configs (auth_disable_auth_for_local_addresses INTEGER)")
+            db.execute("INSERT INTO general_configs VALUES (1)")
+        with sqlite3.connect(d / "users.db") as db:
+            db.execute("CREATE TABLE users (api_key TEXT)")
+            db.execute("INSERT INTO users VALUES ('k')")
+
+    def bypass(self):
+        with sqlite3.connect(self.db) as db:
+            return db.execute("SELECT auth_disable_auth_for_local_addresses FROM general_configs").fetchone()[0]
+
+    def test_turned_on_while_stopped(self):
+        with mock.patch.object(launchd, "loaded", return_value=False):
+            run(cleanuparr.require_login, self.cfg)
+        self.assertEqual(self.bypass(), 0)
+
+    def test_stops_setup_when_it_cant_be_turned_on(self):
+        """Running, not answering, and won't stop: setup must stop"""
+        with mock.patch.object(launchd, "loaded", return_value=True), mock.patch.object(launchd, "stop", return_value=False), \
+                mock.patch.object(c, "request", return_value=c.Response(0, {}, b"")), redirect_stderr(io.StringIO()):
+            with self.assertRaises(SetupError):
+                run(cleanuparr.require_login, self.cfg)
+        self.assertEqual(self.bypass(), 1)
+
+
+class CleanuparrLogin(unittest.TestCase):
+    def test_recorded_only_once_it_works(self):
+        cfg = scratch({"jellyfin": {"username": "admin", "password": "new"}})
+        self.addCleanup(shutil.rmtree, cfg.paths.media)
+        creds.record(cfg.paths.state, "cleanuparr", "admin", "old")
+        works = {"now": False}
+        cu = cleanuparr.Cleanuparr(cfg)
+        with mock.patch.object(logins, "cleanuparr", lambda url, u, p: works["now"] and p == "new"), \
+                mock.patch.object(launchd, "stop", return_value=True), mock.patch.object(launchd, "bootstrap", return_value=True), \
+                mock.patch.object(cleanuparr, "write_login"), mock.patch.object(api, "wait_for", return_value=True):
+            run(cu.set_login)
+            self.assertEqual(creds.get(cfg.paths.state, "cleanuparr", "password"), "old")
+            works["now"] = True
+            run(cu.set_login)
+        self.assertEqual(creds.get(cfg.paths.state, "cleanuparr", "password"), "new")
+
+    def test_queue_cleaner_settings(self):
+        want = cleanuparr.queue_cleaner_settings(
+            {"enabled": False, "downloadingMetadataMaxStrikes": 0, "failedImport": {"maxStrikes": 5, "patterns": []}, "other": 1}, True)
+        self.assertEqual(want["enabled"], True)
+        self.assertEqual(want["downloadingMetadataMaxStrikes"], 3)
+        self.assertEqual(want["failedImport"], {"maxStrikes": 5, "patterns": [], "ignorePrivate": True, "patternMode": "Exclude"})
+        self.assertEqual(want["other"], 1)
+
+
+class Credentials(unittest.TestCase):
+    def test_upgrade_from_shared_record(self):
+        """The older file (one shared login) upgrades per service, without
+        guessing Cleanuparr's password"""
+        cfg = scratch()
+        self.addCleanup(shutil.rmtree, cfg.paths.media)
+        c.write_json(cfg.paths.state / "credentials.json", {"jellyfin": {"username": "admin", "password": "pw"},
+                                                            "qbittorrent": {"username": "q", "password": "qp"}})
+        state = cfg.paths.state
+        self.assertEqual(creds.get(state, "sonarr", "password"), "pw")
+        self.assertEqual(creds.get(state, "qbittorrent", "username"), "q")
+        self.assertEqual(creds.get(state, "cleanuparr", "password"), "")
+        creds.record(state, "cleanuparr", "admin", "pw")
+        self.assertEqual((state / "credentials.json").stat().st_mode & 0o777, 0o600)
+        self.assertTrue(creds.match(state, "cleanuparr", "admin", "pw"))

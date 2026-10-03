@@ -225,30 +225,31 @@ prompt_credentials() {
 # password to set a new one (Jellyfin) still have it.
 creds_file() { printf '%s/credentials.json' "$STATE_DIR"; }
 
-# Loads the record into CREDS_JSON, upgrading the older format (one shared
-# jellyfin/qbittorrent entry): the shared login is assumed for the services
-# it covered, except Cleanuparr, whose password setup may not have applied
-creds_load() {
+# The record lives in the file only (no copy in memory): Python steps
+# (mediaserver/creds.py) read and write the same file during an install.
+# creds_load upgrades the older format (one shared jellyfin/qbittorrent
+# entry): the shared login is assumed for the services it covered, except
+# Cleanuparr, whose password setup may not have applied.
+creds_read() {
   local f
   f=$(creds_file)
-  CREDS_JSON='{"version":2,"services":{}}'
-  [ -f "$f" ] || return 0
-  CREDS_JSON=$(jq -c '
+  [ -f "$f" ] || { echo '{"version":2,"services":{}}'; return 0; }
+  jq -c '
     if .version == 2 then .
     else {version: 2, services: (
       (if .jellyfin then
         reduce ("jellyfin", "sonarr", "radarr", "prowlarr", "bazarr", "sabnzbd") as $s ({}; .[$s] = $jf)
        else {} end) as $shared
       | $shared + (if .qbittorrent then {qbittorrent: .qbittorrent} else {} end))}
-    end' --argjson jf "$(jq -c '.jellyfin // null' "$f")" "$f" 2>/dev/null) || {
-    warn "$(creds_file) is unreadable; every service's login will be re-applied"
-    CREDS_JSON='{"version":2,"services":{}}'
+    end' --argjson jf "$(jq -c '.jellyfin // null' "$f" 2>/dev/null || echo null)" "$f" 2>/dev/null || {
+    warn "$(creds_file) is unreadable; every service's login will be re-applied" >&2
+    echo '{"version":2,"services":{}}'
   }
-  return 0
 }
+creds_load() { creds_read >/dev/null; }
 
 # creds_get <service> <username|password>; empty if not recorded
-creds_get() { jq -r --arg s "$1" --arg f "$2" '.services[$s][$f] // ""' <<< "$CREDS_JSON"; }
+creds_get() { creds_read | jq -r --arg s "$1" --arg f "$2" '.services[$s][$f] // ""'; }
 
 # True if <service>'s recorded login is <user>/<pass>
 creds_match() {
@@ -257,12 +258,12 @@ creds_match() {
 
 # Record <service>'s verified login and write the file atomically
 creds_set() {
-  local f tmp
+  local f tmp record
   f=$(creds_file)
-  CREDS_JSON=$(jq -c --arg s "$1" --arg u "$2" --arg p "$3" '.services[$s] = {username: $u, password: $p}' <<< "$CREDS_JSON")
+  record=$(creds_read | jq -c --arg s "$1" --arg u "$2" --arg p "$3" '.services[$s] = {username: $u, password: $p}')
   mkdir -p "$STATE_DIR"
   tmp="$f.tmp.$$"
-  (umask 077 && jq . <<< "$CREDS_JSON" > "$tmp") && mv -f "$tmp" "$f"
+  (umask 077 && jq . <<< "$record" > "$tmp") && mv -f "$tmp" "$f"
 }
 
 # *arr/Prowlarr form login: 302 to the app on success, back to /login?…loginFailed on failure

@@ -210,7 +210,7 @@ start_stack() {
   info "Starting services..."
   remove_retired_services
   # Before Cleanuparr can start on a wider address
-  cleanuparr_require_login
+  py step cleanuparr-require-login || exit 1
   local changed
   changed=$(write_launch_agents)
   # Also restart services whose config file changed (e.g. a new admin_bind)
