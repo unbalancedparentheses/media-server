@@ -467,6 +467,18 @@ class FakeJellyfin(FakeService):
             self.repositories = req.json()
             return 204, None
 
+        self.install_dir: Path | None = None   # where an installed plugin's folder appears
+        self.pending_plugins: list = []      # installed, loaded after a restart
+
+        @self.route("POST", r"/Packages/Installed/([^/]+)")
+        def install(req, package):
+            from urllib.parse import unquote
+            name = unquote(package)
+            self.pending_plugins.append({"Id": req.arg("assemblyGuid").replace("-", ""), "Name": name, "Version": req.arg("version"), "Status": "Active"})
+            if self.install_dir:
+                (self.install_dir / f"{name}_{req.arg('version')}").mkdir(parents=True, exist_ok=True)
+            return 204, None
+
         @self.route("GET", "/ScheduledTasks")
         def tasks(req):
             return [{"Id": "t1", "Name": "Moonfin Startup", "Key": "MoonfinStartup"}]
@@ -521,6 +533,11 @@ class FakeJellyfin(FakeService):
         def write(req):
             setattr(self, attr, req.json())
             return 204, None
+
+    def restart(self) -> None:
+        """What a restart does: plugins installed since are loaded"""
+        self.plugins += self.pending_plugins
+        self.pending_plugins = []
 
     def add_user(self, name: str, password: str) -> dict:
         user = {"Name": name, "Id": f"u{len(self.users) + 1}", "password": password,
