@@ -29,7 +29,9 @@ class FakeClients:
     """qBittorrent (alternative limits, the turtle mode) and SABnzbd's limit"""
 
     def __init__(self):
-        self.mode, self.prefs, self.sab_limit, self.qbit_up = "0", {"alt_dl_limit": 10240, "alt_up_limit": 10240}, "0", True
+        self.mode, self.sab_limit, self.qbit_up = "0", "0", True
+        self.prefs = {"alt_dl_limit": 10240, "alt_up_limit": 10240, "dl_limit": 0, "up_limit": 102400}
+        self.sab_refuses = self.toggle_fails = False
 
     def request(self, url, method="GET", headers=None, body=None, form=None, timeout=15, follow=True):
         if not self.qbit_up:
@@ -37,6 +39,10 @@ class FakeClients:
         if url.endswith("transfer/speedLimitsMode"):
             return c.Response(200, {}, self.mode.encode())
         if url.endswith("transfer/toggleSpeedLimitsMode"):
+            if self.toggle_fails:
+                return c.Response(500, {}, b"")
+            import time
+            time.sleep(0.01)   # long enough for a second request to read the old mode
             self.mode = "0" if self.mode == "1" else "1"
             return c.Response(200, {}, b"")
         if url.endswith("app/preferences"):
@@ -48,6 +54,8 @@ class FakeClients:
 
     def try_json(self, url, headers=None, default=None, timeout=10):
         if "name=speedlimit" in url:
+            if self.sab_refuses:
+                return None
             self.sab_limit = url.split("value=")[1].split("&")[0]
             return {"status": True}
         if "mode=queue" in url:
@@ -71,7 +79,8 @@ class Apply(unittest.TestCase):
 
     def test_limit_then_full_speed(self):
         state = self.speed.set(True, 5120, 512)
-        self.assertEqual(state, {"answering": True, "limited": True, "down": 5120, "up": 512, "sabnzbd_limit": 5120})
+        self.assertEqual(state, {"answering": True, "limited": True, "down": 5120, "up": 512, "normal_down": 0, "normal_up": 100,
+                                 "sabnzbd_limit": 5120})
         self.assertEqual((self.fake.mode, self.fake.sab_limit), ("1", "5120K"))
         state = self.speed.set(True, 2048, 0)   # already limited: not toggled off
         self.assertEqual((state["limited"], state["down"], state["up"]), (True, 2048, 0))
@@ -83,6 +92,25 @@ class Apply(unittest.TestCase):
     def test_upload_only_leaves_usenet_alone(self):
         self.speed.set(True, 0, 100)
         self.assertEqual(self.fake.sab_limit, "0")
+
+    def test_partly_applied_says_which(self):
+        self.fake.sab_refuses = True
+        state = self.speed.set(True, 5120, 512)
+        self.assertTrue(state["limited"])
+        self.assertIn("SABnzbd didn't take it", state["warning"])
+
+    def test_mode_switch_failing_is_an_error(self):
+        self.fake.toggle_fails = True
+        self.assertIn("error", self.speed.set(True, 5120, 512))
+
+    def test_two_devices_at_once_dont_undo_each_other(self):
+        import threading
+        threads = [threading.Thread(target=self.speed.set, args=(True, 1024, 100)) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(self.fake.mode, "1")   # limited, not toggled back off
 
     def test_qbittorrent_down(self):
         self.fake.qbit_up = False

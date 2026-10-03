@@ -43,6 +43,7 @@
   .btn{display:inline-flex;align-items:center;gap:0.4rem;font-size:0.8rem;font-weight:500;padding:0.55rem 0.95rem;border-radius:9px;border:1px solid var(--border);color:var(--text2);transition:all .2s;white-space:nowrap}
   .btn:hover{border-color:var(--border-hover);color:var(--text);background:var(--surface)}
   .btn.primary{background:var(--gold);border-color:var(--gold);color:#111;font-weight:600}
+  button.btn{background:transparent;font-family:inherit;cursor:pointer}
   .btn.primary:hover{filter:brightness(1.08);background:var(--gold)}
 
   .content{max-width:1200px;margin:0 auto;padding:1.8rem 2.5rem 4rem}
@@ -113,7 +114,7 @@
   .sp-fields label{display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;color:var(--text2);margin:0.4rem 0}
   .sp-fields input{width:5rem;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0.4rem;font:inherit;margin-left:auto}
   .sp-hint{font-size:0.68rem;color:var(--text3);margin:0.2rem 0 0.6rem}
-  .sp-presets{margin:0}
+  .sp-presets{margin:0;display:grid;grid-template-columns:1fr 1fr;gap:0.4rem}
   .sp-foot{display:flex;align-items:center;justify-content:space-between;gap:0.6rem;margin-top:0.8rem}
   .sp-msg{font-size:0.7rem;color:var(--text2)}
   .tabs{display:flex;gap:0.25rem;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:0.2rem}
@@ -234,7 +235,8 @@
           <button class="btn label-hide" id="speed-btn" aria-haspopup="dialog" aria-expanded="false" title="Download and upload speed">⇅<span id="speed-label"> Speed</span></button>
           <div class="speed-pop hidden" id="speed-pop" role="dialog" aria-label="Download and upload speed">
             <div class="sp-title">Download and upload speed</div>
-            <div class="chips sp-mode"><button data-mode="full">Full speed</button><button data-mode="limit">Limit</button></div>
+            <div class="chips sp-mode"><button data-mode="full">Normal limits</button><button data-mode="limit">Limit</button></div>
+            <div class="sp-hint" id="sp-normal"></div>
             <div class="sp-fields" id="sp-fields">
               <label>↓ Download <input id="sp-down" type="number" min="0" step="0.5" inputmode="decimal"> MB/s</label>
               <label>↑ Upload <input id="sp-up" type="number" min="0" step="0.1" inputmode="decimal"> MB/s</label>
@@ -411,7 +413,7 @@
         manage+=alertHtml(a);
         if(a.scope==='watch')home+=alertHtml(a);else others++;
       });
-      if(others)home+='<div class="hidden-note">'+plural(others,'thing')+' about the server need a look · <a class="i-link" href="#manage">Manage →</a></div>';
+      if(others)home+='<div class="hidden-note">'+plural(others,'thing')+' about the server '+(others===1?'needs':'need')+' a look · <a class="i-link" href="#manage">Manage →</a></div>';
       if(hiddenCount)manage+='<div class="hidden-note">'+plural(hiddenCount,'notice')+' hidden · <button id="unhide">show</button></div>';
       document.getElementById('attention').innerHTML=banner+home;show('attention',!!(banner+home));
       document.getElementById('attention-manage').innerHTML=banner+manage;show('attention-manage',!!(banner+manage));
@@ -443,19 +445,24 @@
     var speedMode='full',speedOpen=false;
     function mbps(kib){return kib?Math.round(kib/1024*10)/10:0;}
     function speedText(l){
-      if(!l||!l.answering)return' Speed';
-      if(!l.limited)return' Full speed';
+      if(!l||!l.answering||!l.limited)return' Speed';
       var parts=[l.down?'↓ '+mbps(l.down)+' MB/s':'',l.up?'↑ '+mbps(l.up)+' MB/s':''].filter(Boolean);
       return' '+(parts.join(' · ')||'Limited');
     }
     function renderSpeed(l,fromServer){
       document.getElementById('speed-label').textContent=speedText(l);
       document.getElementById('speed-btn').classList.toggle('limited',!!(l&&l.limited));
+      // What "Normal limits" means: qBittorrent's own (config.toml), not unlimited
+      var normal=l&&l.answering?'Normal: ↓ '+(l.normal_down?mbps(l.normal_down)+' MB/s':'no limit')+' · ↑ '+(l.normal_up?(l.normal_up<1024?l.normal_up+' KB/s':mbps(l.normal_up)+' MB/s'):'no limit')+' (from config.toml)':'qBittorrent isn\'t answering';
+      document.getElementById('sp-normal').textContent=normal;
+      document.getElementById('speed-btn').title=l&&l.limited?'Limited by the dashboard · '+normal:normal;
       if(speedOpen&&!fromServer)return;   // don't overwrite what's being typed
       if(l&&l.answering){
         speedMode=l.limited?'limit':'full';
-        document.getElementById('sp-down').value=mbps(l.down);
-        document.getElementById('sp-up').value=mbps(l.up);
+        // qBittorrent's own default (10 KiB/s) shows as 0: start from a usable limit
+        var fresh=!l.limited&&mbps(l.down)===0&&mbps(l.up)===0;
+        document.getElementById('sp-down').value=fresh?10:mbps(l.down);
+        document.getElementById('sp-up').value=fresh?1:mbps(l.up);
       }
       paintSpeedMode();
     }
@@ -478,18 +485,21 @@
     function speedRequest(){
       if(speedMode==='full')return{limited:false};
       var d=parseFloat(document.getElementById('sp-down').value)||0,u=parseFloat(document.getElementById('sp-up').value)||0;
-      if(d<0||u<0)return null;
+      if(d<0||u<0)return'Speeds can\'t be negative';
+      if(Math.round(d*1024)===0&&Math.round(u*1024)===0)return'Set a download or upload limit, or choose Normal limits';
       return{limited:true,down:Math.round(d*1024),up:Math.round(u*1024)};
     }
     document.getElementById('sp-apply').addEventListener('click',function(){
       var body=speedRequest(),msg=document.getElementById('sp-msg');
-      if(!body){msg.textContent='Speeds can\'t be negative';return;}
+      if(typeof body==='string'){msg.textContent=body;return;}
       msg.textContent='Applying…';
       fetch('/api/control/speed',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'media-server'},body:JSON.stringify(body)})
         .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j};});})
         .then(function(res){
+          if(res.j.answering){renderSpeed(res.j,true);if(lastStatus)lastStatus.speed_limit=res.j;}
           if(!res.ok){msg.textContent=res.j.error||'Not applied';return;}
-          msg.textContent='Applied';renderSpeed(res.j,true);if(lastStatus)lastStatus.speed_limit=res.j;
+          // Partly applied says so (e.g. SABnzbd didn't take it)
+          msg.textContent=res.j.warning||'Applied';
         }).catch(function(){msg.textContent='Not applied: the dashboard couldn\'t reach it (only from this Mac, your home network or Tailscale)';});
     });
 

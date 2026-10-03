@@ -11,6 +11,10 @@ GET /speed: {"limited", "down", "up"} in KiB/s (0 = no limit that way).
 POST /speed: {"limited": true, "down": 5120, "up": 512} or {"limited": false};
 JSON only, with an X-Requested-With header, so a web page elsewhere can't
 make your browser change them (that needs a CORS preflight nginx won't pass).
+That isn't a login: anyone on the allowed networks can still change them.
+
+Changes are made one at a time (a lock), then read back: the answer says
+what actually took, and names a client that didn't.
 """
 from __future__ import annotations
 
@@ -23,6 +27,9 @@ from mediaserver import common as c
 from mediaserver.config import local
 
 MAX_KIB = 10_000_000   # about 10 GB/s: anything above is a typo
+# One change at a time: switching qBittorrent's mode is read-then-toggle, so
+# two devices applying at once could otherwise both toggle
+LOCK = threading.Lock()
 
 
 class Speed:
@@ -41,6 +48,8 @@ class Speed:
         return c.try_json(f"{local('sabnzbd')}/api?{query}&output=json&apikey={key}")
 
     def state(self) -> dict:
+        """What's in effect: limited (the dashboard's limits) or the normal
+        limits setup manages (normal_down/normal_up, 0 = none), in KiB/s"""
         mode = self.qbit("transfer/speedLimitsMode")
         prefs = self.qbit("app/preferences").json({}) or {}
         if not mode.ok or not prefs:
@@ -48,22 +57,39 @@ class Speed:
         queue = ((self.sab(mode="queue") or {}).get("queue")) or {}
         return {"answering": True, "limited": mode.body.strip() == b"1",
                 "down": int(prefs.get("alt_dl_limit") or 0) // 1024, "up": int(prefs.get("alt_up_limit") or 0) // 1024,
+                "normal_down": int(prefs.get("dl_limit") or 0) // 1024, "normal_up": int(prefs.get("up_limit") or 0) // 1024,
                 "sabnzbd_limit": int(float(queue.get("speedlimit_abs") or 0)) // 1024 if queue else None}
 
     def set(self, limited: bool, down: int = 0, up: int = 0) -> dict:
-        """Apply; the new state, or {"error"} when qBittorrent didn't take it"""
-        if limited:
-            r = self.qbit("app/setPreferences", {"json": json.dumps({"alt_dl_limit": down * 1024, "alt_up_limit": up * 1024})})
-            if not r.ok:
-                return {"error": "qBittorrent didn't accept the limits"}
-        mode = self.qbit("transfer/speedLimitsMode")
-        if not mode.ok:
-            return {"error": "qBittorrent isn't answering"}
-        if (mode.body.strip() == b"1") != limited:
-            self.qbit("transfer/toggleSpeedLimitsMode", {})
-        # SABnzbd: the same download limit, or none ("0")
-        self.sab(mode="config", name="speedlimit", value=f"{down}K" if limited and down else "0")
-        return self.state()
+        """Apply, one change at a time, then read back. The state, with
+        "warning" naming a client that didn't take it (partly applied), or
+        {"error"} when qBittorrent didn't"""
+        with LOCK:
+            if limited:
+                r = self.qbit("app/setPreferences", {"json": json.dumps({"alt_dl_limit": down * 1024, "alt_up_limit": up * 1024})})
+                if not r.ok:
+                    return {"error": "qBittorrent didn't accept the limits; nothing changed"}
+            mode = self.qbit("transfer/speedLimitsMode")
+            if not mode.ok:
+                return {"error": "qBittorrent isn't answering; nothing changed"}
+            if (mode.body.strip() == b"1") != limited and not self.qbit("transfer/toggleSpeedLimitsMode", {}).ok:
+                return {"error": "qBittorrent didn't switch its limits"}
+            # SABnzbd: the same download limit, or none ("0")
+            sab_answer = self.sab(mode="config", name="speedlimit", value=f"{down}K" if limited and down else "0")
+            state = self.state()
+        problems = []
+        if not state.get("answering"):
+            return {"error": "qBittorrent stopped answering; check its state in Manage"}
+        if state["limited"] != limited or (limited and (state["down"], state["up"]) != (down, up)):
+            problems.append("qBittorrent")
+        want_sab = down if limited else 0
+        if c.sabnzbd_key(self.config) and (sab_answer is None or (state.get("sabnzbd_limit") or 0) != want_sab):
+            problems.append("SABnzbd")
+        if problems == ["qBittorrent"] or problems == ["qBittorrent", "SABnzbd"]:
+            return {"error": f"{' and '.join(problems)} didn't take it", **state}
+        if problems:
+            state["warning"] = "Applied to qBittorrent, but SABnzbd didn't take it (Usenet downloads keep their old limit)"
+        return state
 
 
 def parse(body: bytes) -> tuple[bool, int, int] | str:

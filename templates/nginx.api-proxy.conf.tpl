@@ -59,7 +59,8 @@ location = /api/sabnzbd/ {
 # (mediaserver/control.py, run by dashstatus on this Mac). Only from this
 # Mac, the home network and Tailscale; it takes JSON with an
 # X-Requested-With header only, so another website can't make a browser
-# change it (that needs a CORS preflight, which isn't answered).
+# change it (that needs a CORS preflight, which isn't answered). That's not
+# a login: anyone on the allowed networks can change the limits.
 location = /api/control/speed {
     limit_except GET POST { deny all; }
     allow 127.0.0.1;
