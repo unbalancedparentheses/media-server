@@ -93,6 +93,19 @@
   /* Panels */
   .cols{display:grid;grid-template-columns:3fr 2fr;gap:0.9rem;align-items:start}
   .stack{display:flex;flex-direction:column;gap:0.9rem}
+  /* Pipeline stepper */
+  .item.req{align-items:flex-start}
+  .item.req .thumb{margin-top:0.15rem}
+  .steps{display:flex;flex-wrap:wrap;align-items:center;gap:0.25rem 0;margin-top:0.45rem}
+  .step{display:inline-flex;align-items:center;gap:0.25rem;font-size:0.62rem;color:var(--text3);white-space:nowrap}
+  .step i{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;font-style:normal;font-size:0.5rem;border:1px solid var(--border-hover)}
+  .step.st-done{color:var(--text2)}.step.st-done i{background:var(--green-dim);border-color:#4ade8055;color:var(--green)}
+  .step.st-active{color:var(--blue);font-weight:600}.step.st-active i{border-color:var(--blue);color:var(--blue);animation:pulse 1.6s ease-in-out infinite}
+  .step.st-problem{color:var(--red);font-weight:600}.step.st-problem i{border-color:var(--red);color:var(--red)}
+  .step-line{width:7px;height:1px;background:var(--border-hover);margin:0 0.2rem}
+  .step-now{font-size:0.68rem;color:var(--text2);margin-top:0.3rem}
+  .step-now b{color:var(--blue);font-weight:500}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.45}}
   .panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
   .p-head{display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:0.9rem 1.2rem;border-bottom:1px solid var(--border)}
   .p-head-title{font-size:0.85rem;font-weight:600}
@@ -215,7 +228,7 @@
     <div class="section">
       <div class="cols">
         <div class="panel">
-          <div class="p-head"><div class="p-head-title">Requests</div><div class="p-head-sub" id="req-sub"></div></div>
+          <div class="p-head"><div class="p-head-title">Requests &amp; progress</div><div class="p-head-sub" id="req-sub"></div></div>
           <div id="requests"><div class="empty">Loading…</div></div>
         </div>
         <div class="stack">
@@ -337,6 +350,21 @@
       sabnzbd:'SABnzbd',unpackerr:'Unpackerr',cleanuparr:'Cleanuparr',seerr:'Seerr',byparr:'Byparr',nginx:'Dashboard (nginx)',
       diskwatch:'diskwatch',netwatch:'netwatch',dashstatus:'dashstatus',postimport:'postimport'};
     function cpuText(v){return v>0&&v<0.1?'<0.1%':(v>=10?Math.round(v):v)+'%';}
+    // Where a title is: requested → searching → downloading → importing →
+    // checking & fixing → subtitles → ready; the current step says more
+    var STAGE_NAMES={requested:'Requested',searching:'Search',downloading:'Download',importing:'Import',checking:'Check & fix',subtitles:'Subtitles',ready:'Ready'};
+    function finished(stages){return stages.length&&stages.every(function(st){return st.state==='done';});}
+    function stepper(stages){
+      if(!stages.length)return'';
+      if(finished(stages))return'<div class="steps"><span class="step st-done"><i>✓</i>Ready to watch</span></div>';
+      var now=stages.filter(function(st){return st.state==='active'||st.state==='problem';});
+      var html='<div class="steps">'+stages.map(function(st){
+        var mark=st.state==='done'?'✓':st.state==='problem'?'!':st.state==='active'?'●':'';
+        return'<span class="step st-'+st.state+'" title="'+esc(STAGE_NAMES[st.name]+(st.detail?': '+st.detail:''))+'"><i>'+mark+'</i>'+STAGE_NAMES[st.name]+'</span>';
+      }).join('<span class="step-line"></span>')+'</div>';
+      var details=now.filter(function(st){return st.detail;}).map(function(st){return'<b>'+STAGE_NAMES[st.name]+':</b> '+esc(st.detail);});
+      return html+(details.length?'<div class="step-now">'+details.join(' · ')+'</div>':'');
+    }
     function tile(label,value,sub,href,cls,bar){
       var b=bar==null?'':'<div class="bar '+(bar.cls||'')+'"><i style="width:'+Math.min(100,bar.v)+'%"></i></div>';
       return(href?'<a class="tile" href="'+href+'">':'<div class="tile">')+'<div class="t-label">'+label+'</div><div class="t-value '+(cls||'')+'">'+value+'</div>'
@@ -371,18 +399,23 @@
         document.getElementById('latest').innerHTML=s.latest.map(function(c){return posterCard(c,{badge:c.new>1?c.new+' new':''});}).join('');
       }
 
-      // Requests, with what's really happening
+      // Requests and what's on its way, each with where it is in the pipeline
       var rq=s.requests_live;
       if(rq){
-        document.getElementById('req-sub').innerHTML='<span>'+num((s.requests||{}).total)+' total</span>';
+        var busy=rq.filter(function(r){return (r.stages||[]).some(function(st){return st.state==='active'&&st.name!=='subtitles';});}).length;
+        document.getElementById('req-sub').innerHTML='<span>'+(busy?busy+' in progress · ':'')+num((s.requests||{}).total)+' requested</span>';
+        // What's moving first, then the rest in request order
+        rq=rq.map(function(r,i){return{r:r,i:i};}).sort(function(a,b){
+          var fa=finished(a.r.stages||[])?1:0,fb=finished(b.r.stages||[])?1:0;return fa-fb||a.i-b.i;}).map(function(x){return x.r;});
         document.getElementById('requests').innerHTML=rq.length?rq.map(function(r){
-          var thumb=r.poster?'<img class="thumb" loading="lazy" src="https://image.tmdb.org/t/p/w92'+r.poster+'" alt="" onerror="this.style.visibility=\'hidden\'">':'<div class="thumb"></div>';
-          var href=r.state==='available'?watchUrl(r.watch):seerrBase+'/'+r.type+'/'+r.tmdb;
+          var src=r.poster?'https://image.tmdb.org/t/p/w92'+r.poster:r.poster_url;
+          var thumb=src?'<img class="thumb" loading="lazy" src="'+esc(src)+'" alt="" onerror="this.style.visibility=\'hidden\'">':'<div class="thumb"></div>';
+          var href=r.state==='available'?watchUrl(r.watch):(r.tmdb?seerrBase+'/'+r.type+'/'+r.tmdb:'#');
           var fix=r.state!=='available'&&adminUrl(r.admin);
-          return'<div class="item link">'+thumb+'<a class="i-info" href="'+href+'"><div class="i-title">'+esc(r.title)+(r.year?' ('+r.year+')':'')+'</div>'
-            +'<div class="i-sub">'+(r.type==='tv'?'Series':'Movie')+(r.by?' · '+esc(r.by):'')+' · '+ago(r.date)+'</div></a>'
-            +'<div class="i-right"><span class="pill s-'+r.state+'">'+esc(r.text)+'</span>'
-            +(r.state==='available'?'<a class="i-link" href="'+href+'">Watch →</a>':fix?'<a class="i-link" href="'+fix+'">Open in '+(r.type==='tv'?'Sonarr':'Radarr')+' →</a>':'')+'</div></div>';
+          var sub=(r.type==='tv'?'Series':'Movie')+(r.by?' · requested by '+esc(r.by):r.date?'':' · on its way')+(r.date?' · '+ago(r.date):'');
+          return'<div class="item link req">'+thumb+'<div class="i-info"><a href="'+href+'"><div class="i-title">'+esc(r.title)+(r.year?' ('+r.year+')':'')+'</div>'
+            +'<div class="i-sub">'+sub+'</div></a>'+stepper(r.stages||[])+'</div>'
+            +'<div class="i-right">'+(r.state==='available'?'<a class="i-link" href="'+href+'">Watch →</a>':fix?'<a class="i-link" href="'+fix+'">Open in '+(r.type==='tv'?'Sonarr':'Radarr')+' →</a>':'')+'</div></div>';
         }).join(''):'<div class="empty">No requests yet · <a class="i-link" href="'+seerrBase+'">request something</a></div>';
       }
 

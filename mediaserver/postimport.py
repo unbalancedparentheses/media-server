@@ -701,6 +701,16 @@ class Worker:
         for key, empty in (("last_import", {}), ("rejections", {}), ("seen", {}), ("recent", []),
                            ("pending", {}), ("failures", {})):
             self.state.setdefault(key, empty)
+        self.current: dict | None = None
+
+    def working(self, path, title, what):
+        """What's being done right now (shown on the dashboard while a long
+        rewrite or OCR runs); None when idle"""
+        self.current = {"path": str(path), "title": title, "what": what, "since": int(time.time())} if what else None
+        try:
+            c.write_json(STATE / "status.json", self.status())
+        except OSError:
+            pass
 
     def remember(self, title, what):
         self.state["recent"] = ([{"time": int(time.time()), "title": title, "what": what}]
@@ -730,6 +740,7 @@ class Worker:
             if source is not None and not room_for(path, s):
                 done = False
             elif source is not None:
+                self.working(path, title, "adding stereo audio")
                 if add_stereo(path, info, source):
                     changed = True
                     self.remember(title, f"added stereo audio (from {source.get('codec_name')}) so browsers play it directly")
@@ -738,6 +749,7 @@ class Worker:
                     failed.append("stereo audio")
         if s["ocr_subtitles"]:
             for lang, stream in ocr_targets(info, path, s["subtitle_languages"], s["want"]):
+                self.working(path, title, f"reading the {lang} picture subtitles into text")
                 result = ocr(path, lang, stream)
                 if result == "written":
                     self.remember(title, f"turned the {lang} picture subtitles into text")
@@ -753,6 +765,7 @@ class Worker:
             if (plan or dropped) and not room_for(path, s):
                 done = False
             elif plan or dropped:
+                self.working(path, title, "setting the default audio and subtitles")
                 if set_defaults(path, info, plan, dropped):
                     changed = True
                     if dropped:
@@ -762,6 +775,7 @@ class Worker:
                         self.remember(title, "set the default " + describe_defaults(probe(path) or info, path))
                 else:
                     failed.append("default tracks")
+        self.working(path, title, None)
         if changed:
             jellyfin_updated(path)
         key = str(path)
@@ -944,6 +958,14 @@ class Worker:
             "looking": [{"title": r["title"], "reason": r["reason"], "since": r["time"]}
                         for r in rejections if r.get("status") == "looking"],
             "kept": [{"title": r["title"], "reason": r["reason"]} for r in rejections if r.get("status") == "kept"],
+            # For the dashboard's pipeline: what's being worked on, imports
+            # waiting to be checked (by Sonarr/Radarr ids), files whose fixes
+            # are being retried
+            "current": self.current,
+            "queued": [{"app": e["app"], "movieId": e["record"].get("movieId"), "seriesId": e["record"].get("seriesId"),
+                        "episodeId": e["record"].get("episodeId"), "path": (e["record"].get("data") or {}).get("importedPath"),
+                        "suspect": (e.get("suspect") or {}).get("problem")} for e in self.state["pending"].values()],
+            "retrying": sorted(self.state["failures"]),
         }
 
 
