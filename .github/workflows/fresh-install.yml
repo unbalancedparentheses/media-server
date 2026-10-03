@@ -1,12 +1,21 @@
 name: Fresh install
 
-# The whole lifecycle on a clean Mac: what a new user runs. Weekly and on
-# demand (the first build of Seerr and Sonarr takes a while), not on every
-# push; CI covers syntax, ShellCheck, config and the failure-path tests.
+# The whole lifecycle on a clean Mac: what a new user runs, on every push
+# to main. The Mac is clean (no ~/media, no services); only the Nix store is
+# restored from the previous run, the way a user's Nix fetches from a cache,
+# so the services aren't rebuilt each time. Weekly too, and on demand.
 on:
+  push:
+    branches: ["main"]
+    paths-ignore: ["README.md", "renovate.json"]
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * 1"
+
+# A newer push makes a running check pointless
+concurrency:
+  group: fresh-install-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lifecycle:
@@ -20,6 +29,26 @@ jobs:
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
+
+      # The previous run's Nix store. Keyed on what decides the builds; a
+      # change restores the closest older store and rebuilds only what
+      # changed. Before saving, garbage beyond 7 GB (build-only leftovers)
+      # is collected; what the services run is kept by the root below.
+      - name: Restore the Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-macos: 7G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+
+      # Uninstall (the last step) removes the install's own GC root; this one
+      # keeps the services in the store that gets saved
+      - name: Build
+        run: nix build .#default .#manifest --out-link "$RUNNER_TEMP/keep"
 
       - name: Fresh install
         run: nix run .#install -- --yes
