@@ -23,13 +23,14 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import http.client
 import http.server
 import os
 import shutil
-import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
@@ -103,6 +104,49 @@ def make_torrent(folder: Path, out: Path, piece: int = 1 << 20) -> str:
                     "x-e2e-run": os.urandom(8).hex()}
     out.write_bytes(bencode({"info": torrent_info, "created by": "media-server e2e"}))
     return hashlib.sha1(bencode(torrent_info)).hexdigest()
+
+
+def download(url: str, dest: Path, size: int, timeout: float = 60) -> bool:
+    """Download into <dest>.part, continuing a previous partial download,
+    and rename it to <dest> only once it has exactly <size> bytes"""
+    part = dest.with_name(dest.name + ".part")
+    have = part.stat().st_size if part.exists() else 0
+    if have > size:
+        part.unlink()
+        have = 0
+    # Behind Cloudflare, which refuses urllib's default "Python-urllib"
+    headers = {"User-Agent": "media-server-e2e/1 (+https://github.com/unbalancedparentheses/media-server)"}
+    if have:
+        headers["Range"] = f"bytes={have}-"
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            # A server that ignores the range sends everything again
+            mode = "ab" if have and resp.status == 206 else "wb"
+            done = have if mode == "ab" else 0
+            shown = -1
+            with part.open(mode) as f:
+                while chunk := resp.read(1 << 20):
+                    f.write(chunk)
+                    done += len(chunk)
+                    pct = done * 100 // size
+                    if pct >= shown + 10:
+                        shown = pct - pct % 10
+                        print(f"   {shown}%", flush=True)
+    except (OSError, ValueError, http.client.HTTPException) as e:
+        print(f"   {e!r}", flush=True)
+        return False   # what arrived stays in .part for the next try
+    got = part.stat().st_size
+    if got < size:
+        # The connection ended early: kept, the next try continues from here
+        print(f"   stopped at {got} of {size} bytes", flush=True)
+        return False
+    if got > size:
+        print(f"   got {got} bytes, expected {size}; not what was expected, removed", flush=True)
+        part.unlink()
+        return False
+    os.replace(part, dest)
+    return True
 
 
 def serve(folder: Path, port: int = PORT) -> http.server.ThreadingHTTPServer:
@@ -522,8 +566,8 @@ class E2E:
         src = self.dir / "tears_of_steel_720p.mov"
         if not src.exists() or src.stat().st_size != SOURCE_SIZE:
             step("Downloading Tears of Steel (CC BY, 372 MB) from download.blender.org...")
-            if subprocess.run(["curl", "-fL", "--progress-bar", "--max-time", "3600", "-o", str(src), SOURCE_URL]).returncode:
-                raise err("Download failed")
+            if not download(SOURCE_URL, src, SOURCE_SIZE):
+                raise err("Download failed (run the test again to continue where it stopped)")
         return src
 
     def run(self, keep: bool = False) -> int:

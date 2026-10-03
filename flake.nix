@@ -70,24 +70,6 @@
             }
           );
 
-          # Byparr isn't in nixpkgs. Run the pinned source with uv, as upstream
-          # documents; the venv, Python and patched Firefox live in @STATE@.
-          byparrStart = pkgs.writeShellScript "byparr-start" ''
-            set -eu
-            state="$BYPARR_STATE"
-            mkdir -p "$state"
-            export UV_PROJECT_ENVIRONMENT="$state/venv"
-            export UV_CACHE_DIR="$state/uv-cache"
-            export UV_PYTHON_INSTALL_DIR="$state/python"
-            export PYTHONDONTWRITEBYTECODE=1
-            cd ${byparr}
-            ${exe pkgs.uv} sync --frozen --no-dev --quiet
-            if [ ! -e "$state/browser-fetched" ]; then
-              ${exe pkgs.uv} run --frozen --no-dev python -m invisible_playwright fetch
-              touch "$state/browser-fetched"
-            fi
-            exec ${exe pkgs.uv} run --frozen --no-dev python main.py
-          '';
 
           # Cleanuparr isn't in nixpkgs; upstream publishes self-contained
           # macOS builds. It keeps its data in CLEANUPARR_CONFIG_PATH.
@@ -141,6 +123,9 @@
               exec ${python} -m mediaserver.${name} "$@"
             '';
 
+          # Gets indexers past Cloudflare; Byparr isn't in nixpkgs, so its
+          # pinned source runs with uv (mediaserver/byparr.py)
+          byparrStart = pyService "byparr" [ pkgs.uv ];
           # Free space on the media disk; a notification when it runs low
           diskwatchStart = pyService "diskwatch" [ ];
           # Keeps the stack sensible when the Mac goes offline and comes back
@@ -224,6 +209,8 @@
                 HOST = "127.0.0.1";
                 PORT = "8191";
                 BYPARR_STATE = "@STATE@/byparr";
+                BYPARR_SRC = "${byparr}";
+                BYPARR_UV = exe pkgs.uv;
                 # Its Firefox runs with no window at all; the default opens
                 # real windows, which made macOS switch Spaces and move windows
                 INVPW_TRUE_HEADLESS = "1";
@@ -389,6 +376,7 @@
                   ps.coverage
                 ]))
                 jellyfin-ffmpeg
+                nginx
               ];
               text = ''
                 # With coverage: the report lists what isn't tested yet, and
