@@ -152,3 +152,72 @@ class ServicesUsage(unittest.TestCase):
         self.assertEqual(by["bazarr"]["cpu"], 0.5)
         self.assertEqual(u["cpu_pct"], 16.5)
         self.assertEqual(u["services"][0]["name"], "jellyfin")  # busiest first
+
+
+class Answering(unittest.TestCase):
+    """A download client that doesn't answer is said so, never counted as
+    "nothing downloading" (the dashboard showed an empty queue)"""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        (self.root / "config/sabnzbd").mkdir(parents=True)
+        (self.root / "config/sabnzbd/sabnzbd.ini").write_text("api_key = k\n")
+        self.col = Collector(self.root / "config", self.root / "state", self.root, 50, 10)
+
+    def answers(self, transfer=None, sab=None):
+        def try_json(url, headers=None, default=None, timeout=10):
+            if "transfer/info" in url:
+                return transfer
+            if "sabnzbd" in url or ":8080" in url:
+                return sab
+            return default
+        return mock.patch.object(c, "try_json", try_json)
+
+    def test_both_answering(self):
+        torrents = [{"progress": 0.5, "state": "downloading"}, {"progress": 1, "state": "stalledUP"}]
+        with self.answers({"dl_info_speed": 1000, "up_info_speed": 50}, {"queue": {"kbpersec": "1", "noofslots": 2}}):
+            d = self.col.downloads(torrents)
+        self.assertEqual(d["answering"], {"qbittorrent": True, "sabnzbd": True})
+        self.assertEqual((d["downloading"], d["seeding"], d["dl_speed"]), (3, 1, 2024))
+
+    def test_qbittorrent_down_is_unknown_not_zero(self):
+        with self.answers(None, {"queue": {"kbpersec": "0", "noofslots": 1}}):
+            d = self.col.downloads(None)
+        self.assertEqual(d["answering"], {"qbittorrent": False, "sabnzbd": True})
+        self.assertEqual((d["downloading"], d["seeding"], d["dl_speed"], d["up_speed"]), (None, None, None, None))
+        texts = [a["text"] for a in self.col.attention({"downloads": d}, {}, [])]
+        self.assertTrue(any(t.startswith("qBittorrent isn't answering") for t in texts), texts)
+
+    def test_sabnzbd_down_or_refusing(self):
+        for sab in (None, {"status": False, "error": "API Key Incorrect"}):
+            with self.answers({"dl_info_speed": 0}, sab):
+                d = self.col.downloads([])
+            self.assertEqual(d["answering"], {"qbittorrent": True, "sabnzbd": False})
+            self.assertIsNone(d["downloading"])
+            self.assertIsNotNone(d["seeding"])   # torrents are still known
+            texts = [a["text"] for a in self.col.attention({"downloads": d}, {}, [])]
+            self.assertTrue(any(t.startswith("SABnzbd isn't answering") for t in texts))
+
+    def test_sabnzbd_not_set_up_isnt_a_problem(self):
+        (self.root / "config/sabnzbd/sabnzbd.ini").unlink()
+        with self.answers({"dl_info_speed": 0}, None):
+            d = self.col.downloads([])
+        self.assertEqual(d["answering"]["sabnzbd"], None)
+        self.assertEqual(d["downloading"], 0)
+        self.assertFalse(any("SABnzbd" in a["text"] for a in self.col.attention({"downloads": d}, {}, [])))
+
+
+class MediaCarryOver(unittest.TestCase):
+    def test_failed_part_keeps_its_last_good_data_and_age(self):
+        from mediaserver import dashmedia
+        first = dashmedia.carry_over(None, {"requests_live": ["a"], "latest": ["x"], "media_failed": [], "media_updated": 100})
+        self.assertEqual(first["media_ages"]["requests_live"], 100)
+        second = dashmedia.carry_over(first, {"latest": ["y"], "media_failed": ["requests_live"], "media_updated": 400})
+        self.assertEqual(second["requests_live"], ["a"])          # not gone
+        self.assertEqual(second["media_ages"]["requests_live"], 100)   # and it says from when
+        self.assertEqual((second["latest"], second["media_ages"]["latest"]), (["y"], 400))
+        # Never worked: nothing to carry, and no age
+        fresh = dashmedia.carry_over(None, {"media_failed": ["health"], "media_updated": 5})
+        self.assertNotIn("health", fresh)
+        self.assertNotIn("health", fresh["media_ages"])

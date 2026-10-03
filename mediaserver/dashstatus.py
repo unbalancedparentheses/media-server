@@ -142,22 +142,30 @@ class Collector:
                 "reasons": trans.get("TranscodeReasons") or []})
         return out
 
-    def downloads(self, torrents: list) -> dict:
-        transfer = c.try_json(f"{local('qbittorrent')}/api/v2/transfer/info", default={}) or {}
+    def downloads(self, torrents: list | None) -> dict:
+        """Counts and speeds from the sources that answered; "answering" says
+        which did, so a source that's down never reads as "nothing there"
+        (None: not set up). torrents is None when qBittorrent didn't answer."""
+        transfer = c.try_json(f"{local('qbittorrent')}/api/v2/transfer/info") if torrents is not None else None
         key = c.sabnzbd_key(self.config)
-        sab = (c.try_json(local("sabnzbd") + f"/api?mode=queue&output=json&apikey={key}", default={}) or {}) if key else {}
-        queue = sab.get("queue") or {}
+        sab = c.try_json(local("sabnzbd") + f"/api?mode=queue&output=json&apikey={key}") if key else None
+        queue = (sab or {}).get("queue") if isinstance(sab, dict) else None
+        qbit_ok, sab_ok = torrents is not None and isinstance(transfer, dict), (isinstance(queue, dict) if key else None)
         try:
-            sab_speed = float(queue.get("kbpersec") or 0)
+            sab_speed = float((queue or {}).get("kbpersec") or 0)
         except ValueError:
             sab_speed = 0.0
         active = re.compile(r"downloading|forcedDL|metaDL|stalledDL|queuedDL")
-        return {"dl_speed": int((transfer.get("dl_info_speed") or 0) + sab_speed * 1024),
-                "up_speed": transfer.get("up_info_speed") or 0,
-                "downloading": sum(1 for t in torrents if t["progress"] < 1 and active.search(t["state"]))
-                               + int(queue.get("noofslots") or 0),
-                "stalled": sum(1 for t in torrents if t["progress"] < 1 and t["state"] in ("stalledDL", "metaDL")),
-                "seeding": sum(1 for t in torrents if t["progress"] >= 1 and re.search(r"uploading|stalledUP|forcedUP", t["state"]))}
+        rows = torrents or []
+        known = qbit_ok and sab_ok is not False
+        return {"answering": {"qbittorrent": qbit_ok, "sabnzbd": sab_ok},
+                "dl_speed": int(((transfer or {}).get("dl_info_speed") or 0) + sab_speed * 1024) if known else None,
+                "up_speed": (transfer or {}).get("up_info_speed") or 0 if qbit_ok else None,
+                "downloading": sum(1 for t in rows if t["progress"] < 1 and active.search(t["state"]))
+                               + int((queue or {}).get("noofslots") or 0) if known else None,
+                "stalled": sum(1 for t in rows if t["progress"] < 1 and t["state"] in ("stalledDL", "metaDL")) if qbit_ok else None,
+                "seeding": sum(1 for t in rows if t["progress"] >= 1 and re.search(r"uploading|stalledUP|forcedUP", t["state"]))
+                           if qbit_ok else None}
 
     # ─── Slow: every few minutes ─────────────────────────────────
 
@@ -241,6 +249,11 @@ class Collector:
 
     def attention(self, fast: dict, slow: dict, torrents: list) -> list:
         out = []
+        answering = (fast.get("downloads") or {}).get("answering") or {}
+        for name, label in (("qbittorrent", "qBittorrent"), ("sabnzbd", "SABnzbd")):
+            if answering.get(name) is False:
+                out.append({"level": "error", "text": f"{label} isn't answering: its downloads can't be seen, and new ones can't start",
+                            "action": f"nix run .#logs -- {name}; nix run .#restart -- {name}"})
         conn = c.read_text(self.state / "netwatch/connection")
         postimport = c.read_json(self.state / "postimport/status.json", {}) or {}
         disk = slow.get("disk") or {}
@@ -287,16 +300,18 @@ class Collector:
         # The media part with it, and every minute while part of it fails
         # (e.g. the services are still starting after a restart)
         if slow_due or self.media_data is None or (self.round_no % 4 == 0 and self.media_data.get("media_failed")):
-            self.media_data = self.media_part()
+            self.media_data = dashmedia.carry_over(self.media_data, self.media_part())
         self.round_no += 1
-        torrents = c.try_json(f"{local('qbittorrent')}/api/v2/torrents/info", default=[]) or []
+        # None (not []) when qBittorrent doesn't answer
+        torrents = c.try_json(f"{local('qbittorrent')}/api/v2/torrents/info")
+        torrents = torrents if isinstance(torrents, list) else None
         system = self.system()
         fast = {"system": system, "usage": self.services_usage(system.get("cpus") or 1, system.get("mem_total") or 0),
                 "playing": self.playing(), "downloads": self.downloads(torrents),
                 "connection": c.read_text(self.state / "netwatch/connection") or "unknown",
                 "fixing": dashmedia.fixing_now(self.state)}
         slow = self.slow or {}
-        status = {**fast, **slow, **(self.media_data or {}), "attention": self.attention(fast, slow, torrents),
+        status = {**fast, **slow, **(self.media_data or {}), "attention": self.attention(fast, slow, torrents or []),
                   "updated": int(time.time()), "slow_updated": self.slow_at}
         c.write_json(out, status, mode=0o644, compact=True)
 

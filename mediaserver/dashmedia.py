@@ -467,6 +467,25 @@ def health():
     return out
 
 
+MEDIA_PARTS = ("continue", "latest", "requests_live", "upcoming", "health")
+
+
+def carry_over(previous: dict | None, new: dict) -> dict:
+    """A part that failed this time keeps its last good data (instead of
+    disappearing), with when that was in media_ages, so the page can say
+    it's from earlier rather than show an empty list"""
+    previous = previous or {}
+    ages = dict(previous.get("media_ages") or {})
+    for name in MEDIA_PARTS:
+        if name in new.get("media_failed", []):
+            if name in previous:
+                new[name] = previous[name]
+        else:
+            ages[name] = new.get("media_updated")
+    new["media_ages"] = ages
+    return new
+
+
 def collect() -> dict:
     result, failed = {}, []
     for name, part in (("continue", continue_watching), ("latest", latest), ("requests_live", requests),

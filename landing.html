@@ -524,7 +524,25 @@
             }).join('')+'<div class="up-row tag">CPU: share of the whole Mac, averaged over the last minute; includes what each service started (e.g. Jellyfin\'s conversions)</div>':'');
         if(down.length)document.getElementById('uptime-box').open=true;
       }
-      document.getElementById('updated').textContent='Updated '+ago(new Date(s.updated*1000).toISOString());
+      document.getElementById('updated').innerHTML=freshness(s);
+    }
+    // How old each part is: live status (every 15 s), requests and library
+    // (every few minutes), indexers and disk; a part that failed to refresh
+    // says so and how old what's shown is; a status file that stopped
+    // updating is a warning, not a quiet old timestamp
+    var PART_NAMES={'continue':'continue watching',latest:'recently added',requests_live:'requests',upcoming:'coming up',health:'library health'};
+    function when(t){return t?ago(new Date(t*1000).toISOString()):'never';}
+    function freshness(s){
+      var age=Date.now()/1000-(s.updated||0),parts=[];
+      if(age>120)parts.push('<span class="t-warn">Live status is '+when(s.updated).replace(' ago','')+' old; the dashstatus service may have stopped (nix run .#logs -- dashstatus)</span>');
+      else parts.push('Live status '+when(s.updated));
+      parts.push('requests and library '+when(s.media_updated));
+      parts.push('indexers and disk '+when(s.slow_updated));
+      var failed=(s.media_failed||[]).map(function(n){
+        var t=(s.media_ages||{})[n];
+        return PART_NAMES[n]+(t?' (showing '+when(t)+')':' (nothing yet)');});
+      if(failed.length)parts.push('<span class="t-warn">couldn\'t refresh '+failed.join(', ')+'</span>');
+      return parts.join(' · ');
     }
     function refreshStatus(){
       fetch('/status.json',{cache:'no-store'}).then(function(r){return r.json()}).then(renderStatus).catch(function(){
@@ -547,36 +565,45 @@
       return'<div class="dl"><div class="dl-top"><span class="dl-name" title="'+esc(name)+'">'+esc(name)+'</span><span class="dl-pct">'+(right||pct+'%')+'</span></div>'
         +'<div class="dl-meta">'+meta+'</div>'+(pct==null?'':'<div class="bar '+cls+'"><i style="width:'+pct+'%"></i></div>')+'</div>';
     }
+    // Each source on its own: one that doesn't answer is said so, never
+    // shown as "nothing downloading"; speeds only count what answered
+    function getJson(url){
+      return fetch(url,{cache:'no-store'}).then(function(r){if(!r.ok)throw r.status;return r.json();}).catch(function(){return null;});
+    }
+    function dlSources(torrents,sabAnswer){
+      var sab=sabAnswer&&sabAnswer.queue,qbOk=Array.isArray(torrents),sabOk=!!(sab&&typeof sab==='object');
+      var rows='',down=0,up=0,seeding=[],notes='';
+      if(qbOk){
+        var active=torrents.filter(function(t){return t.progress<1||QB_ACTIVE.test(t.state);});
+        seeding=torrents.filter(function(t){return active.indexOf(t)<0;});
+        torrents.forEach(function(t){down+=t.dlspeed;up+=t.upspeed;});
+        active.sort(function(a,b){return b.progress-a.progress;});
+        active.forEach(function(t){
+          var st=qbState(t);
+          rows+=dlRow(t.name,Math.floor(t.progress*100),'<span>'+st[0]+'</span><span>'+fmtSize(t.size)+'</span>'+(t.eta&&t.dlspeed?'<span>'+fmtEta(t.eta)+'</span>':'')+(t.category?'<span>'+esc(t.category)+'</span>':''),st[1]);
+        });
+      }else notes+='<div class="empty t-bad">qBittorrent isn\'t answering, so torrent downloads can\'t be shown</div>';
+      if(sabOk){
+        down+=(parseFloat(sab.kbpersec)||0)*1024;
+        (sab.slots||[]).forEach(function(x){
+          rows+=dlRow(x.filename,Math.round(parseFloat(x.percentage)||0),'<span>Usenet</span><span>'+esc(x.size)+'</span>'+(x.timeleft?'<span>'+esc(x.timeleft)+' left</span>':'')+(x.cat?'<span>'+esc(x.cat)+'</span>':''),'');
+        });
+      }else notes+='<div class="empty t-bad">SABnzbd isn\'t answering, so Usenet downloads can\'t be shown'+(sabAnswer&&sabAnswer.error?' ('+esc(sabAnswer.error)+')':'')+'</div>';
+      return{qbOk:qbOk,sabOk:sabOk,rows:rows,notes:notes,down:down,up:up,seeding:seeding};
+    }
     function refreshDownloads(){
-      Promise.all([
-        fetch('/api/qbt/torrents/info').then(function(r){return r.json()}).catch(function(){return null}),
-        fetch('/api/sabnzbd/?mode=queue&output=json').then(function(r){return r.json()}).catch(function(){return null})
-      ]).then(function(res){
-        var torrents=res[0],sab=(res[1]||{}).queue||{},slots=sab.slots||[];
-        var html='',down=0,up=0;
-        if(torrents){
-          var active=torrents.filter(function(t){return t.progress<1||QB_ACTIVE.test(t.state);});
-          var seeding=torrents.filter(function(t){return active.indexOf(t)<0;});
-          torrents.forEach(function(t){down+=t.dlspeed;up+=t.upspeed;});
-          active.sort(function(a,b){return b.progress-a.progress;});
-          active.forEach(function(t){
-            var st=qbState(t);
-            html+=dlRow(t.name,Math.floor(t.progress*100),'<span>'+st[0]+'</span><span>'+fmtSize(t.size)+'</span>'+(t.eta&&t.dlspeed?'<span>'+fmtEta(t.eta)+'</span>':'')+(t.category?'<span>'+esc(t.category)+'</span>':''),st[1]);
-          });
-          slots.forEach(function(s){
-            html+=dlRow(s.filename,Math.round(parseFloat(s.percentage)||0),'<span>Usenet</span><span>'+esc(s.size)+'</span>'+(s.timeleft?'<span>'+esc(s.timeleft)+' left</span>':'')+(s.cat?'<span>'+esc(s.cat)+'</span>':''),'');
-          });
-          if(!html)html='<div class="empty">Nothing downloading right now</div>';
-          if(seeding.length){
-            var open=store('seedingOpen')?' open':'';
-            html+='<details class="more-list" id="seeding"'+open+'><summary>'+plural(seeding.length,'finished download')+' sharing back (seeding) · ↑ '+fmtSpeed(up)+' ▾</summary>'
-              +seeding.map(function(t){return dlRow(t.name,null,'<span>'+fmtSize(t.size)+'</span><span>ratio '+(t.ratio||0).toFixed(2)+'</span>'+(t.upspeed?'<span>↑ '+fmtSpeed(t.upspeed)+'</span>':'')+(t.category?'<span>'+esc(t.category)+'</span>':''),'','');}).join('')+'</details>';
-          }
-        }else html='<div class="empty">Can\'t reach qBittorrent</div>';
+      Promise.all([getJson('/api/qbt/torrents/info'),getJson('/api/sabnzbd/?mode=queue&output=json')]).then(function(res){
+        var d=dlSources(res[0],res[1]),html=d.notes+d.rows;
+        if(!d.rows&&d.qbOk&&d.sabOk)html='<div class="empty">Nothing downloading right now</div>';
+        if(d.seeding.length){
+          var open=store('seedingOpen')?' open':'';
+          html+='<details class="more-list" id="seeding"'+open+'><summary>'+plural(d.seeding.length,'finished download')+' sharing back (seeding) · ↑ '+fmtSpeed(d.up)+' ▾</summary>'
+            +d.seeding.map(function(t){return dlRow(t.name,null,'<span>'+fmtSize(t.size)+'</span><span>ratio '+(t.ratio||0).toFixed(2)+'</span>'+(t.upspeed?'<span>↑ '+fmtSpeed(t.upspeed)+'</span>':'')+(t.category?'<span>'+esc(t.category)+'</span>':''),'','');}).join('')+'</details>';
+        }
         document.getElementById('downloads').innerHTML=html;
         var sd=document.getElementById('seeding');
         if(sd)sd.addEventListener('toggle',function(){store('seedingOpen',sd.open);});
-        document.getElementById('dl-stats').innerHTML='<span style="color:var(--green)">↓ '+fmtSpeed(down+(parseFloat(sab.kbpersec)||0)*1024)+'</span><span style="color:var(--blue)">↑ '+fmtSpeed(up)+'</span>';
+        document.getElementById('dl-stats').innerHTML='<span style="color:var(--green)">↓ '+(d.qbOk&&d.sabOk?fmtSpeed(d.down):'–')+'</span><span style="color:var(--blue)">↑ '+(d.qbOk?fmtSpeed(d.up):'–')+'</span>';
       });
     }
     refreshDownloads();setInterval(refreshDownloads,5000);
