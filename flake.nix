@@ -306,14 +306,6 @@
               bash
               coreutils
               curl
-              gnused
-              gnugrep
-              gnutar
-              gzip
-              gawk
-              jq
-              openssl
-              sqlite
               (python3.withPackages (ps: [
                 ps.pyyaml
                 ps.bcrypt
@@ -382,7 +374,7 @@
           type = "app";
           program = toString (mkStack pkgs).postimportStart;
         };
-        # Failure-path and post-import tests (no services needed)
+        # Unit and failure-path tests against fake services (no real services needed)
         unit = {
           type = "app";
           program = nixpkgs.lib.getExe (
@@ -391,23 +383,14 @@
               runtimeInputs = with pkgs; [
                 bash
                 coreutils
-                gnutar
-                gzip
-                gnused
-                gnugrep
-                gawk
-                jq
                 (python3.withPackages (ps: [
                   ps.pyyaml
                   ps.bcrypt
                   ps.coverage
                 ]))
-                sqlite
                 jellyfin-ffmpeg
               ];
               text = ''
-                bash ${self}/tests/recovery.sh
-                echo "Python tests"
                 # With coverage: the report lists what isn't tested yet, and
                 # the run fails if coverage drops below the floor
                 COVERAGE_FILE=$(mktemp -d)/coverage

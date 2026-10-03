@@ -21,21 +21,20 @@ jobs:
 
       - name: Bash Syntax
         run: |
-          for f in setup.sh install.sh scripts/*.sh scripts/steps/*.sh tests/*.sh; do
+          for f in setup.sh install.sh; do
             bash -n "$f"
           done
 
       - name: ShellCheck
-        run: nix develop -c shellcheck -x -S warning setup.sh install.sh scripts/*.sh scripts/steps/*.sh tests/*.sh
+        run: nix develop -c shellcheck -x -S warning setup.sh install.sh
 
-      # The Python parts (post-import checks, dashboard data, config checks)
+      # Setup and the services are Python (mediaserver/)
       - name: Pyright
         run: nix develop -c pyright
 
-      # Interrupted password changes, backup/restore (through setup.sh), e2e
-      # cleanup when services don't answer; run with setup's shell settings,
-      # no services needed
-      - name: Failure-path tests
+      # Unit and failure-path tests against fake services, with a coverage
+      # floor; no real services needed
+      - name: Tests
         run: nix run .#unit
 
       # The example ships with password "changeme", which setup rejects on
@@ -54,12 +53,17 @@ jobs:
             set -euo pipefail
             dir="$RUNNER_TEMP/nginx"
             mkdir -p "$dir/temp" "$dir/www"
-            export NGINX_MIME_TYPES="$(dirname "$(dirname "$(command -v nginx)")")/conf/mime.types"
-            export DASHBOARD_PORT=8080 ADMIN_HOST=127.0.0.1
-            for v in SONARR_KEY RADARR_KEY JELLYFIN_API_KEY SEERR_KEY SABNZBD_KEY; do export "$v=0123456789abcdef"; done
-            SCRIPT_DIR=$PWD
-            source scripts/setup-services.sh
-            render_template templates/nginx.conf.tpl "$dir/nginx.conf"
-            render_template templates/nginx.api-proxy.conf.tpl "$dir/api-proxy.conf"
+            mime="$(dirname "$(dirname "$(command -v nginx)")")/conf/mime.types"
+            python3 - "$dir" "$mime" <<PY
+          import sys
+          from pathlib import Path
+          from mediaserver.steps.host import render
+          out, mime = Path(sys.argv[1]), sys.argv[2]
+          key = "0123456789abcdef"
+          values = {"NGINX_MIME_TYPES": mime, "DASHBOARD_PORT": 8080, "ADMIN_HOST": "127.0.0.1",
+                    "JELLYFIN_API_KEY": key, "SEERR_KEY": key, "SABNZBD_KEY": key}
+          (out / "nginx.conf").write_text(render(Path("templates/nginx.conf.tpl"), values))
+          (out / "api-proxy.conf").write_text(render(Path("templates/nginx.api-proxy.conf.tpl"), values))
+          PY
             nginx -t -e stderr -p "$dir" -c "$dir/nginx.conf"
           '

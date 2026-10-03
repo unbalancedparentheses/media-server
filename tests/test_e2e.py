@@ -426,6 +426,24 @@ class Cleanup(World):
         self.assertIn("Jellyfin still lists a test item", out)
         self.assertTrue(f.exists())
 
+    def test_jellyfin_asked_to_scan_again_until_it_forgets(self):
+        self.own(library_paths=["/m/Tears.mov"])
+        self.stack.jellyfin.items = [{"Type": "Movie", "Path": "/m/Tears.mov"}]
+        scans = []
+
+        @first(self.stack.jellyfin, "POST", "/Library/Refresh")
+        def refresh(req):
+            # The first scan was already running and is dropped
+            scans.append(1)
+            if len(scans) >= 2:
+                self.stack.jellyfin.items = []
+            return 204, None
+        test = e2e.E2E(self.cfg)
+        test.jellyfin.login()
+        ok, _ = quiet(test.cleanup)
+        self.assertTrue(ok)
+        self.assertEqual(len(scans), 2)
+
     def test_seerr_request_without_media_deleted_directly(self):
         self.own(seerr_request_id=4)
         deleted = []

@@ -284,13 +284,20 @@ class E2E:
         # Jellyfin must forget the test's files (recorded paths, or named
         # with the tag) before Seerr
         if self.jellyfin.token:
-            try:
-                self.jellyfin.post("Library/Refresh")
-            except ApiError:
-                pass
             library = set(record.get("library_paths", []))
+            last_scan = 0.0
 
             def forgotten():
+                # A scan requested while another runs is dropped, and one that
+                # started before the files were deleted keeps them: ask again
+                # every 30s until they're gone
+                nonlocal last_scan
+                if time.time() - last_scan >= 30:
+                    last_scan = time.time()
+                    try:
+                        self.jellyfin.post("Library/Refresh")
+                    except ApiError:
+                        pass
                 items = self.jellyfin.get("Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path")["Items"]
                 return not any(TAG in (i.get("Path") or "") or i.get("Path") in library for i in items)
             if not wait_until(jellyfin_wait, forgotten):
