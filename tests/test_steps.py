@@ -207,12 +207,21 @@ class MoonfinWebApp(unittest.TestCase):
         hls = d / "hls-from-nix.js"
         hls.write_text("hls")
         for _ in range(2):
-            moonbase.patch_web_app(d, str(hls))
+            moonbase.patch_web_app(d, str(hls), {"pref_prefer_default_audio_track": True, "pref_fallback_subtitle_language": "spa"})
         index = (d / "index.html").read_text()
+        self.assertEqual(index.count('id="media-server-prefs"'), 1)
+        self.assertIn('"pref_fallback_subtitle_language": "spa"', index)
         self.assertIn('src="vendor/hls/hls.min.js"', index)
         self.assertEqual(index.count('id="media-server-open"'), 1)
         self.assertEqual((d / "flutter_bootstrap.js").read_text().count("canvasKitBaseUrl"), 1)
         self.assertEqual((d / "vendor/hls/hls.min.js").read_text(), "hls")
+
+    def test_moonfin_defaults_follow_config(self):
+        cfg = scratch({"subtitles": {"languages": ["en", "es"]}})
+        self.addCleanup(shutil.rmtree, cfg.paths.media)
+        self.assertEqual(moonbase.moonfin_defaults(cfg), {"pref_prefer_default_audio_track": True, "pref_fallback_subtitle_language": "spa"})
+        cfg.data["subtitles"]["languages"] = ["en"]
+        self.assertNotIn("pref_fallback_subtitle_language", moonbase.moonfin_defaults(cfg))
 
     def test_intro_skipper_first_and_enabled(self):
         want = introskipper.with_intro_skipper({"MediaSegmentProviderOrder": ["Other", "Intro Skipper"],

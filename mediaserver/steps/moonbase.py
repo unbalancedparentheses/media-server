@@ -4,6 +4,7 @@ requests. Pinned in pins.json: the manifest at a fixed commit and the
 version to install."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -43,12 +44,47 @@ DEEP_LINK = """<script id="media-server-open">
 </script>"""
 
 
+# Moonfin keeps its playback preferences in the browser. Two of its defaults
+# work against the files' default tracks: it picks the audio track with
+# the most channels (a 5.1 track browsers can't play) unless "prefer the
+# default audio track" is on, and has no fallback subtitle language. These
+# set them, once: a preference you've changed in Moonfin is left alone.
+# Moonfin stores preferences per server and user ("<key>_<server>_<user>")
+# and globally; both are set when missing.
+PREFS = """<script id="media-server-prefs">
+(function () {
+  try {
+    var defaults = %s;
+    var sid = JSON.parse(localStorage.getItem("flutter.pref_last_server_id") || "null");
+    var uid = JSON.parse(localStorage.getItem("flutter.pref_last_user_id") || "null");
+    Object.keys(defaults).forEach(function (k) {
+      var keys = [k];
+      if (sid && uid) keys.push(k + "_" + sid + "_" + uid);
+      keys.forEach(function (key) {
+        if (localStorage.getItem("flutter." + key) === null) localStorage.setItem("flutter." + key, JSON.stringify(defaults[k]));
+      });
+    });
+  } catch (e) {}
+})();
+</script>"""
+
+
+def moonfin_defaults(cfg: Config) -> dict:
+    """Moonfin preferences from config.toml (ISO 639-2 codes, like Jellyfin)"""
+    from mediaserver.postimport import LANGUAGES
+    langs = [LANGUAGES.get(x, [x])[0] for x in cfg.get("subtitles.languages", ["en"]) or []]
+    prefs: dict = {"pref_prefer_default_audio_track": True}
+    if len(langs) > 1:
+        prefs["pref_fallback_subtitle_language"] = langs[1]
+    return prefs
+
+
 def frontend(cfg: Config) -> Path | None:
     d = cfg.paths.config / f"jellyfin/data/plugins/Moonbase_{MOONBASE.version}/frontend"
     return d if (d / "canvaskit").is_dir() else None
 
 
-def patch_web_app(d: Path, hls: str | None) -> None:
+def patch_web_app(d: Path, hls: str | None, prefs: dict | None = None) -> None:
     """Make the Moonfin web app work without internet, and open titles the
     dashboard links to. As shipped it downloads Flutter's renderer
     (CanvasKit) from www.gstatic.com and hls.js from cdn.jsdelivr.net on
@@ -70,8 +106,9 @@ def patch_web_app(d: Path, hls: str | None) -> None:
             shutil.copyfile(hls, dst)
             os.chmod(dst, 0o644)
         new = re.sub(r'src="https://cdn\.jsdelivr\.net/npm/hls\.js@[^"]*"', 'src="vendor/hls/hls.min.js"', new)
-    new = re.sub(r'<script id="media-server-open">.*?</script>\n?', "", new, flags=re.S)
-    new = new.replace("</head>", DEEP_LINK + "\n</head>", 1)
+    new = re.sub(r'<script id="media-server-(open|prefs)">.*?</script>\n?', "", new, flags=re.S)
+    scripts = DEEP_LINK + "\n" + (PREFS % json.dumps(prefs) + "\n" if prefs else "")
+    new = new.replace("</head>", scripts + "</head>", 1)
     if new != h:
         index.write_text(new)
 
@@ -118,7 +155,7 @@ def run(cfg: Config) -> None:
     else:
         try:
             manifest = c.read_json(os.environ.get("MEDIA_SERVICES_JSON", ""), {}) or {}
-            patch_web_app(d, manifest.get("moonfinHlsJs"))
+            patch_web_app(d, manifest.get("moonfinHlsJs"), moonfin_defaults(cfg))
             ok("Moonfin web app works offline (local renderer and player) and opens titles from the dashboard")
         except OSError as e:
             warn(f"Could not patch the Moonfin web app ({e})")

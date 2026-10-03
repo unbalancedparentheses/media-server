@@ -28,7 +28,9 @@ history and, for each newly imported file:
      Spanish). Text subtitles win over picture ones in the same language:
      a picture track flagged "default" (common on Blu-rays) gets burned
      into the video by Jellyfin while players show the text one, so two
-     subtitles appear at once.
+     subtitles appear at once. With library.drop_picture_subtitles, the
+     picture track in a language that's there as text is removed: Moonfin
+     prefers picture subtitles over text ones whatever the flags say.
 
 Files already in the library get steps 2 to 4 too, a few per round. A file
 whose torrent is still seeding is only rewritten when there's plenty of free
@@ -81,6 +83,7 @@ DEFAULTS = {
     "audio_language": "",
     "anime_audio_language": "jpn",
     "anime_dir": "",
+    "drop_picture_subtitles": True,
     "subtitle_languages": ["en"],
     "want": "first",
     "min_free_gb": 10,
@@ -94,7 +97,7 @@ TEXT_SUBTITLES = {"subrip", "ass", "ssa", "webvtt", "mov_text", "text"}
 PICTURE_SUBTITLES = {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle"}
 # Bumped when fix() learns something new, so files checked before get
 # looked at again (once)
-FIX_VERSION = 3
+FIX_VERSION = 5
 SIDECAR_SUBTITLES = {".srt", ".ass", ".ssa", ".vtt", ".sub"}
 NOTHING_FOUND_AFTER = 6 * 3600
 SWEEP_PER_ROUND = 3
@@ -328,57 +331,110 @@ def text_languages(info, path) -> set:
     return found
 
 
+PARTIAL = re.compile(r"sign|song|forced|karaoke|commentary", re.I)
+
+
+def partial_subtitles(stream) -> bool:
+    """A track titled as signs/songs only (or commentary), whatever its flags"""
+    return bool(PARTIAL.search(tags(stream).get("title", "")))
+
+
 def default_tracks(info, path, audio_language: str, subtitle_languages: list) -> dict:
-    """{stream index: 0/1} for the "default" flags that need changing so
-    players pick the preferred tracks; empty when they're right already.
+    """{stream index: "default" or "0"}: the flags to set so players pick
+    the preferred tracks; empty when they're right already.
 
     Audio: the first track in <audio_language> (a browser-friendly one, like
     the added stereo track, first); unchanged when it's empty or not there.
-    Subtitles: the first of <subtitle_languages> there as text. If it's in
-    the file, that track becomes the default; if it's only next to the file,
-    no embedded track stays default, so Jellyfin picks the file next to it.
-    Forced tracks (signs, foreign dialogue) keep their flags. Unchanged when
-    none of the languages is there as text: then a picture track is all
-    there is."""
-    plan: dict[int, int] = {}
+    Subtitles: the first of <subtitle_languages> there as text. In the file,
+    its full track (not one titled Signs/Songs) becomes the default; some
+    releases flag the full track "forced", which makes Jellyfin skip it for
+    the signs track, so that flag goes. Only next to the file: no embedded
+    track stays default, so Jellyfin picks the file next to it. Real forced
+    tracks keep their flags. Unchanged when none of the languages is there
+    as text: then a picture track is all there is."""
+    plan: dict[int, str] = {}
+
+    def flags(stream) -> dict:
+        return stream.get("disposition") or {}
 
     def want(stream, on: bool) -> None:
-        if bool((stream.get("disposition") or {}).get("default")) != on:
-            plan[stream["index"]] = int(on)
+        if on and (not flags(stream).get("default") or flags(stream).get("forced")):
+            plan[stream["index"]] = "default"
+        elif not on and flags(stream).get("default"):
+            plan[stream["index"]] = "0"
 
     lang = language_of(audio_language)
     audio = [st for st in streams(info, "audio") if lang and stream_language(st) == lang]
     if audio:
         target = next((st for st in audio if st.get("codec_name") in BROWSER_AUDIO), audio[0])
         for st in streams(info, "audio"):
-            want(st, st is target)
+            if bool(flags(st).get("default")) != (st is target):
+                plan[st["index"]] = "default" if st is target else "0"
 
-    available = text_languages(info, path)
+    available = text_languages(info, path) | full_but_forced_languages(info)
     chosen = next((language_of(x) for x in subtitle_languages if language_of(x) in available), None)
     if chosen:
-        subs = [st for st in streams(info, "subtitle") if not is_forced(st)]
-        target = next((st for st in subs if st.get("codec_name") in TEXT_SUBTITLES and stream_language(st) == chosen), None)
-        for st in subs:
-            want(st, st is target)
+        text = [st for st in streams(info, "subtitle") if st.get("codec_name") in TEXT_SUBTITLES
+                and stream_language(st) == chosen and not partial_subtitles(st)]
+        target = next((st for st in text if not flags(st).get("forced")), text[0] if text else None)
+        for st in streams(info, "subtitle"):
+            if st is target:
+                want(st, True)
+            elif not flags(st).get("forced"):
+                want(st, False)
     return plan
 
 
-def defaults_command(path, out, info, plan: dict):
+def full_but_forced_languages(info) -> set:
+    """Languages whose only full text track is flagged forced (mislabelled
+    releases), shown by a separate Signs/Songs track in the same language"""
+    out = set()
+    subs = [st for st in streams(info, "subtitle") if st.get("codec_name") in TEXT_SUBTITLES]
+    for st in subs:
+        lang = stream_language(st)
+        if (st.get("disposition") or {}).get("forced") and not partial_subtitles(st) \
+                and any(o is not st and stream_language(o) == lang and partial_subtitles(o) for o in subs):
+            out.add(lang)
+    return out
+
+
+def redundant_pictures(info, path) -> list:
+    """Picture subtitle tracks in a language that's also there as text (in
+    the file or next to it); forced ones (signs) are kept"""
+    text = text_languages(info, path)
+    return [st for st in streams(info, "subtitle") if st.get("codec_name") in PICTURE_SUBTITLES
+            and stream_language(st) in text and not is_forced(st)]
+
+
+def without(info, dropped: list) -> dict:
+    gone = {st["index"] for st in dropped}
+    return dict(info, streams=[st for st in info["streams"] if st["index"] not in gone])
+
+
+def defaults_command(path, out, info, plan: dict, dropped: list | None = None):
+    """Copy everything except <dropped> tracks, setting the <plan> flags
+    (track numbers per type count only the tracks that are kept)"""
     fmt = "matroska" if Path(path).suffix.lower() == ".mkv" else "mp4"
-    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(path), "-map", "0", "-map", "-0:d?",
-           "-map_metadata", "0", "-map_chapters", "0", "-c", "copy"]
+    dropped = dropped or []
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(path), "-map", "0", "-map", "-0:d?"]
+    for st in dropped:
+        cmd += ["-map", f"-0:{st['index']}"]
+    cmd += ["-map_metadata", "0", "-map_chapters", "0", "-c", "copy"]
+    kept = without(info, dropped)
     for kind, letter in (("audio", "a"), ("subtitle", "s")):
-        indexes = [st["index"] for st in streams(info, kind)]
-        for index, on in sorted(plan.items()):
+        indexes = [st["index"] for st in streams(kept, kind)]
+        for index, flag in sorted(plan.items()):
             if index in indexes:
-                cmd += [f"-disposition:{letter}:{indexes.index(index)}", "default" if on else "0"]
+                cmd += [f"-disposition:{letter}:{indexes.index(index)}", flag]
     if fmt == "mp4":
         cmd += ["-movflags", "+faststart"]
     return cmd + ["-f", fmt, str(out)]
 
 
-def set_defaults(path, info, plan: dict) -> bool:
-    return rewrite(path, info, lambda out: defaults_command(path, out, info, plan), track_counts(info),
+def set_defaults(path, info, plan: dict, dropped: list | None = None) -> bool:
+    dropped = dropped or []
+    expected = dict(track_counts(info), subtitle=track_counts(info)["subtitle"] - len(dropped))
+    return rewrite(path, info, lambda out: defaults_command(path, out, info, plan, dropped), expected,
                    "set the default tracks")
 
 
@@ -598,12 +654,17 @@ class Worker:
         # The preferred audio and subtitles as the file's defaults
         if path.suffix.lower() in VIDEO_EXTENSIONS:
             info = probe(path) or info
-            plan = default_tracks(info, path, audio_language, s["subtitle_languages"])
-            if plan and not room_for(path, s):
+            dropped = redundant_pictures(info, path) if s.get("drop_picture_subtitles", True) else []
+            plan = default_tracks(without(info, dropped), path, audio_language, s["subtitle_languages"])
+            if (plan or dropped) and not room_for(path, s):
                 done = False
-            elif plan and set_defaults(path, info, plan):
+            elif (plan or dropped) and set_defaults(path, info, plan, dropped):
                 changed = True
-                self.remember(title, "set the default " + describe_defaults(probe(path) or info, path))
+                if dropped:
+                    langs = ", ".join(sorted({stream_language(st) or "?" for st in dropped}))
+                    self.remember(title, f"removed the {langs} picture subtitles (there as text)")
+                if plan:
+                    self.remember(title, "set the default " + describe_defaults(probe(path) or info, path))
         if changed:
             jellyfin_updated(path)
         if done:
@@ -774,7 +835,10 @@ def by_hand(mode, path):
             print(f"needs stereo audio (from {source['codec_name']})" if source else "audio plays in browsers")
             for lang, s in ocr_targets(info, path, settings["subtitle_languages"], settings["want"]):
                 print(f"{lang} subtitles only as pictures (track {s['index']})")
-            plan = default_tracks(info, path, worker.audio_language_for(path), settings["subtitle_languages"])
+            dropped = redundant_pictures(info, path) if settings.get("drop_picture_subtitles", True) else []
+            if dropped:
+                print(f"picture subtitles to remove (there as text): tracks {[st['index'] for st in dropped]}")
+            plan = default_tracks(without(info, dropped), path, worker.audio_language_for(path), settings["subtitle_languages"])
             print(f"default tracks to change: {plan}" if plan else "default tracks: as preferred")
         return 0
     if info is None:

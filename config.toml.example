@@ -125,6 +125,8 @@ max_replacements = 3      # other releases tried before keeping the file and tel
 stereo_audio = true       # add a stereo track browsers play directly when the audio is only
                           # Dolby/DTS, so nothing has to be converted while you watch
 ocr_subtitles = true      # read Blu-ray picture subtitles into text .srt files
+drop_picture_subtitles = true   # remove a picture subtitle track when its language is there as text
+                                # (players otherwise pick the picture one, burned into the video)
 
 # ─── Indexers (Prowlarr) ───────────────────────────────────────
 

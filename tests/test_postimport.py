@@ -329,24 +329,35 @@ class DefaultTracks(unittest.TestCase):
         info = media(self.flagged(sub(5, "hdmv_pgs_subtitle", "eng")), sub(6, "hdmv_pgs_subtitle", "spa"))
         self.assertEqual(self.plan(info), {})  # no text anywhere: a picture track is all there is
         (self.dir / "Film.en.srt").touch()
-        self.assertEqual(self.plan(info), {5: 0})  # the file next to it wins
+        self.assertEqual(self.plan(info), {5: "0"})  # the file next to it wins
 
     def test_embedded_text_in_the_preferred_language(self):
         info = media(self.flagged(sub(4, "subrip", "chi")), sub(5, "subrip", "eng"), sub(6, "subrip", "spa"))
-        self.assertEqual(self.plan(info), {4: 0, 5: 1})
+        self.assertEqual(self.plan(info), {4: "0", 5: "default"})
 
     def test_spanish_when_no_english(self):
         info = media(self.flagged(sub(4, "subrip", "chi")), sub(6, "subrip", "spa"))
-        self.assertEqual(self.plan(info), {4: 0, 6: 1})
+        self.assertEqual(self.plan(info), {4: "0", 6: "default"})
         self.assertEqual(self.plan(info, subs=("en",)), {})  # Spanish not wanted: left alone
 
     def test_forced_tracks_keep_their_flag(self):
         info = media(self.flagged(sub(4, "subrip", "eng", forced=True)), sub(5, "subrip", "eng"))
-        self.assertEqual(self.plan(info), {5: 1})
+        self.assertEqual(self.plan(info), {5: "default"})
+
+    def test_mislabelled_forced_full_track(self):
+        """Lain: the full English track is flagged forced and a "Songs +
+        Signs" track isn't; Jellyfin then shows only the signs"""
+        full = self.flagged(sub(3, "ass", "eng", forced=True))
+        signs = sub(4, "ass", "eng", title="Songs + Signs")
+        self.assertEqual(self.plan(media(full, signs)), {3: "default"})  # forced flag goes, default stays
+        signs = self.flagged(sub(4, "ass", "eng", title="Songs + Signs"))
+        self.assertEqual(self.plan(media(sub(3, "ass", "eng", forced=True), signs)), {3: "default", 4: "0"})
+        # A real forced track next to a full one is left alone
+        self.assertEqual(self.plan(media(self.flagged(sub(3, "ass", "eng", forced=True)), sub(4, "ass", "eng"))), {4: "default"})
 
     def test_anime_japanese_audio(self):
         info = media(self.flagged(audio(1, "aac", "eng")), audio(2, "ac3", "jpn"), audio(3, "aac", "jpn"))
-        self.assertEqual(self.plan(info, audio="jpn"), {1: 0, 3: 1})  # the browser-friendly Japanese track
+        self.assertEqual(self.plan(info, audio="jpn"), {1: "0", 3: "default"})  # the browser-friendly Japanese track
         self.assertEqual(self.plan(info, audio=""), {})                 # no preference: the file's own default
         self.assertEqual(self.plan(info, audio="fre"), {})              # not there: unchanged
 
@@ -358,10 +369,24 @@ class DefaultTracks(unittest.TestCase):
 
     def test_command_sets_flags_by_track_type(self):
         info = media(audio(1, "eac3", "eng"), audio(2, "aac", "jpn"), sub(3, "subrip", "chi"), sub(4, "subrip", "eng"))
-        cmd = pi.defaults_command(self.video, "out", info, {1: 0, 2: 1, 3: 0, 4: 1})
+        cmd = pi.defaults_command(self.video, "out", info, {1: "0", 2: "default", 3: "0", 4: "default"})
         flags = [(cmd[i], cmd[i + 1]) for i, a in enumerate(cmd) if a.startswith("-disposition")]
         self.assertEqual(flags, [("-disposition:a:0", "0"), ("-disposition:a:1", "default"),
                                  ("-disposition:s:0", "0"), ("-disposition:s:1", "default")])
+
+    def test_picture_track_removed_when_there_as_text(self):
+        """Moonfin prefers picture subtitles over text ones whatever the
+        flags; with the text version there, the picture one goes"""
+        info = media(self.flagged(sub(5, "hdmv_pgs_subtitle", "eng")), sub(6, "hdmv_pgs_subtitle", "spa"),
+                     sub(7, "hdmv_pgs_subtitle", "eng", forced=True))
+        self.assertEqual(pi.redundant_pictures(info, self.video), [])
+        (self.dir / "Film.en.srt").touch()
+        dropped = pi.redundant_pictures(info, self.video)
+        self.assertEqual([st["index"] for st in dropped], [5])  # Spanish has no text; forced signs stay
+        kept = pi.without(info, dropped)
+        cmd = pi.defaults_command(self.video, "out", info, pi.default_tracks(kept, self.video, "", ["en"]), dropped)
+        self.assertIn("-0:5", cmd)
+        self.assertEqual([st["index"] for st in pi.streams(kept, "subtitle")], [6, 7])
 
     def test_files_checked_before_are_looked_at_again(self):
         st = self.video.stat()
@@ -382,7 +407,7 @@ class PictureDefaultsRealFile(unittest.TestCase):
         with mock.patch.object(pi, "STATE", d):
             info = pi.probe(video)
             index = pi.streams(info, "subtitle")[0]["index"]
-            self.assertTrue(pi.set_defaults(video, info, {index: 0}))
+            self.assertTrue(pi.set_defaults(video, info, {index: "0"}))
             after = pi.probe(video)
         self.assertEqual(pi.streams(after, "subtitle")[0]["disposition"]["default"], 0)
         self.assertEqual(len(after["streams"]), 2)

@@ -122,6 +122,7 @@ SCHEMA = {
         "check_downloads": boolean,
         "stereo_audio": boolean,
         "ocr_subtitles": boolean,
+        "drop_picture_subtitles": boolean,
         "max_replacements": integer(lo=0, hi=20),
     },
 }

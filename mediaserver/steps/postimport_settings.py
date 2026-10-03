@@ -13,6 +13,7 @@ def settings(cfg: Config) -> dict:
         "check_downloads": cfg.flag("library.check_downloads", True),
         "stereo_audio": cfg.flag("library.stereo_audio", True),
         "ocr_subtitles": cfg.flag("library.ocr_subtitles", True),
+        "drop_picture_subtitles": cfg.flag("library.drop_picture_subtitles", True),
         "max_replacements": cfg.get("library.max_replacements", 3),
         "block_dubs": cfg.flag("quality.anime_block_dubs", True),
         "audio_language": cfg.get("playback.audio_language", ""),
