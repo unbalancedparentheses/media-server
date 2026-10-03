@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from mediaserver import cli, launchd, lock, maintenance, tailscale
+from mediaserver.common import operation_running as c_operation_running
 from mediaserver.config import Config, Paths
 from mediaserver.ui import SetupError
 from tests.test_integration import REPO, example_config, quiet
@@ -220,33 +221,63 @@ class BackupRestore(Scratch):
 
 
 class Lock(Scratch):
+    def hold(self, seconds=30):
+        """Another process holding the lock, as an operation would"""
+        code = ("import sys, time; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from mediaserver import lock; "
+                "lock.acquire(Path(sys.argv[2])); print('held', flush=True); time.sleep(float(sys.argv[3]))")
+        proc = subprocess.Popen([sys.executable, "-c", code, str(REPO), str(self.paths.state), str(seconds)],
+                                stdout=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+        assert proc.stdout is not None
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        return proc
+
     def test_second_operation_refused(self):
-        owner = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(owner.kill)
-        (self.paths.state / "lock").mkdir()
-        (self.paths.state / "lock/pid").write_text(f"{owner.pid}\n")
+        owner = self.hold()
         with self.assertRaises(SetupError) as raised, redirect_stderr(io.StringIO()):
             lock.acquire(self.paths.state)
         self.assertIn("Another media-server operation is running", raised.exception.message)
+        self.assertIn(f"PID {owner.pid}", raised.exception.message)
         # Through the entry point: nothing is backed up
         with redirect_stderr(io.StringIO()):
             self.assertEqual(cli.main(["--backup"]), 1)
         self.assertFalse(self.paths.backups.exists())
         self.assertEqual((self.paths.state / "lock/pid").read_text().strip(), str(owner.pid))
 
-    def test_stale_lock_taken_over_and_released(self):
+    def test_released_when_the_holder_dies(self):
+        owner = self.hold()
+        owner.kill()
+        owner.wait()
+        lock.acquire(self.paths.state)
+        self.addCleanup(lock.release, self.paths.state)
+        self.assertEqual((self.paths.state / "lock/pid").read_text().strip(), str(os.getpid()))
+
+    def test_only_one_of_many_at_the_same_moment(self):
+        """No gap between taking the lock and recording who has it"""
+        code = ("import sys, time; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from mediaserver import lock; "
+                "from mediaserver.ui import SetupError\n"
+                "while time.time() < float(sys.argv[3]): pass\n"
+                "try:\n    lock.acquire(Path(sys.argv[2])); print('won', flush=True); time.sleep(1)\n"
+                "except SetupError:\n    print('lost', flush=True)")
+        start = __import__("time").time() + 1.5
+        procs = [subprocess.Popen([sys.executable, "-c", code, str(REPO), str(self.paths.state), str(start)],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) for _ in range(12)]
+        results = [p.communicate()[0].strip() for p in procs]
+        self.assertEqual(results.count("won"), 1, results)
+
+    def test_left_behind_record_is_replaced_and_released(self):
         (self.paths.state / "lock").mkdir()
         (self.paths.state / "lock/pid").write_text("999999\n")
         lock.acquire(self.paths.state)
         self.assertEqual((self.paths.state / "lock/pid").read_text().strip(), str(os.getpid()))
+        self.assertTrue(c_operation_running(self.paths.state / "lock"))
         lock.release(self.paths.state)
         self.assertFalse((self.paths.state / "lock").exists())
 
     def test_someone_elses_lock_not_released(self):
-        (self.paths.state / "lock").mkdir()
-        (self.paths.state / "lock/pid").write_text("1\n")
+        owner = self.hold()
         lock.release(self.paths.state)
-        self.assertTrue((self.paths.state / "lock").exists())
+        self.assertEqual((self.paths.state / "lock/pid").read_text().strip(), str(owner.pid))
 
     def test_read_only_modes_dont_lock(self):
         held = []
@@ -379,6 +410,14 @@ class Uninstall(Scratch):
             _, out = quiet(maintenance.uninstall, self.cfg, True, False)
         self.assertTrue(self.paths.config.exists())
         self.assertIn("Kept configs", out)
+
+    def test_purge_stops_while_tailscale_routes_are_still_published(self):
+        with mock.patch.object(tailscale, "remove", return_value=False), self.assertRaises(SetupError) as raised:
+            quiet(maintenance.uninstall, self.cfg, True, True)
+        self.assertIn("Not purging", raised.exception.message)
+        self.assertTrue(self.paths.config.exists())
+        self.assertTrue(self.paths.state.exists())
+        self.assertEqual(list(self.agents.iterdir()), [])   # the services are still removed
 
     def test_service_that_wont_stop(self):
         with mock.patch.object(launchd, "stop", lambda c, n: n != "radarr"), self.assertRaises(SetupError) as raised:

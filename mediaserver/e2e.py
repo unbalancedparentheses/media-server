@@ -280,7 +280,14 @@ class E2E:
             # symlink can't lead out of them)
             real = Path(path).resolve()
             if real.is_relative_to(complete) and real != complete:
-                shutil.rmtree(real, ignore_errors=True)
+                try:
+                    shutil.rmtree(real)
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    warn(f"Couldn't delete {real}: {e.strerror}")
+                if real.exists():
+                    done = False
         # Jellyfin must forget the test's files (recorded paths, or named
         # with the tag) before Seerr
         if self.jellyfin.token:

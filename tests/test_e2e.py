@@ -408,6 +408,18 @@ class Cleanup(World):
         self.assertTrue(outside.exists())
         self.assertTrue((self.cfg.paths.downloads / "torrents/complete").exists())
 
+    def test_folder_that_cant_be_deleted_keeps_record(self):
+        inside = self.cfg.paths.downloads / "torrents/complete/radarr/Test"
+        (inside / "sub").mkdir(parents=True)
+        (inside / "sub/file").write_text("x")
+        f = self.own(paths=[str(inside)])
+        (inside / "sub").chmod(0o500)   # its file can't be removed
+        self.addCleanup((inside / "sub").chmod, 0o700)
+        ok, out = quiet(e2e.E2E(self.cfg).cleanup)
+        self.assertFalse(ok)
+        self.assertTrue(f.exists())
+        self.assertIn("Couldn't delete", out)
+
     def test_qbittorrent_login_failing_keeps_record(self):
         f = self.own(hashes=["abc"])
         self.stack.qbittorrent.login = ("admin", "other")

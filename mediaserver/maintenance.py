@@ -215,8 +215,14 @@ def uninstall(cfg: Config, purge: bool, yes: bool) -> None:
         raise err(f"Could not stop: {' '.join(failed)} (the others were removed). Configs and Tailscale were left alone; "
                   "check 'nix run .#status' and re-run uninstall")
     (p.state / "gcroot").unlink(missing_ok=True)
-    if not tailscale.remove(cfg):
+    routes_removed = tailscale.remove(cfg)
+    if not routes_removed:
         warn("Some Tailscale HTTPS routes are still published (see above)")
+        if purge:
+            # Purging would delete the record of what's still published,
+            # which the next uninstall needs to remove it
+            raise err("Not purging while Tailscale routes are still published; configs and state were kept. "
+                      "Fix that (see above), then run 'nix run .#uninstall -- --purge' again")
     cache = Path.home() / "Library/Caches/invisible-playwright"
     if purge:
         print("\n  --purge deletes all service settings, accounts, watch history and API")
