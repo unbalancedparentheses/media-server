@@ -206,6 +206,21 @@ class Agents(Base):
         # Still recorded: the next run restarts it
         self.assertEqual(host.changed_file(self.cfg).read_text().split(), ["radarr"])
 
+    def test_interrupted_restart_is_finished_next_time(self):
+        quiet(host.services, self.cfg)
+        # nginx's command line changes; the install stops before restarting it
+        self.with_config(admin_bind="127.0.0.1")
+        with mock.patch.object(launchd, "start_all", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                quiet(host.services, self.cfg)
+        self.assertIn("nginx", host.changed_file(self.cfg).read_text().split())
+        # Its agent is already rewritten, but the next run still restarts it
+        self.calls.clear()
+        _, out = quiet(host.services, self.cfg)
+        self.assertIn(("stop", "nginx"), self.calls)
+        self.assertIn("nginx (restarted with new settings)", out)
+        self.assertFalse(host.changed_file(self.cfg).exists())
+
     def test_retired_services_removed(self):
         self.agents.mkdir(parents=True)
         for name in ("sonarr-anime", "sonarr"):

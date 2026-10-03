@@ -471,10 +471,61 @@ def full_but_forced_languages(info) -> set:
     return out
 
 
+CUE_TIME = {
+    "srt": re.compile(r"(\d+):(\d\d):(\d\d)[,.]\d+\s*-->"),
+    "vtt": re.compile(r"(?:(\d+):)?(\d\d):(\d\d)\.\d+\s*-->"),
+    "ass": re.compile(r"^Dialogue:\s*\d+,(\d+):(\d\d):(\d\d)", re.M),
+}
+
+
+def enough_cues(cues: int, last: float, seconds: float) -> bool:
+    """A whole film's or episode's dialogue: at least 2 cues a minute (films
+    have 5 to 12) and lasting to 70% of it; without a known length, 100 cues"""
+    if not seconds:
+        return cues >= 100
+    return cues >= max(20, seconds / 60 * 2) and last >= 0.7 * seconds
+
+
+def sidecar_is_full(f: Path, seconds: float) -> bool:
+    """A subtitle file with the whole dialogue (by its cues and timings), not
+    just a name that says so; formats that can't be read this way don't count"""
+    kind = {".srt": "srt", ".vtt": "vtt", ".ass": "ass", ".ssa": "ass"}.get(f.suffix.lower())
+    if not kind:
+        return False
+    try:
+        text = f.read_text(errors="replace")[:20_000_000]
+    except OSError:
+        return False
+    times = [(int(h or 0) * 3600 + int(m) * 60 + int(sec)) for h, m, sec in CUE_TIME[kind].findall(text)]
+    return enough_cues(len(times), max(times, default=0), seconds)
+
+
+def embedded_is_full(st, seconds: float) -> bool:
+    """A text track that isn't labelled signs/songs, and has enough cues
+    where the file says how many (mkvmerge's statistics tags)"""
+    if partial_subtitles(st) or is_forced(st):
+        return False
+    frames = next((v for k, v in tags(st).items() if k.upper().startswith("NUMBER_OF_FRAMES")), None)
+    if frames is None or not str(frames).isdigit():
+        return True
+    return int(frames) >= max(20, seconds / 60 * 2) if seconds else int(frames) >= 100
+
+
+def full_text_languages(info, path) -> set:
+    """Languages with a complete text version, checked, for deciding what
+    picture subtitles can go: in the file, or a file next to it"""
+    seconds = duration(info)
+    found = {lang for f, lang in sidecars(path) if sidecar_is_full(f, seconds)}
+    found |= {stream_language(st) for st in streams(info, "subtitle")
+              if st.get("codec_name") in TEXT_SUBTITLES and embedded_is_full(st, seconds)}
+    found.discard("")
+    return found
+
+
 def redundant_pictures(info, path) -> list:
-    """Picture subtitle tracks in a language that's also there as text (in
-    the file or next to it); forced ones (signs) are kept"""
-    text = text_languages(info, path)
+    """Picture subtitle tracks in a language that's also there, complete, as
+    text (in the file or next to it, checked); forced ones (signs) are kept"""
+    text = full_text_languages(info, path)
     return [st for st in streams(info, "subtitle") if st.get("codec_name") in PICTURE_SUBTITLES
             and stream_language(st) in text and not is_forced(st)]
 
@@ -518,26 +569,30 @@ def set_defaults(path, info, plan: dict, dropped: list | None = None, progress=N
 
 # ─── Subtitles ───────────────────────────────────────────────────
 
-def sidecar_languages(path):
-    """Languages of the subtitle files next to the video (Movie.en.srt,
-    Movie.en.hi.srt, Movie.eng.forced.srt, ...)"""
+def sidecars(path) -> list:
+    """(file, language) for the full subtitle files next to the video
+    (Movie.en.srt, Movie.en.hi.srt; not Movie.eng.forced.srt), by name"""
     path = Path(path)
-    found = set()
+    out = []
     try:
         siblings = list(path.parent.iterdir())
     except OSError:
-        return found
+        return out
     for f in siblings:
         if f.suffix.lower() in SIDECAR_SUBTITLES and f.name.startswith(path.stem + "."):
             parts = [x.lower() for x in f.name[len(path.stem) + 1:].split(".")[:-1]]
             # Forced/signs files cover only part of the dialogue
             if any(x in ("forced", "signs", "songs") for x in parts):
                 continue
-            for part in parts:
-                if language_of(part):
-                    found.add(language_of(part))
-                    break
-    return found
+            lang = next((language_of(x) for x in parts if language_of(x)), "")
+            if lang:
+                out.append((f, lang))
+    return out
+
+
+def sidecar_languages(path):
+    """Languages of the subtitle files next to the video, by their names"""
+    return {lang for _, lang in sidecars(path)}
 
 
 def sidecar_files(path) -> list:

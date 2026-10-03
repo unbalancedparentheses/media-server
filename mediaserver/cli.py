@@ -30,6 +30,7 @@ from pathlib import Path
 
 from mediaserver import doctor, e2e, lock, maintenance, tailscale, validate, verify
 from mediaserver.config import Config, default_paths, load_toml
+from mediaserver.steps import arrs
 from mediaserver.ui import SetupError, err, info, ok, warn
 
 REPO = Path(__file__).resolve().parents[1]
@@ -253,6 +254,9 @@ def install(o: Options) -> int:
         return result
     ts = timed("check_platform", check_platform)
     cfg = timed("ensure_config", ensure_config, o.yes)
+    # Before anything changes: the services step would stop an older
+    # version's separate anime Sonarr and remove its agent
+    arrs.require_no_unmerged_anime_sonarr(cfg)
     hostname = timed("tailscale", tailscale.configure, cfg, ts)
     for name in INSTALL:
         timed(name, run_step, cfg, name)

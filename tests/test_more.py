@@ -180,8 +180,10 @@ class Waiting(unittest.TestCase):
         with mock.patch.object(c, "request", return_value=c.Response(500, {}, b"")):
             with self.assertRaises(api.ApiError):
                 api.get("http://x")
-        with mock.patch.object(c, "request", return_value=c.Response(200, {}, b"not json")):
-            self.assertEqual(api.get("http://x"), "not json")
+        with mock.patch.object(c, "request", return_value=c.Response(200, {}, b"<html>Bad gateway</html>")):
+            with self.assertRaises(api.ApiError) as raised:
+                api.get("http://x")
+            self.assertIn("not JSON", str(raised.exception))
         with mock.patch.object(c, "request", return_value=c.Response(204, {}, b"")):
             self.assertIsNone(api.call("POST", "http://x"))
 

@@ -420,6 +420,23 @@ class Cleanup(World):
         self.assertTrue(f.exists())
         self.assertIn("Couldn't delete", out)
 
+    def test_unreadable_record_is_kept_not_taken_as_empty(self):
+        f = self.own()
+        f.write_text("{not json")
+        test = e2e.E2E(self.cfg)
+        ok, out = quiet(test.cleanup)
+        self.assertFalse(ok)
+        self.assertEqual(f.read_text(), "{not json")
+        self.assertIn("Can't read", out)
+        # Nor overwritten by new items
+        with self.assertRaises(SetupError):
+            quiet(test.own, "movie_id", 1)
+        self.assertEqual(f.read_text(), "{not json")
+        # And a run doesn't start over it
+        with self.assertRaises(SetupError):
+            self.run_e2e()
+        self.assertEqual(self.movies.items, [])
+
     def test_qbittorrent_login_failing_keeps_record(self):
         f = self.own(hashes=["abc"])
         self.stack.qbittorrent.login = ("admin", "other")

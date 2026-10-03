@@ -45,20 +45,25 @@ def confirm(question: str, yes: bool) -> bool:
 # ─── Backup ──────────────────────────────────────────────────────
 
 def archive(media: Path, target: Path) -> None:
-    """config/, config.toml and setup's records, without logs and caches"""
+    """config/, config.toml and setup's records, without logs and caches.
+    Written under a .partial name and renamed only once complete, so an
+    interrupted backup never looks like a finished one."""
     def skip(member: tarfile.TarInfo) -> tarfile.TarInfo | None:
         return None if any(fnmatch.fnmatch(member.name, pattern) for pattern in EXCLUDE) else member
+    partial = target.with_name(target.name + ".partial")
     old = os.umask(0o077)
     try:
-        with tarfile.open(target, "w:gz") as tar:
+        with tarfile.open(partial, "w:gz") as tar:
             tar.add(media / "config", "config", filter=skip)
             if (media / "config.toml").exists():
                 tar.add(media / "config.toml", "config.toml")
             for record in STATE_RECORDS:
                 if (media / record).exists():
                     tar.add(media / record, record)
+        os.replace(partial, target)
     finally:
         os.umask(old)
+        partial.unlink(missing_ok=True)
 
 
 def backup(cfg: Config) -> Path:
@@ -69,6 +74,9 @@ def backup(cfg: Config) -> Path:
     if not p.config.is_dir():
         raise err(f"Config directory not found: {p.config}")
     p.backups.mkdir(parents=True, exist_ok=True)
+    # What an interrupted earlier backup left
+    for leftover in p.backups.glob("media-server_*.tar.gz.partial"):
+        leftover.unlink(missing_ok=True)
     target = p.backups / f"media-server_{time.strftime('%Y%m%d_%H%M%S')}.tar.gz"
     info("Backing up service configs...")
     running = [n for n in launchd.SERVICE_NAMES if launchd.loaded(n)]

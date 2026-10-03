@@ -209,6 +209,25 @@ class BackupRestore(Scratch):
         self.assertEqual(self.running, {"sonarr", "radarr"})
         self.assertEqual(list(self.paths.backups.glob("*.tar.gz")), [])
 
+    def test_interrupted_backup_never_looks_finished(self):
+        (self.paths.config / "big.db").write_bytes(b"x" * 100_000)
+        real_add = tarfile.TarFile.add
+
+        def interrupted(tar, name, arcname=None, *args, **kw):
+            if str(arcname) == "config.toml":
+                raise KeyboardInterrupt
+            return real_add(tar, name, arcname, *args, **kw)
+        self.paths.config_file.write_text("x")
+        self.running = {"sonarr"}
+        with mock.patch.object(tarfile.TarFile, "add", interrupted), self.assertRaises(KeyboardInterrupt):
+            quiet(maintenance.backup, self.cfg)
+        self.assertEqual(list(self.paths.backups.iterdir()), [])
+        self.assertEqual(self.running, {"sonarr"})   # still put back
+        # A leftover partial from a hard kill is removed by the next backup
+        (self.paths.backups / "media-server_20200101_000000.tar.gz.partial").write_text("half")
+        quiet(maintenance.backup, self.cfg)
+        self.assertEqual([f.name.endswith(".tar.gz") for f in self.paths.backups.iterdir()], [True])
+
     def test_old_backups_pruned(self):
         self.paths.backups.mkdir()
         for i in range(12):
@@ -483,6 +502,19 @@ class Install(Scratch):
             result, out = quiet(cli.install, cli.Options(yes=True))
         self.assertEqual(result, 1)
         self.assertIn("2 verification check(s) failed", out)
+
+    def test_unmerged_anime_sonarr_stops_before_anything_changes(self):
+        quiet(cli.ensure_config, True)
+        (self.paths.config / "sonarr-anime").mkdir()
+        (self.paths.config / "sonarr-anime/sonarr.db").write_bytes(b"")
+        ran = []
+        with mock.patch.object(cli, "check_platform", return_value=""), \
+                mock.patch.object(cli, "run_step", lambda cfg, name: ran.append(name)), \
+                mock.patch.object(tailscale, "configure", lambda cfg, ts: ran.append("tailscale")), \
+                self.assertRaises(SetupError) as raised:
+            quiet(cli.install, cli.Options(yes=True))
+        self.assertEqual(ran, [])   # not even the services step, which stops old agents
+        self.assertIn("never merged", raised.exception.message)
 
     def test_every_install_step_exists(self):
         from mediaserver.steps import STEPS

@@ -188,9 +188,13 @@ def services(cfg: Config) -> None:
     p = cfg.paths
     subst = {"@MEDIA@": str(p.media), "@CONFIG@": str(p.config), "@STATE@": str(p.state), "@ADMIN_BIND@": admin_bind(cfg),
              "@DISK_WARN_GB@": str(cfg.disk_warn_gb), "@DISK_MIN_GB@": str(cfg.disk_min_gb)}
-    changed = set(launchd.write_agents(m["services"], subst, p.config, p.logs, cfg.timezone))
+    # Recorded before anything restarts: an install interrupted from here on
+    # (a service that won't stop, Ctrl-C) leaves agents that no longer look
+    # changed, and the next run must still restart them
+    for name in launchd.write_agents(m["services"], subst, p.config, p.logs, cfg.timezone):
+        mark_changed(cfg, name)
     # Also restart services whose config file changed (e.g. a new admin_bind)
-    changed |= set(c.read_text(changed_file(cfg)).split())
+    changed = set(c.read_text(changed_file(cfg)).split())
     launchd.start_all(p.config, changed)
     changed_file(cfg).unlink(missing_ok=True)
     # Keep this version's Nix store paths from being garbage-collected while

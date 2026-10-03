@@ -221,11 +221,18 @@ class E2E:
     def owned_file(self) -> Path:
         return self.dir / "owned.json"
 
-    def owned(self) -> dict:
-        return c.read_json(self.owned_file, {}) or {}
+    def owned(self) -> dict | None:
+        """The record; {} when there's none, None when it can't be read (an
+        unreadable record isn't "nothing to clean up")"""
+        if not self.owned_file.exists():
+            return {}
+        record = c.read_json(self.owned_file)
+        return record if isinstance(record, dict) else None
 
     def own(self, key: str, value: Any) -> None:
         record = self.owned()
+        if record is None:
+            raise err(f"Can't read {self.owned_file}; not adding to it (it may list test items still to remove)")
         if key in ("hashes", "paths", "library_paths"):
             record[key] = sorted(set(record.get(key, [])) | {str(value)})
         else:
@@ -263,6 +270,10 @@ class E2E:
         if not self.owned_file.exists():
             return True
         record = self.owned()
+        if record is None:
+            warn(f"Can't read {self.owned_file}, so the test's leftovers can't be found; it's kept. "
+                 "Check Radarr, Sonarr and Seerr for Tears of Steel and Pioneer One, then delete it")
+            return False
         done = True
         if movie := record.get("movie_id"):
             done &= self.clear_queue(self.radarr, f"movieIds={movie}")

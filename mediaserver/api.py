@@ -15,16 +15,18 @@ class ApiError(Exception):
 
 def call(method: str, url: str, headers: dict | None = None, body: Any = None, form: dict | None = None,
          timeout: float = 60) -> Any:
-    """The decoded JSON answer (None for an empty one)"""
+    """The decoded JSON answer (None for an empty one). An answer that isn't
+    JSON (an HTML error page from a proxy, a half-started service) is an
+    ApiError too, not text a caller would take for data."""
     r = c.request(url, method, headers, body=body, form=form, timeout=timeout)
     if not r.ok:
         raise ApiError(f"{method} {url}: " + (f"HTTP {r.status}" if r.status else "no answer"))
-    if not r.body:
+    if not r.body.strip():
         return None
     try:
         return c.json.loads(r.body)
     except ValueError:
-        return r.body.decode(errors="replace")
+        raise ApiError(f"{method} {url}: not JSON ({r.body[:60].decode(errors='replace')!r})") from None
 
 
 def get(url: str, headers: dict | None = None, timeout: float = 60) -> Any:

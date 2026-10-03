@@ -41,6 +41,21 @@ def media(*streams, length=3600.0):
             "format": {"duration": str(length)}}
 
 
+def srt(cues: int, until: float) -> str:
+    """A SubRip file with <cues> lines spread up to <until> seconds"""
+    def ts(t):
+        return f"{int(t // 3600):02d}:{int(t % 3600 // 60):02d}:{int(t % 60):02d},000"
+    step = until / cues
+    return "".join(f"{i + 1}\n{ts(i * step)} --> {ts(i * step + 1)}\nLine {i}\n\n" for i in range(cues))
+
+
+def ass(cues: int, until: float) -> str:
+    step = until / cues
+    lines = [f"Dialogue: 0,{int(t // 3600)}:{int(t % 3600 // 60):02d}:{int(t % 60):02d}.00,0:00:00.00,Default,,0,0,0,,Line"
+             for t in (i * step for i in range(cues))]
+    return "[Script Info]\n\n[Events]\n" + "\n".join(lines) + "\n"
+
+
 class Languages(unittest.TestCase):
     def test_codes(self):
         for tag, want in [("eng", "en"), ("en", "en"), ("en-US", "en"), ("fre", "fr"), ("fra", "fr"),
@@ -429,13 +444,44 @@ class DefaultTracks(unittest.TestCase):
         info = media(self.flagged(sub(5, "hdmv_pgs_subtitle", "eng")), sub(6, "hdmv_pgs_subtitle", "spa"),
                      sub(7, "hdmv_pgs_subtitle", "eng", forced=True))
         self.assertEqual(pi.redundant_pictures(info, self.video), [])
+        # A file named like English subtitles isn't proof: an empty one
+        # doesn't let the picture track go
         (self.dir / "Film.en.srt").touch()
+        self.assertEqual(pi.redundant_pictures(info, self.video), [])
+        (self.dir / "Film.en.srt").write_text(srt(cues=400, until=3500))
         dropped = pi.redundant_pictures(info, self.video)
         self.assertEqual([st["index"] for st in dropped], [5])  # Spanish has no text; forced signs stay
         kept = pi.without(info, dropped)
         cmd = pi.defaults_command(self.video, "out", info, pi.default_tracks(kept, self.video, "", ["en"]), dropped)
         self.assertIn("-0:5", cmd)
         self.assertEqual([st["index"] for st in pi.streams(kept, "subtitle")], [6, 7])
+
+    def test_only_complete_text_lets_a_picture_track_go(self):
+        info = media(sub(5, "hdmv_pgs_subtitle", "eng"))   # an hour long
+        cases = [
+            (srt(cues=400, until=1200), "srt", False),    # stops a third of the way in
+            (srt(cues=10, until=3500), "srt", False),     # a handful of lines
+            (srt(cues=400, until=3500), "srt", True),
+            (ass(cues=400, until=3500), "ass", True),
+            ("not subtitles at all", "srt", False),
+            (srt(cues=400, until=3500), "sub", False),    # a format that can't be checked
+        ]
+        for text, ext, drops in cases:
+            for f in self.dir.glob("Film.en.*"):
+                f.unlink()
+            (self.dir / f"Film.en.{ext}").write_text(text)
+            self.assertEqual(bool(pi.redundant_pictures(info, self.video)), drops, (ext, text[:60]))
+
+    def test_embedded_text_must_be_the_whole_dialogue(self):
+        pictures = sub(5, "hdmv_pgs_subtitle", "eng")
+        full = sub(6, "subrip", "eng")
+        signs = sub(6, "subrip", "eng", title="Signs & Songs")
+        few = sub(6, "subrip", "eng")
+        few["tags"]["NUMBER_OF_FRAMES-eng"] = "12"
+        many = sub(6, "subrip", "eng")
+        many["tags"]["NUMBER_OF_FRAMES-eng"] = "900"
+        for text, drops in ((full, True), (signs, False), (few, False), (many, True)):
+            self.assertEqual(bool(pi.redundant_pictures(media(pictures, text), self.video)), drops, text["tags"])
 
     def test_files_checked_before_are_looked_at_again(self):
         st = self.video.stat()
