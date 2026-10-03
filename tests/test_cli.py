@@ -51,7 +51,7 @@ class Scratch(unittest.TestCase):
     def records(self):
         state = self.paths.state
         (state / "credentials.json").write_text('{"version":2,"services":{"jellyfin":{"username":"admin","password":"current"}}}')
-        (state / "sonarr-anime-migrated").touch()
+        (state / "renamed-sonarr").touch()
         (state / "e2e").mkdir(exist_ok=True)
         (state / "e2e/owned.json").write_text('{"movie_id":"42"}')
 
@@ -146,17 +146,17 @@ class BackupRestore(Scratch):
         self.assertEqual(self.running, {"sonarr", "radarr"})   # put back
         self.assertIn("Services restarted: sonarr radarr", out)
         names = tarfile.open(backup).getnames()
-        for record in ("credentials.json", "sonarr-anime-migrated", "e2e/owned.json"):
+        for record in ("credentials.json", "renamed-sonarr", "e2e/owned.json"):
             self.assertIn(f".state/{record}", names)
         self.assertIn("config/sonarr.db", names)
         self.assertNotIn("config/sonarr/logs/big.txt", names)
         self.assertEqual(oct(backup.stat().st_mode & 0o777), "0o600")
 
-        (self.paths.state / "sonarr-anime-migrated").unlink()
+        (self.paths.state / "renamed-sonarr").unlink()
         (self.paths.state / "credentials.json").write_text('{"version":2,"services":{}}')
         (self.paths.config / "sonarr.db").write_text("newer")
         _, out = quiet(maintenance.restore, self.cfg, str(backup), True)
-        self.assertTrue((self.paths.state / "sonarr-anime-migrated").exists())
+        self.assertTrue((self.paths.state / "renamed-sonarr").exists())
         self.assertEqual(json.loads((self.paths.state / "credentials.json").read_text())["services"]["jellyfin"]["password"], "current")
         self.assertEqual((self.paths.config / "sonarr.db").read_text(), "db")
         self.assertEqual(len(list(self.media.glob("config.pre-restore-*"))), 1)
@@ -173,7 +173,7 @@ class BackupRestore(Scratch):
         self.records()
         _, out = quiet(maintenance.restore, self.cfg, str(old), True)
         self.assertEqual((self.paths.config / "sonarr.db").read_text(), "old-db")
-        for record in ("sonarr-anime-migrated", "e2e/owned.json", "credentials.json"):
+        for record in ("renamed-sonarr", "e2e/owned.json", "credentials.json"):
             self.assertFalse((self.paths.state / record).exists(), record)
         self.assertEqual(len(list(self.paths.state.glob("pre-restore-*/credentials.json"))), 1)
         self.assertIn("predates setup's records", out)
@@ -517,12 +517,12 @@ class EntryPoint(Scratch):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         backup = next(self.paths.backups.glob("media-server_*.tar.gz"))
         names = tarfile.open(backup).getnames()
-        for record in ("credentials.json", "sonarr-anime-migrated", "e2e/owned.json"):
+        for record in ("credentials.json", "renamed-sonarr", "e2e/owned.json"):
             self.assertIn(f".state/{record}", names)
-        (self.paths.state / "sonarr-anime-migrated").unlink()
+        (self.paths.state / "renamed-sonarr").unlink()
         r = self.run_setup("--restore", str(backup), "--yes")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertTrue((self.paths.state / "sonarr-anime-migrated").exists())
+        self.assertTrue((self.paths.state / "renamed-sonarr").exists())
         self.assertFalse((self.paths.state / "lock").exists())
 
     def test_usage(self):

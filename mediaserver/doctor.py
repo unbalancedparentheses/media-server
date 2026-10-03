@@ -237,7 +237,8 @@ class Doctor:
         if (state / "e2e/owned.json").exists():
             self.note(f"An end-to-end test didn't finish cleaning up (record: {state / 'e2e/owned.json'})", "The next nix run .#e2e removes its leftovers")
         if (self.paths.config / "sonarr-anime/sonarr.db").exists() and not (state / "sonarr-anime-migrated").exists():
-            self.note("The old anime Sonarr's series aren't all moved yet", "nix run .#install finishes it")
+            self.need("The old anime Sonarr's series were never merged into Sonarr",
+                      "nix run .#install explains how (with the last version that merges them)")
         owner = c.read_text(state / "lock/pid")
         if owner:
             if c.operation_running(state / "lock"):

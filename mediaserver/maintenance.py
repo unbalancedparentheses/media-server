@@ -18,12 +18,10 @@ from mediaserver.config import Config
 from mediaserver.ui import SetupError, err, info, ok, warn
 
 MAX_BACKUPS = 10
-# Setup's own records in ~/media/.state (applied logins, migration marker,
-# e2e test ownership, …) describe the databases and travel with them
+# Setup's own records in ~/media/.state (applied logins, e2e test
+# ownership, …) describe the databases and travel with them
 STATE_RECORDS = (
     ".state/credentials.json",
-    ".state/sonarr-anime-migrated",
-    ".state/sonarr-anime-migration.json",
     ".state/e2e/owned.json",
     ".state/e2e/paused-indexers.json",
     ".state/tailscale-routes.json",
@@ -109,7 +107,7 @@ def restore_records(media: Path, extract: Path, stamp: str) -> None:
     """Setup's records must match the restored databases: take the
     backup's, or, for a backup made before they were included, set the
     current ones aside (they describe the newer databases). Setup then
-    re-checks every login, re-runs the anime migration if needed, and the
+    re-checks every login, and the
     e2e test forgets items that aren't in the restored databases."""
     aside = media / ".state" / f"pre-restore-{stamp}"
     moved = False
@@ -126,7 +124,7 @@ def restore_records(media: Path, extract: Path, stamp: str) -> None:
     if moved:
         ok(f"Setup's previous records set aside in {aside}")
     if not (extract / ".state").exists():
-        warn("This backup predates setup's records; the next install re-checks every login and migration")
+        warn("This backup predates setup's records; the next install re-checks every login")
 
 
 def restore(cfg: Config, file: str, yes: bool) -> None:

@@ -164,14 +164,6 @@ def connect_sonarr(s: Seerr, cfg: Config, keys: Keys) -> None:
                 ok(f"Sonarr connected (profile: {profile['name']})")
             except ApiError:
                 warn("Could not add Sonarr")
-    # Older setups had a separate anime Sonarr; Seerr can't route anime to a
-    # second instance, so remove that connection
-    for old in (x for x in existing if x.get("name") == "Sonarr Anime"):
-        try:
-            s.call("DELETE", f"settings/sonarr/{old['id']}")
-            ok("Removed the old Sonarr Anime connection")
-        except ApiError:
-            pass
 
 
 def connect_radarr(s: Seerr, cfg: Config, keys: Keys) -> None:

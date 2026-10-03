@@ -484,57 +484,20 @@ class Arrs(unittest.TestCase):
     def old_sonarr(self):
         d = self.cfg.paths.config / "sonarr-anime"
         d.mkdir(parents=True)
-        with sqlite3.connect(d / "sonarr.db") as db:
-            db.execute("CREATE TABLE Series (Id, TvdbId, Path, Monitored, Seasons)")
-            db.execute("INSERT INTO Series VALUES (7, 111, '/a/Show', 1, '[]')")
+        (d / "sonarr.db").write_bytes(b"")
 
-    def test_migration_finishes_interrupted_series(self):
-        """A series is added but copying its monitoring fails: not marked
-        complete, and the next run finishes that series (not skips it)"""
+    def test_unmerged_old_anime_sonarr_stops_setup(self):
         self.old_sonarr()
-        series: list = []
-
-        def answer(method, path, body):
-            if method == "GET" and path == "series":
-                return series
-            if path.startswith("qualityprofile"):
-                return [{"id": 4, "name": "Anime"}]
-            if path.startswith("series/lookup"):
-                return [{"title": "Show", "tvdbId": 111}]
-            if method == "POST" and path == "series":
-                series.append({"id": 50, "tvdbId": 111})
-                return {"id": 50}
-            return None
-        app = FakeApp("Sonarr", answer)
-        state = self.cfg.paths.state
-        with mock.patch.object(arrs, "migrate_monitoring", return_value=False):
-            run(arrs.migrate_anime_sonarr, self.cfg, app)
-        self.assertFalse((state / "sonarr-anime-migrated").exists())
-        self.assertEqual(c.read_json(state / "sonarr-anime-migration.json")["added"]["111"], 50)
-        with mock.patch.object(arrs, "migrate_monitoring", return_value=True) as monitoring:
-            run(arrs.migrate_anime_sonarr, self.cfg, app)
-        self.assertEqual(monitoring.call_args[0][3], 50)
-        self.assertTrue((state / "sonarr-anime-migrated").exists())
-        self.assertEqual(sum(1 for m, p in app.calls if m == "POST" and p == "series"), 1)
-
-    def test_migration_leaves_existing_series_alone(self):
-        self.old_sonarr()
-        app = FakeApp("Sonarr", lambda m, p, b: [{"id": 9, "tvdbId": 111}] if p == "series" else [{"id": 4, "name": "Anime"}])
-        with mock.patch.object(arrs, "migrate_monitoring") as monitoring:
-            run(arrs.migrate_anime_sonarr, self.cfg, app)
-        monitoring.assert_not_called()
-        self.assertTrue((self.cfg.paths.state / "sonarr-anime-migrated").exists())
-
-    def test_migration_adopts_series_added_before_crash(self):
-        """Interrupted between Sonarr adding it and the progress being saved:
-        finished, not taken for one you already had, not added again"""
-        self.old_sonarr()
-        c.write_json(self.cfg.paths.state / "sonarr-anime-migration.json", {"adding": ["111"], "added": {}, "done": []})
-        app = FakeApp("Sonarr", lambda m, p, b: [{"id": 77, "tvdbId": 111}] if p == "series" else [{"id": 4, "name": "Anime"}])
-        with mock.patch.object(arrs, "migrate_monitoring", return_value=True) as monitoring:
-            run(arrs.migrate_anime_sonarr, self.cfg, app)
-        self.assertEqual(monitoring.call_args[0][3], 77)
-        self.assertNotIn(("POST", "series"), app.calls)
+        with self.assertRaises(SetupError) as raised:
+            run(arrs.require_no_unmerged_anime_sonarr, self.cfg)
+        self.assertIn(f"git checkout {arrs.LAST_WITH_MIGRATION}", raised.exception.message)
+        # Merged by an older version (its marker), or never there: fine
+        (self.cfg.paths.state / "sonarr-anime-migrated").parent.mkdir(parents=True, exist_ok=True)
+        (self.cfg.paths.state / "sonarr-anime-migrated").touch()
+        run(arrs.require_no_unmerged_anime_sonarr, self.cfg)
+        shutil.rmtree(self.cfg.paths.config / "sonarr-anime")
+        (self.cfg.paths.state / "sonarr-anime-migrated").unlink()
+        run(arrs.require_no_unmerged_anime_sonarr, self.cfg)
 
     def test_rename_retried_after_interruption(self):
         """Renaming the existing library is recorded only once Sonarr accepted it"""

@@ -140,7 +140,6 @@ class Verifier:
         apps = self.arr(self.urls.prowlarr, key, "applications", [], "v1") or []
         names = [a.get("name") for a in apps]
         self.t.check("Prowlarr → Sonarr connected", "Sonarr" in names)
-        self.t.check("Prowlarr → no leftover Sonarr Anime app", "Sonarr Anime" not in names)
         self.t.check("Prowlarr → Radarr connected", "Radarr" in names)
         indexers = self.arr(self.urls.prowlarr, key, "indexer", [], "v1") or []
         enabled = sum(1 for i in indexers if i.get("enable"))

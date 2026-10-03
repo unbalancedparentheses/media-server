@@ -1,12 +1,9 @@
 """Sonarr (TV and anime) and Radarr (movies): root folders, download
 clients, the Jellyfin connection, logins, file naming, minimum free space,
-the release filters, and moving an older separate anime Sonarr's series
-into Sonarr."""
+and the release filters."""
 from __future__ import annotations
 
 import json
-import sqlite3
-from contextlib import closing
 import time
 from pathlib import Path
 from typing import Any
@@ -17,7 +14,7 @@ from mediaserver.api import ApiError
 from mediaserver.arr import set_login, sync_fields
 from mediaserver.config import Config, Keys
 from mediaserver.pins import ANIME_PROFILE
-from mediaserver.ui import info, ok, warn
+from mediaserver.ui import err, info, ok, warn
 
 JUNK_SCORE = -10000
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -206,6 +203,7 @@ def set_renaming(cfg: Config, app: App, kind: str) -> None:
 
 
 def run(cfg: Config) -> None:
+    require_no_unmerged_anime_sonarr(cfg)
     sonarr, radarr = apps(cfg)
     p = cfg.paths
     # One Sonarr for TV and anime: Seerr sends anime to the anime folder
@@ -218,8 +216,6 @@ def run(cfg: Config) -> None:
         set_renaming(cfg, sonarr, "series")
     if radarr:
         set_renaming(cfg, radarr, "movie")
-    if sonarr:
-        migrate_anime_sonarr(cfg, sonarr)
     if radarr:
         set_min_free_space(cfg, radarr)
     for app in (sonarr, radarr):
@@ -377,117 +373,19 @@ def run_junk_filters(cfg: Config) -> None:
 
 
 # ─── The old anime Sonarr ────────────────────────────────────────
-
-def migrate_anime_sonarr(cfg: Config, sonarr: App) -> None:
-    """Older versions ran a second Sonarr for anime. Add its series to
-    Sonarr (as anime, keeping their folders, no search), copy its series,
-    season and episode monitoring exactly, and rescan so the existing files
-    are picked up. Its data folder is left in place.
-
-    Progress is kept per series in sonarr-anime-migration.json: "adding"
-    just before asking Sonarr, "added" (id in Sonarr) once it accepted,
-    "done" once its monitoring is copied and checked, so an interrupted run
-    finishes the series it started, even one interrupted between Sonarr
-    adding it and the progress being saved. Series that were already in
-    Sonarr aren't touched."""
-    db = cfg.paths.config / "sonarr-anime/sonarr.db"
-    marker = cfg.paths.state / "sonarr-anime-migrated"
-    progress = cfg.paths.state / "sonarr-anime-migration.json"
-    if not db.exists() or marker.exists():
-        return
-    info("Moving the old anime Sonarr's series into Sonarr...")
-    try:
-        rows = query(db, "SELECT Id, TvdbId, Path, Monitored, Seasons FROM Series")
-    except sqlite3.Error:
-        warn(f"Could not read {db}; its series were not moved (setup retries next run)")
-        return
-    try:
-        have = sonarr.call("GET", "series") or []
-    except ApiError:
-        warn("Could not list Sonarr series")
-        return
-    state: dict = {"adding": [], "added": {}, "done": []}
-    if progress.exists():
-        saved = c.read_json(progress)
-        if not isinstance(saved, dict):
-            warn(f"Can't read {progress}; the migration waits until it's fixed or removed")
-            return
-        state = {"adding": saved.get("adding") or [], "added": saved.get("added") or {}, "done": saved.get("done") or []}
-
-    def save() -> None:
-        c.write_json(progress, state, mode=0o600)
-    try:
-        profiles = sonarr.call("GET", "qualityprofile") or []
-    except ApiError:
-        profiles = []
-    profile_id = next((p["id"] for p in profiles if p.get("name") == ANIME_PROFILE), None) \
-        or next((p["id"] for p in profiles if p.get("name") == cfg.sonarr_anime_profile), None) \
-        or (profiles[0]["id"] if profiles else None)
-    failed = added = 0
-    for row in rows:
-        old_id, tvdb, path = row["Id"], str(row["TvdbId"]), row["Path"]
-        if tvdb in state["done"]:
-            continue
-        new_id = state["added"].get(tvdb)
-        # Added by an earlier, interrupted run: still there?
-        if new_id is not None and not any(s.get("id") == new_id for s in have):
-            new_id = None
-        # Sonarr has it, and this migration was adding it: it's ours to finish
-        if new_id is None and tvdb in state["adding"]:
-            new_id = next((s["id"] for s in have if str(s.get("tvdbId")) == tvdb), None)
-            if new_id is not None:
-                state["added"][tvdb] = new_id
-                save()
-        if new_id is None:
-            if any(str(s.get("tvdbId")) == tvdb for s in have):
-                # Already in Sonarr before the migration: leave it as it is
-                state["done"].append(tvdb)
-                save()
-                continue
-            try:
-                lookup = next(iter(sonarr.call("GET", f"series/lookup?term=tvdb:{tvdb}") or []), None)
-            except ApiError:
-                lookup = None
-            # Recorded before asking Sonarr, so an interruption right after
-            # it adds the series doesn't make it look like one you already had
-            state["adding"] = sorted(set(state["adding"]) | {tvdb})
-            save()
-            # Added unmonitored with "skip" (Sonarr leaves episode monitoring
-            # alone); the old choices are applied below
-            try:
-                new = sonarr.call("POST", "series", dict(lookup, path=path, qualityProfileId=profile_id, monitored=False, seriesType="anime",
-                                                         seasonFolder=True, addOptions={"searchForMissingEpisodes": False, "monitor": "skip"})) if lookup else None
-            except ApiError:
-                new = None
-            new_id = (new or {}).get("id") if isinstance(new, dict) else None
-            if new_id is None:
-                warn(f"Could not add the series at {path} (TVDB {tvdb}); retried next run")
-                failed = 1
-                continue
-            state["added"][tvdb] = new_id
-            save()
-            added += 1
-        if migrate_monitoring(sonarr, db, old_id, new_id, row):
-            state["done"].append(tvdb)
-            save()
-            ok(f"Moved: {Path(path).name}")
-        else:
-            warn(f"Series at {path} is in Sonarr, but its monitoring wasn't copied yet; retried next run")
-            failed = 1
-    if added:
-        try:
-            sonarr.call("POST", "command", {"name": "RescanSeries"})
-        except ApiError:
-            pass
-    if not failed:
-        c.write_atomic(marker, "")
-        ok(f"Old anime Sonarr's series are in Sonarr; you can delete {cfg.paths.config / 'sonarr-anime'}")
+# Versions up to the tag below ran a second Sonarr for anime and merged it
+# into Sonarr on install; this one no longer does.
+LAST_WITH_MIGRATION = "last-with-anime-sonarr-migration"
 
 
-def query(db: Path, sql: str) -> list[dict]:
-    with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn, conn:
-        conn.row_factory = sqlite3.Row
-        return [dict(r) for r in conn.execute(sql)]
+def require_no_unmerged_anime_sonarr(cfg: Config) -> None:
+    """Stop rather than leave the old anime Sonarr's series behind unnoticed"""
+    old = cfg.paths.config / "sonarr-anime"
+    if (old / "sonarr.db").exists() and not (cfg.paths.state / "sonarr-anime-migrated").exists():
+        raise err(f"{old} holds the separate anime Sonarr of an older version, and its series were never merged into Sonarr. "
+                  f"This version no longer merges them. Merge them with the last version that does: "
+                  f"git checkout {LAST_WITH_MIGRATION} && nix run .#install, then git checkout main and install again. "
+                  f"If you don't need its series, delete {old} instead.")
 
 
 def series_settled(sonarr: App, series_id: int, seconds: int = 180) -> bool:
@@ -505,35 +403,4 @@ def series_settled(sonarr: App, series_id: int, seconds: int = 180) -> bool:
         except ApiError:
             pass
         time.sleep(2)
-    return False
-
-
-def migrate_monitoring(sonarr: App, db: Path, old_id: int, new_id: int, row: dict) -> bool:
-    """Copy one series' monitoring from the old database: episodes, seasons
-    and the series flag, once Sonarr has finished adding it (its refresh and
-    scan would otherwise overwrite them), then check it took"""
-    if not series_settled(sonarr, new_id):
-        warn(f"Sonarr is still adding series {new_id}")
-        return False
-    try:
-        old = {f"{e['s']}x{e['e']}": e["m"] == 1 for e in
-               query(db, f"SELECT SeasonNumber AS s, EpisodeNumber AS e, Monitored AS m FROM Episodes WHERE SeriesId = {int(old_id)}")}
-        episodes = sonarr.call("GET", f"episode?seriesId={new_id}") or []
-        for monitored in (True, False):
-            ids = [e["id"] for e in episodes if old.get(f"{e['seasonNumber']}x{e['episodeNumber']}") is monitored]
-            if ids:
-                sonarr.call("PUT", "episode/monitor", {"episodeIds": ids, "monitored": monitored})
-        series = sonarr.call("GET", f"series/{new_id}")
-        seasons = {str(s["seasonNumber"]): s["monitored"] for s in json.loads(row.get("Seasons") or "[]")}
-        series["monitored"] = row.get("Monitored") == 1
-        series["seasons"] = [dict(s, monitored=seasons[str(s["seasonNumber"])]) if str(s["seasonNumber"]) in seasons else s
-                             for s in series.get("seasons") or []]
-        sonarr.call("PUT", f"series/{new_id}", series)
-        # Every episode both databases know must now match
-        episodes = sonarr.call("GET", f"episode?seriesId={new_id}") or []
-    except (ApiError, sqlite3.Error, ValueError, KeyError, TypeError):
-        return False
-    if all(old.get(f"{e['seasonNumber']}x{e['episodeNumber']}") in (None, e.get("monitored")) for e in episodes):
-        return True
-    warn(f"Episode monitoring of series {new_id} didn't match the old Sonarr's")
     return False

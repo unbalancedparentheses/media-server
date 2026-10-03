@@ -124,9 +124,9 @@
               };
             };
 
-          # The Python package: the background services below (and, as the
-          # migration goes on, setup itself). Copied on its own so the
-          # services restart only when the Python code changes.
+          # The Python package: setup and the background services below.
+          # Copied on its own so the services restart only when the Python
+          # code changes.
           mediaserverPkg = pkgs.runCommand "mediaserver-python" { } ''
             mkdir -p $out
             cp -r ${./mediaserver} $out/mediaserver

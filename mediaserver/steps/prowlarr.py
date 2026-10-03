@@ -89,14 +89,6 @@ def connect_apps(p: Prowlarr, keys: Keys) -> None:
                 ok(f"{name} connected")
             except ApiError:
                 warn(f"Could not connect {name}")
-        if name == "Sonarr":
-            # Older setups had a separate anime Sonarr
-            for old in (a for a in apps or [] if a.get("name") == "Sonarr Anime"):
-                try:
-                    p.call("DELETE", f"applications/{old['id']}")
-                    ok("Removed the old Sonarr Anime app")
-                except ApiError:
-                    pass
 
 
 def byparr(p: Prowlarr) -> None:

@@ -1,5 +1,4 @@
-"""Pinned versions (pins.json, shared with the bash steps until they're
-migrated)."""
+"""Pinned versions of the Jellyfin plugins (pins.json)."""
 from __future__ import annotations
 
 import json

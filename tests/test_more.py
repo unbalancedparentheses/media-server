@@ -1,6 +1,5 @@
 """More failure paths and less common paths: launchd, the command line,
-installing the Jellyfin plugins, Seerr's first sign-in, the anime
-migration's monitoring copy.
+installing the Jellyfin plugins, Seerr's first sign-in, and api waits.
 
 Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
@@ -142,12 +141,10 @@ class SeerrFirstTime(Stack):
         self.stack.jellyfin.add_user("admin", "admin-pass")
         self.stack.jellyfin.wizard_done = True
 
-    def test_jellyfin_address_set_when_missing_and_old_anime_connection_removed(self):
-        self.stack.seerr.sonarr.add({"name": "Sonarr Anime", "port": 8990})
+    def test_jellyfin_address_set_when_missing(self):
         quiet(arrs.run_junk_filters, self.cfg)
         _, out = quiet(seerr.run, self.cfg)
         self.assertIn("Jellyfin address set (localhost:8096)", out)
-        self.assertIn("Removed the old Sonarr Anime connection", out)
         self.assertEqual([x["name"] for x in self.stack.seerr.sonarr.items], ["Sonarr"])
 
     def test_wrong_password_stops_here(self):
@@ -164,50 +161,6 @@ class SeerrFirstTime(Stack):
         _, out = quiet(seerr.run, Config(data, self.cfg.paths))
         self.assertIn("quality profile 'HD-1080p' doesn't exist there; not connecting", out)
         self.assertEqual(self.stack.seerr.radarr.items, [])
-
-
-class MonitoringCopy(unittest.TestCase):
-    """The old anime Sonarr's monitoring copied into Sonarr, and checked"""
-
-    def setUp(self):
-        self.root = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.root)
-        self.db = self.root / "sonarr.db"
-        with closing(sqlite3.connect(self.db)) as db, db:
-            db.execute("CREATE TABLE Episodes (SeriesId, SeasonNumber, EpisodeNumber, Monitored)")
-            db.executemany("INSERT INTO Episodes VALUES (7, ?, ?, ?)", [(1, 1, 1), (1, 2, 0)])
-        self.episodes = [{"id": 1, "seasonNumber": 1, "episodeNumber": 1, "monitored": False},
-                         {"id": 2, "seasonNumber": 1, "episodeNumber": 2, "monitored": True}]
-        self.series = {"id": 50, "monitored": False, "seasons": [{"seasonNumber": 1, "monitored": True}]}
-
-    def app(self, apply=True):
-        def answer(method, path, body):
-            if path.startswith("episode?"):
-                return self.episodes
-            if path == "command":
-                return []
-            if path == "episode/monitor" and apply:
-                for e in self.episodes:
-                    if e["id"] in body["episodeIds"]:
-                        e["monitored"] = body["monitored"]
-            if path == "series/50":
-                if method == "PUT":
-                    self.series = body
-                return self.series
-        from tests.test_steps import FakeApp
-        return FakeApp("Sonarr", answer)
-
-    def test_copied_and_checked(self):
-        row = {"Monitored": 1, "Seasons": json.dumps([{"seasonNumber": 1, "monitored": False}])}
-        self.assertTrue(quiet(arrs.migrate_monitoring, self.app(), self.db, 7, 50, row)[0])
-        self.assertEqual([e["monitored"] for e in self.episodes], [True, False])
-        self.assertEqual((self.series["monitored"], self.series["seasons"][0]["monitored"]), (True, False))
-
-    def test_not_taking_is_noticed(self):
-        row = {"Monitored": 1, "Seasons": "[]"}
-        ok, out = quiet(arrs.migrate_monitoring, self.app(apply=False), self.db, 7, 50, row)
-        self.assertFalse(ok)
-        self.assertIn("didn't match the old Sonarr's", out)
 
 
 class Waiting(unittest.TestCase):
