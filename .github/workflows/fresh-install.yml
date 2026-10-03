@@ -12,10 +12,11 @@ on:
   schedule:
     - cron: "0 6 * * 1"
 
-# A newer push makes a running check pointless
+# One at a time, never cancelled: a run that finishes saves the Nix store for
+# the next (a cancelled one wouldn't). A newer push replaces a waiting run.
 concurrency:
   group: fresh-install-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   lifecycle:
