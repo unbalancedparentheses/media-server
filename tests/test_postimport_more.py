@@ -400,3 +400,87 @@ class FullDisk(Scratch):
         with mock.patch.object(pi.subprocess, "run", run), mock.patch.object(Path, "write_text", write_text):
             self.assertEqual(pi.ocr(video, "en", {"index": 2}), "failed")
         self.assertEqual(sorted(p.name for p in self.dir.iterdir() if "srt" in p.name), [])
+
+
+class RejectOrder(Scratch):
+    """The failure is recorded in Sonarr/Radarr before the file is deleted,
+    and counted in our record before either"""
+
+    def arr(self, fail_on=None):
+        app = pi.Arr("Radarr", "http://x", "movie")
+        calls = []
+
+        def call(method, path, body=None):
+            calls.append((method, path.split("?")[0]))
+            if fail_on and path.startswith(fail_on):
+                raise OSError("Radarr stopped answering")
+            if path.startswith("history?"):
+                return {"records": [{"id": 9, "downloadId": "ABC"}]}
+            return {}
+        app.call = call
+        return app, calls
+
+    def record(self):
+        return {"id": 1, "movieId": 7, "downloadId": "ABC", "data": {"fileId": 3}}
+
+    def test_failed_marked_before_the_file_goes(self):
+        app, calls = self.arr()
+        self.assertTrue(app.reject(self.record()))
+        self.assertEqual(calls[1:], [("POST", "history/failed/9"), ("DELETE", "moviefile/3")])
+
+    def test_marking_failed_failing_deletes_nothing(self):
+        app, calls = self.arr(fail_on="history/failed")
+        with self.assertRaises(OSError):
+            app.reject(self.record())
+        self.assertNotIn(("DELETE", "moviefile/3"), calls)
+
+    def test_count_saved_before_rejecting(self):
+        video = self.dir / "Film.mkv"
+        video.write_bytes(b"x")
+        w = pi.Worker([], dict(pi.DEFAULTS), {})
+        saved = []
+
+        class Arr:
+            name, kind = "Radarr", "movie"
+
+            def item(self, record):
+                return "Film", 100, False, "radarr:7"
+
+            def failed_releases(self, record):
+                return 0
+
+            def reject(self, record):
+                saved.append(pi.read_json(pi.STATE / "state.json"))
+                raise OSError("interrupted")
+        record = {"id": 1, "movieId": 7, "downloadId": "ABC", "data": {"importedPath": str(video)}}
+        entry: dict = {"record": record, "attempts": 0, "next": 0, "suspect": {"problem": "x", "since": 0}}
+        with mock.patch.object(pi, "problem_with", return_value="the video is damaged"), mock.patch.object(pi, "probe", return_value={}):
+            with self.assertRaises(OSError):
+                w.handle_import(Arr(), record, entry)
+        self.assertEqual(saved[0]["rejections"]["radarr:7"]["count"], 1)   # on disk before reject ran
+        self.assertEqual(saved[0]["rejections"]["radarr:7"]["status"], "rejecting")
+
+
+class UnpreservableRecord(Scratch):
+    def test_stops_instead_of_starting_fresh(self):
+        f = self.dir / ".state/state.json"
+        f.write_text("{damaged")
+        with mock.patch.object(pi.os, "replace", side_effect=OSError(1, "Operation not permitted")):
+            with self.assertRaises(pi.StateTrouble) as raised:
+                pi.load_state()
+        self.assertIn("couldn't be set aside", str(raised.exception))
+        self.assertEqual(f.read_text(), "{damaged")
+
+    def test_main_loop_does_nothing_and_says_so_once(self):
+        rounds = iter(range(3))
+
+        def sleep(seconds):
+            if next(rounds, None) is None:
+                raise KeyboardInterrupt
+        with mock.patch.object(pi.sys, "argv", ["postimport"]), mock.patch.object(pi, "operation_running", return_value=False), \
+                mock.patch.object(pi, "load_state", side_effect=pi.StateTrouble("unreadable")), \
+                mock.patch.object(pi.Worker, "new_imports") as work, mock.patch.object(pi, "notify") as notify, \
+                mock.patch.object(pi.time, "sleep", sleep), self.assertRaises(KeyboardInterrupt):
+            pi.main()
+        work.assert_not_called()
+        self.assertEqual(notify.call_count, 1)

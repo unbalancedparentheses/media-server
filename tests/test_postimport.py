@@ -331,10 +331,11 @@ class Rejecting(unittest.TestCase):
         arr.call = call
         return arr
 
-    def test_deletes_the_file_then_marks_the_release_failed(self):
+    def test_marks_the_release_failed_then_deletes_the_file(self):
         arr = self.arr([{"id": 9, "downloadId": "ABC"}])
         self.assertTrue(arr.reject({"downloadId": "ABC", "data": {"fileId": "4"}}))
-        self.assertEqual(arr.calls, [("GET", "history"), ("DELETE", "episodefile/4"), ("POST", "history/failed/9")])
+        # Recorded as failed first: what the replacement limit counts
+        self.assertEqual(arr.calls, [("GET", "history"), ("POST", "history/failed/9"), ("DELETE", "episodefile/4")])
 
     def test_unknown_release_changes_nothing(self):
         arr = self.arr([{"id": 9, "downloadId": "OTHER"}])

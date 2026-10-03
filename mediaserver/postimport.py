@@ -154,6 +154,10 @@ def notify(title, message):
 
 # ─── Inspecting files ────────────────────────────────────────────
 
+class StateTrouble(Exception):
+    """The worker's record can't be used: no round runs until it can"""
+
+
 class ToolTrouble(Exception):
     """ffprobe/ffmpeg themselves don't work (missing, crashing): nothing can
     be concluded about the file, so nothing is rejected"""
@@ -776,6 +780,11 @@ class Arr:
         grabs = [r for r in grabs.get("records", []) if r.get("downloadId") == download]
         if not grabs:
             return False
+        # The failure is recorded in Sonarr/Radarr first (their history is
+        # what the replacement limit counts), the file deleted after: an
+        # interruption between the two leaves a file, never a deletion that
+        # wasn't counted
+        self.call("POST", f"history/failed/{grabs[0]['id']}")
         file_id = (record.get("data") or {}).get("fileId")
         if file_id:
             try:
@@ -783,7 +792,6 @@ class Arr:
             except urllib.error.HTTPError as e:
                 if e.code != 404:  # already gone (a season pack's other episode, or by hand)
                     raise
-        self.call("POST", f"history/failed/{grabs[0]['id']}")
         return True
 
     def rescan(self, record):
@@ -963,12 +971,22 @@ class Worker:
                     self.state["rejections"][key] = dict(rejection or {}, title=title, status="kept", reason=problem, time=int(time.time()))
                     self.remember(title, f"kept although {problem}: {tries} other releases weren't better")
                     notify("Media server: no good release", f"{title}: kept although {problem}; tried {tries} other releases.")
-                elif app.reject(record):
-                    self.state["rejections"][key] = {"title": title, "count": tries + 1, "reason": problem,
-                                                     "time": int(time.time()), "status": "looking"}
-                    self.remember(title, f"replaced because {problem}; {app.name} is looking for another release")
-                    return True
                 else:
+                    # Counted (and saved) before anything is deleted: an
+                    # interruption from here on only counts one too many
+                    before = self.state["rejections"].get(key)
+                    self.state["rejections"][key] = {"title": title, "count": tries + 1, "reason": problem,
+                                                     "time": int(time.time()), "status": "rejecting"}
+                    save(self.state)
+                    if app.reject(record):
+                        self.state["rejections"][key]["status"] = "looking"
+                        self.remember(title, f"replaced because {problem}; {app.name} is looking for another release")
+                        return True
+                    # Not a known release (imported by hand): nothing was done
+                    if before is None:
+                        self.state["rejections"].pop(key, None)
+                    else:
+                        self.state["rejections"][key] = before
                     self.remember(title, f"{problem} (imported by hand, so left alone)")
             elif suspect:
                 log(f"{title}: fine on a second look (first: {suspect['problem']})")
@@ -1144,8 +1162,10 @@ def load_state() -> dict:
     aside = f.with_name(f"state.json.unreadable-{int(time.time())}")
     try:
         os.replace(f, aside)
-    except OSError:
-        pass
+    except OSError as e:
+        # Not preserved: don't carry on (and later overwrite it) as if it were
+        raise StateTrouble(f"{f} is unreadable and couldn't be set aside ({e.strerror}); nothing is checked or "
+                           "replaced until it's fixed or removed") from None
     log(f"{f} was unreadable; set aside as {aside.name}, starting with a fresh record")
     notify("Media server: post-import record was damaged",
            f"It was set aside ({aside.name}); checks continue. Replacement limits still hold (they also use Sonarr/Radarr's history).")
@@ -1178,7 +1198,11 @@ def by_hand(mode, path):
     if info is None:
         print("can't read the file")
         return 1
-    state = load_state()
+    try:
+        state = load_state()
+    except StateTrouble as e:
+        print(e)
+        return 1
     Worker([], settings, state).fix(path, info, display_name(path))
     save(state)
     return 0
@@ -1189,7 +1213,7 @@ def main():
     if len(sys.argv) == 3 and sys.argv[1] in ("--check", "--fix"):
         return by_hand(sys.argv[1], sys.argv[2])
     apps = [Arr("Sonarr", local("sonarr"), "series"), Arr("Radarr", local("radarr"), "movie")]
-    waiting = False
+    waiting = stopped = False
     while True:
         if operation_running():
             if not waiting:
@@ -1197,7 +1221,17 @@ def main():
             waiting = True
         else:
             waiting = False
-            worker = Worker(apps, load_settings(), load_state())
+            try:
+                state = load_state()
+            except StateTrouble as e:
+                if not stopped:   # once, not every round
+                    log(str(e))
+                    notify("Media server: post-import checks stopped", str(e))
+                stopped = True
+                time.sleep(int(os.environ.get("POSTIMPORT_INTERVAL", "60")))
+                continue
+            stopped = False
+            worker = Worker(apps, load_settings(), state)
             try:
                 worker.new_imports()
                 worker.check_rejections()
