@@ -4,8 +4,9 @@ stay here; the browser only ever sees the summary. Runs as a launchd agent
 (see flake.nix).
 
 Every DASH_INTERVAL seconds (15): what's playing (and why Jellyfin is
-converting it, if it is), transfer speeds, system load and memory, the
-connection. Every DASH_SLOW_EVERY rounds (20, i.e. 5 minutes): library
+converting it, if it is), transfer speeds, the Mac's load and memory, the
+CPU and memory of the media server's own services (each with what it
+started, e.g. Jellyfin's conversions), the connection. Every DASH_SLOW_EVERY rounds (20, i.e. 5 minutes): library
 counts, Sonarr/Radarr queues, missing items and health, Prowlarr's
 indexers, Bazarr's missing subtitles, Seerr's request counts, disk space,
 Tailscale, an uptime sample per service, and the media side from dashmedia
@@ -29,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mediaserver import common as c
-from mediaserver import dashmedia
+from mediaserver import dashmedia, launchd
 
 QBIT = "http://127.0.0.1:8081/api/v2"
 # 24-hour availability: a sample per service every slow round (5 minutes).
@@ -79,6 +80,41 @@ class Collector:
         return {"load": load, "cpus": cpus, "cpu_pct": min(100, int(load[0] / cpus * 100)),
                 "mem_total": mem, "mem_used": used, "mem_pct": int(used * 100 / mem) if mem else 0,
                 "uptime_s": int(time.time()) - int(boot.group(1)) if boot else 0}
+
+    def services_usage(self, ncpu: int, mem_total: int) -> dict:
+        """CPU and memory of the media server's own services (each launchd
+        job and everything it started: Jellyfin's ffmpeg conversions,
+        Byparr's browser, Bazarr's server), apart from the rest of the Mac.
+        CPU is ps's recent average; 100% = the whole Mac."""
+        jobs = {}
+        listing = subprocess.run(["launchctl", "list"], capture_output=True, text=True, check=False).stdout
+        prefix = launchd.LABEL_PREFIX + "."
+        for line in listing.splitlines():
+            parts = line.split("\t")
+            if len(parts) == 3 and parts[2].startswith(prefix) and parts[0].isdigit():
+                jobs[int(parts[0])] = parts[2][len(prefix):]
+        procs = subprocess.run(["ps", "-axo", "pid=,ppid=,%cpu=,rss="], capture_output=True, text=True, check=False).stdout
+        parent, cpu, rss = {}, {}, {}
+        for line in procs.splitlines():
+            f = line.split()
+            if len(f) == 4:
+                pid = int(f[0])
+                parent[pid], cpu[pid], rss[pid] = int(f[1]), float(f[2]), int(f[3]) * 1024
+        per: dict[str, dict] = {name: {"name": name, "cpu": 0.0, "mem": 0} for name in jobs.values()}
+        for pid in parent:
+            p, seen = pid, 0
+            while p not in jobs and p in parent and p > 1 and seen < 50:  # walk up to the service's job
+                p, seen = parent[p], seen + 1
+            if p in jobs:
+                per[jobs[p]]["cpu"] += cpu[pid]
+                per[jobs[p]]["mem"] += rss[pid]
+        services = sorted(per.values(), key=lambda x: (x["cpu"], x["mem"]), reverse=True)
+        for x in services:
+            x["cpu"] = round(x["cpu"] / ncpu, 2)
+        total_cpu = sum(x["cpu"] for x in services)
+        total_mem = sum(x["mem"] for x in services)
+        return {"cpu_pct": round(total_cpu, 2), "mem_bytes": total_mem,
+                "mem_pct": round(total_mem * 100 / mem_total, 1) if mem_total else 0, "services": services}
 
     def playing(self) -> list:
         auth = c.jellyfin_auth(self.state)
@@ -253,7 +289,9 @@ class Collector:
             self.media_data = self.media_part()
         self.round_no += 1
         torrents = c.try_json(f"{QBIT}/torrents/info", default=[]) or []
-        fast = {"system": self.system(), "playing": self.playing(), "downloads": self.downloads(torrents),
+        system = self.system()
+        fast = {"system": system, "usage": self.services_usage(system.get("cpus") or 1, system.get("mem_total") or 0),
+                "playing": self.playing(), "downloads": self.downloads(torrents),
                 "connection": c.read_text(self.state / "netwatch/connection") or "unknown"}
         slow = self.slow or {}
         status = {**fast, **slow, **(self.media_data or {}), "attention": self.attention(fast, slow, torrents),

@@ -130,3 +130,25 @@ class DiskWatch(unittest.TestCase):
             self.assertFalse(diskwatch.check(root, root, 10 ** 9, 10, now=t + 60))  # too soon
             self.assertTrue(diskwatch.check(root, root, 10 ** 9, 10, now=t + 6 * 3600))
         self.assertEqual(len(shown), 2)
+
+
+class ServicesUsage(unittest.TestCase):
+    """Each process counts toward the service whose launchd job started it"""
+
+    def test_children_count_toward_their_service(self):
+        launchctl = "PID\tStatus\tLabel\n100\t0\torg.media-server.jellyfin\n200\t0\torg.media-server.bazarr\n-\t0\torg.media-server.byparr\n300\t0\tcom.other\n"
+        ps = "  100 1 10.0 1000\n  101 100 50.0 2000\n  102 101 4.0 100\n  200 1 1.0 500\n  201 200 1.0 500\n  300 1 90.0 9999\n"
+
+        def fake_run(cmd, **kw):
+            out = launchctl if cmd[0] == "launchctl" else ps
+            return mock.Mock(stdout=out, returncode=0)
+        col = Collector(Path("/c"), Path("/s"), Path("/m"), 50, 10)
+        with mock.patch("mediaserver.dashstatus.subprocess.run", fake_run):
+            u = col.services_usage(ncpu=4, mem_total=10 * 1024 * 1024)
+        by = {x["name"]: x for x in u["services"]}
+        self.assertEqual(set(by), {"jellyfin", "bazarr"})
+        self.assertEqual(by["jellyfin"]["cpu"], 16.0)  # (10 + 50 + 4) / 4 cores; ffmpeg's child too
+        self.assertEqual(by["jellyfin"]["mem"], 3100 * 1024)
+        self.assertEqual(by["bazarr"]["cpu"], 0.5)
+        self.assertEqual(u["cpu_pct"], 16.5)
+        self.assertEqual(u["services"][0]["name"], "jellyfin")  # busiest first

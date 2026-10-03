@@ -137,7 +137,7 @@
   .h-row .i-sub{font-size:0.7rem}
 
   /* Server */
-  .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:0.7rem}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:0.7rem}
   .tile{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:0.85rem 1rem;display:block}
   a.tile:hover{border-color:var(--border-hover)}
   .t-label{font-size:0.62rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--text3)}
@@ -154,6 +154,8 @@
   .spark{display:flex;gap:2px;flex:1;height:12px}
   .spark i{flex:1;border-radius:1px;background:var(--green);opacity:0.7}
   .spark i.down{background:var(--red);opacity:1}.spark i.na{background:var(--border)}
+  .mem-bar{flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden;align-self:center;margin-right:0.6rem}
+  .mem-bar i{display:block;height:100%;background:var(--purple);opacity:0.7}
   .updated{font-size:0.68rem;color:var(--text3);text-align:right;margin-top:0.6rem}
 
   @media(max-width:900px){.cols{grid-template-columns:1fr}}
@@ -329,6 +331,10 @@
       return'<span class="'+(p.video_direct?'t-warn':'t-bad')+'">'+what+'</span> · '+esc(why);
     }
 
+    var SERVICE_NAMES={jellyfin:'Jellyfin',sonarr:'Sonarr',radarr:'Radarr',prowlarr:'Prowlarr',bazarr:'Bazarr',qbittorrent:'qBittorrent',
+      sabnzbd:'SABnzbd',unpackerr:'Unpackerr',cleanuparr:'Cleanuparr',seerr:'Seerr',byparr:'Byparr',nginx:'Dashboard (nginx)',
+      diskwatch:'diskwatch',netwatch:'netwatch',dashstatus:'dashstatus',postimport:'postimport'};
+    function cpuText(v){return v>0&&v<0.1?'<0.1%':(v>=10?Math.round(v):v)+'%';}
     function tile(label,value,sub,href,cls,bar){
       var b=bar==null?'':'<div class="bar '+(bar.cls||'')+'"><i style="width:'+Math.min(100,bar.v)+'%"></i></div>';
       return(href?'<a class="tile" href="'+href+'">':'<div class="tile">')+'<div class="t-label">'+label+'</div><div class="t-value '+(cls||'')+'">'+value+'</div>'
@@ -417,7 +423,13 @@
       t+=tile('Missing',num(missing),num((s.sonarr||{}).missing)+' episodes · '+num((s.radarr||{}).missing)+' movies still wanted',admin(8989,'/wanted/missing'),'');
       t+=tile('Subtitles missing',num((sub.missing_episodes||0)+(sub.missing_movies||0)),num(sub.missing_episodes)+' episodes · '+num(sub.missing_movies)+' movies',admin(6767,'/wanted/series'),'');
       t+=tile('Indexers',(px.enabled!=null?(px.enabled-off)+' / '+px.enabled:'–'),'working · 24 h: '+num(st.queries)+' searches, '+num(st.grabs)+' grabs',admin(9696),off?'t-warn':'t-good');
-      t+=tile('System',(sys.cpu_pct==null?'–':sys.cpu_pct+'%')+' CPU',(sys.mem_pct==null?'–':sys.mem_pct+'%')+' memory · up '+(sys.uptime_s?upFor(sys.uptime_s):'–'),null,sys.cpu_pct>85?'t-warn':'',{v:sys.cpu_pct||0,cls:sys.cpu_pct>85?'warn':''});
+      // The media server's own services (with what they started), apart from the rest of the Mac
+      var us=s.usage;
+      if(us){
+        var busy=(us.services||[]).filter(function(x){return x.cpu>=0.5;}).slice(0,2).map(function(x){return esc(SERVICE_NAMES[x.name]||x.name)+' '+x.cpu+'%';});
+        t+=tile('Media server',cpuText(us.cpu_pct)+' CPU',fmtSize(us.mem_bytes)+' memory ('+us.mem_pct+'%)'+(busy.length?' · '+busy.join(', '):' · all quiet'),null,us.cpu_pct>50?'t-warn':'',{v:us.cpu_pct,cls:us.cpu_pct>50?'warn':''});
+      }
+      t+=tile('Whole Mac',(sys.cpu_pct==null?'–':sys.cpu_pct+'%')+' CPU',(sys.mem_pct==null?'–':sys.mem_pct+'%')+' memory · up '+(sys.uptime_s?upFor(sys.uptime_s):'–'),null,sys.cpu_pct>85?'t-warn':'',{v:sys.cpu_pct||0,cls:sys.cpu_pct>85?'warn':''});
       t+=tile('Disk',num(dk.free_gb)+' GB free','of '+num(dk.total_gb)+' GB · imports stop below '+dk.min_gb+' GB',null,dk.free_gb<dk.warn_gb?'t-warn':'',{v:used,cls:dk.free_gb<dk.min_gb?'crit':dk.free_gb<dk.warn_gb?'warn':''});
       if(ts.installed&&ts.state==='Running')t+=tile('Tailscale','Connected',esc(ts.name)+' · '+ts.peers+' devices',null,'t-good');
       document.getElementById('tiles').innerHTML=t;
@@ -428,11 +440,16 @@
         var down=ups.filter(function(u){return!u.up_now;}),shaky=ups.filter(function(u){return u.up_now&&u.pct<99;});
         var sum=down.length?'<span class="t-bad">✗</span> '+esc(down.map(function(u){return u.name;}).join(', '))+' '+(down.length>1?'are':'is')+' down'
           :'<span class="t-good">✓</span> All '+ups.length+' services are up'+(shaky.length?' · <span class="t-warn">'+esc(shaky.map(function(u){return u.name+' '+u.pct+'%';}).join(', '))+'</span> over 24 h':' · 100% over 24 h');
-        document.getElementById('up-sum').innerHTML=sum+'<span class="tag">details ▾</span>';
+        document.getElementById('up-sum').innerHTML=sum+'<span class="tag">services, CPU and memory ▾</span>';
         document.getElementById('up-list').innerHTML=ups.map(function(u){
           var bars=u.recent.map(function(x){return'<i class="'+(x===null?'na':x?'':'down')+'"></i>';}).join('');
           return'<div class="up-row"><span class="up-name">'+(u.up_now?'':'<span class="t-bad">●</span> ')+esc(u.name)+'</span><span class="spark">'+bars+'</span><span class="up-pct '+(u.pct<99?'t-warn':'')+'">'+u.pct+'%</span></div>';
-        }).join('')+'<div class="up-row tag">Last 24 h; bars: last 4 h</div>';
+        }).join('')+'<div class="up-row tag">Last 24 h; bars: last 4 h</div>'
+          +(s.usage?'<div class="up-row" style="margin-top:0.6rem"><span class="up-name t-label">Service</span><span class="spark t-label">Memory</span><span class="up-pct t-label">CPU</span></div>'
+            +s.usage.services.map(function(x){
+              var w=s.usage.services[0]?Math.max.apply(null,s.usage.services.map(function(y){return y.mem;})):1;
+              return'<div class="up-row"><span class="up-name">'+esc(SERVICE_NAMES[x.name]||x.name)+'</span><span class="spark"><span class="mem-bar"><i style="width:'+Math.max(1,x.mem*100/w)+'%"></i></span><span class="tag">'+fmtSize(x.mem)+'</span></span><span class="up-pct">'+cpuText(x.cpu)+'</span></div>';
+            }).join('')+'<div class="up-row tag">CPU: share of the whole Mac, averaged over the last minute; includes what each service started (e.g. Jellyfin\'s conversions)</div>':'');
         if(down.length)document.getElementById('uptime-box').open=true;
       }
       document.getElementById('updated').textContent='Updated '+ago(new Date(s.updated*1000).toISOString());
