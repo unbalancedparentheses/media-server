@@ -187,3 +187,71 @@ class Display(unittest.TestCase):
         stages = {st["name"]: st["state"] for st in dm.series_pipeline(show, {"status": 2, "by": "admin"}, {}, {}, [], {})}
         self.assertEqual(stages, {"requested": "done", "searching": "active", "downloading": "done", "importing": "done",
                                   "checking": "done", "subtitles": "done", "ready": "done"})
+
+
+class Recommended(unittest.TestCase):
+    def setUp(self):
+        import tempfile, shutil
+        self.state = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.state)
+        patcher = mock.patch.object(dm, "STATE", self.state)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.rating_calls = []
+        self.ratings = {"movie/1/ratingscombined": {"rt": {"criticsScore": 92, "audienceScore": 88}, "imdb": {"criticsScore": 8.1}},
+                        "movie/2/ratingscombined": {"rt": {"criticsScore": 40}},                 # rotten: left out
+                        "movie/3/ratingscombined": {"imdb": {"criticsScore": 7.9}},               # IMDb only
+                        "tv/10/ratings": {"criticsScore": 100, "audienceScore": 70},
+                        "movie/4/ratingscombined": {}}                                             # nothing: TMDB's vote
+
+    def fake_seerr(self, path):
+        if "ratings" in path:
+            self.rating_calls.append(path)
+            if self.down:
+                raise OSError("down")
+            return self.ratings.get(path, {})
+        movie = lambda i, title, pop, vote=7.0, **kw: {"id": i, "title": title, "popularity": pop, "voteAverage": vote,  # noqa: E731
+                                                       "posterPath": f"/{i}.jpg", "releaseDate": "2026-09-01", **kw}
+        if path.startswith("discover/movies") and "page=1" in path:
+            return {"results": [movie(1, "Great", 90, mediaInfo={"status": 5, "jellyfinMediaId": "abc"}), movie(2, "Rotten", 80),
+                                movie(3, "Good", 70), movie(4, "Unrated", 60, vote=8.3),
+                                movie(5, "Trailer", 99, video=True), {"id": 6, "title": "No poster", "popularity": 50}]}
+        if path.startswith("discover/tv") and "page=1" in path:
+            return {"results": [{"id": 10, "name": "Show", "popularity": 85, "voteAverage": 7.5, "posterPath": "/10.jpg",
+                                 "firstAirDate": "2026-08-01", "mediaInfo": {"status": 3}}]}
+        if path.startswith("discover/trending"):
+            return {"results": [{"id": 99, "mediaType": "person", "name": "Someone"}]}
+        return {"results": []}
+
+    def run_it(self, down=False):
+        self.down = down
+        with mock.patch.object(dm, "seerr", self.fake_seerr):
+            return dm.recommended()
+
+    def test_good_ones_scored_and_marked(self):
+        picks = self.run_it()
+        # Great: Rotten Tomatoes 92 and IMDb 8.1 average to 86.5
+        self.assertEqual([(p["title"], p["score"]) for p in picks], [("Show", 100), ("Great", 86), ("Unrated", 83), ("Good", 79)])
+        great = next(p for p in picks if p["title"] == "Great")
+        self.assertEqual((great["rt"], great["rt_audience"], great["imdb"], great["status"], great["watch"]), (92, 88, 8.1, 5, "abc"))
+        self.assertEqual(next(p for p in picks if p["title"] == "Show")["status"], 3)
+
+    def test_critics_and_viewers_averaged(self):
+        self.assertEqual(dm.score({"rt": 93, "imdb": 5.7}, 7.0), 75.0)
+        self.assertEqual(dm.score({"rt": 80}, 9.0), 80.0)
+        self.assertEqual(dm.score({"imdb": 7.9}, None), 79.0)
+        self.assertEqual(dm.score({}, 8.3), 83.0)
+        self.assertIsNone(dm.score({}, None))
+
+    def test_ratings_asked_once_a_day_and_kept_when_seerr_is_down(self):
+        self.run_it()
+        first = len(self.rating_calls)
+        self.run_it()
+        self.assertEqual(len(self.rating_calls), first)   # from the cache
+        # A day later Seerr doesn't answer: the old ratings are still used
+        cache = dm.c.read_json(self.state / "dashstatus/ratings.json")
+        for v in cache.values():
+            v["at"] -= 2 * 86400 - 10
+        dm.c.write_json(self.state / "dashstatus/ratings.json", cache)
+        picks = self.run_it(down=True)
+        self.assertEqual([p["title"] for p in picks], ["Show", "Great", "Unrated", "Good"])

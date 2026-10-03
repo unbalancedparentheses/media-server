@@ -227,6 +227,11 @@
       <div class="row" id="latest"></div>
     </div>
 
+    <div class="section hidden" id="worth-sec">
+      <div class="section-title">Worth watching <span class="more" style="cursor:default">new and trending, by Rotten Tomatoes and IMDb</span></div>
+      <div class="row" id="worth"></div>
+    </div>
+
     <div class="section">
       <div class="cols">
         <div class="panel">
@@ -310,6 +315,20 @@
       return'<a class="poster" href="'+watchUrl(c.id)+'" title="'+esc(c.title+(c.detail?' · '+c.detail:''))+'"><div class="p-img">'
         +(src?'<img loading="lazy" src="'+src+'" alt="" onerror="this.remove()">':'')+'<div class="p-none"'+(src?' style="z-index:-1"':'')+'>'+esc(c.title)+'</div>'
         +badge+bar+'<div class="p-play">▶</div></div><div class="p-title">'+esc(c.title)+'</div><div class="p-sub">'+esc(c.detail||'')+'</div></a>';
+    }
+
+    // A recommendation: its scores, and whether it's here already (watch),
+    // on its way, or one click from a request in Seerr
+    function worthCard(r){
+      var src='https://image.tmdb.org/t/p/w185'+r.poster;
+      var scores=[r.rt!=null?'🍅 '+r.rt+'%':'',r.imdb!=null?'IMDb '+r.imdb:'',r.rt==null&&r.imdb==null&&r.tmdb_vote?'TMDB '+r.tmdb_vote.toFixed(1):''].filter(Boolean).join(' · ');
+      var here=r.status===5||r.status===4,asked=r.status===2||r.status===3;
+      var href=here&&r.watch?watchUrl(r.watch):seerrBase+'/'+r.type+'/'+r.tmdb;
+      var badge=here?'<span class="p-badge">In library</span>':asked?'<span class="p-badge">Requested</span>':'';
+      var sub=(r.type==='tv'?'Series':'Movie')+(r.year?' · '+r.year:'');
+      return'<a class="poster" href="'+href+'" title="'+esc(r.title+' · '+scores+(here?'':' · '+(asked?'requested':'click to request in Seerr')))+'"><div class="p-img">'
+        +'<img loading="lazy" src="'+esc(src)+'" alt="" onerror="this.remove()"><div class="p-none" style="z-index:-1">'+esc(r.title)+'</div>'
+        +badge+'<div class="p-play">'+(here?'▶':'+')+'</div></div><div class="p-title">'+esc(r.title)+'</div><div class="p-sub">'+esc(scores||sub)+'</div></a>';
     }
 
     // ── Attention (dismissed alerts come back when they change, or after a day) ──
@@ -428,6 +447,11 @@
         document.getElementById('latest').innerHTML=s.latest.map(function(c){return posterCard(c,{badge:c.new>1?c.new+' new':''});}).join('');
       }
 
+      if(s.recommended){
+        show('worth-sec',s.recommended.length>0);
+        document.getElementById('worth').innerHTML=s.recommended.map(worthCard).join('');
+      }
+
       // Requests and what's on its way, each with where it is in the pipeline
       var rq=s.requests_live;
       if(rq){
@@ -530,7 +554,7 @@
     // (every few minutes), indexers and disk; a part that failed to refresh
     // says so and how old what's shown is; a status file that stopped
     // updating is a warning, not a quiet old timestamp
-    var PART_NAMES={'continue':'continue watching',latest:'recently added',requests_live:'requests',upcoming:'coming up',health:'library health'};
+    var PART_NAMES={'continue':'continue watching',latest:'recently added',requests_live:'requests',upcoming:'coming up',health:'library health',recommended:'worth watching'};
     function when(t){return t?ago(new Date(t*1000).toISOString()):'never';}
     function freshness(s){
       var age=Date.now()/1000-(s.updated||0),parts=[];

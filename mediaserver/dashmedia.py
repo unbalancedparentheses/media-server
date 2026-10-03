@@ -418,6 +418,82 @@ def upcoming():
     return sorted(out, key=lambda x: x["date"])[:20]
 
 
+# ─── Worth watching ──────────────────────────────────────────────
+# New and trending films and series, scored by Rotten Tomatoes critics and
+# IMDb viewers (averaged when both are known), else TMDB: all through Seerr, which already looks these up (IMDb and
+# Rotten Tomatoes have no public API; Letterboxd's is partners only).
+RECENT_DAYS = 120
+GOOD_SCORE = 75          # out of 100
+RATINGS_KEEP = 86400     # a title's ratings are asked for once a day
+
+
+def ratings(kind: str, tmdb: int, cache: dict) -> dict:
+    """{"rt": critics %, "rt_audience": %, "imdb": 0-10} (what's known),
+    cached for a day so Rotten Tomatoes isn't asked every few minutes"""
+    key, now = f"{kind}:{tmdb}", time.time()
+    hit = cache.get(key)
+    if hit and now - hit.get("at", 0) < RATINGS_KEEP:
+        return hit["r"]
+    try:
+        raw = seerr(f"movie/{tmdb}/ratingscombined" if kind == "movie" else f"tv/{tmdb}/ratings") or {}
+    except c.HTTP_ERRORS:
+        raw = None
+    if raw is None:   # not answering: use what's cached, even if old
+        return hit["r"] if hit else {}
+    rt = raw.get("rt") if kind == "movie" else raw
+    imdb = raw.get("imdb") if kind == "movie" else None
+    r = {k: v for k, v in (("rt", (rt or {}).get("criticsScore")), ("rt_audience", (rt or {}).get("audienceScore")),
+                           ("imdb", (imdb or {}).get("criticsScore"))) if v is not None}
+    cache[key] = {"at": now, "r": r}
+    return r
+
+
+def score(r: dict, tmdb_vote: float | None) -> float | None:
+    """Out of 100: the average of Rotten Tomatoes' critics and IMDb's
+    viewers where both are known (critics alone overrate some), either one
+    alone, else TMDB's users"""
+    known = [float(r["rt"])] if r.get("rt") is not None else []
+    known += [float(r["imdb"]) * 10] if r.get("imdb") is not None else []
+    if known:
+        return sum(known) / len(known)
+    return float(tmdb_vote) * 10 if tmdb_vote else None
+
+
+def recommended(limit: int = 14) -> list:
+    since = (datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)).strftime("%Y-%m-%d")
+    candidates: dict = {}
+    sources = [("movie", f"discover/movies?page={p}&primaryReleaseDateGte={since}&sortBy=popularity.desc&voteCountGte=50")
+               for p in (1, 2)]
+    sources += [("tv", f"discover/tv?page={p}&firstAirDateGte={since}&sortBy=popularity.desc&voteCountGte=30") for p in (1, 2)]
+    sources += [(None, "discover/trending?page=1")]
+    for kind, path in sources:
+        for r in (seerr(path) or {}).get("results") or []:
+            k = kind or r.get("mediaType")
+            if k not in ("movie", "tv") or r.get("video") or not r.get("posterPath"):
+                continue
+            candidates.setdefault((k, r["id"]), r)
+    cache_file = STATE / "dashstatus/ratings.json"
+    cache = c.read_json(cache_file, {}) or {}
+    picks = []
+    # The most popular first, so the ratings asked for are the ones that matter
+    for (kind, tmdb), r in sorted(candidates.items(), key=lambda kv: -(kv[1].get("popularity") or 0))[:40]:
+        rating = ratings(kind, tmdb, cache)
+        value = score(rating, r.get("voteAverage"))
+        if value is None or value < GOOD_SCORE:
+            continue
+        media = r.get("mediaInfo") or {}
+        picks.append({"title": r.get("title") or r.get("name"), "type": kind, "tmdb": tmdb,
+                      "year": (r.get("releaseDate") or r.get("firstAirDate") or "")[:4], "poster": r.get("posterPath"),
+                      "score": round(value), **rating, "tmdb_vote": r.get("voteAverage"),
+                      # Seerr's status: 5 available, 4 partly, 2/3 requested or on its way
+                      "status": media.get("status"), "watch": media.get("jellyfinMediaId")})
+    # Forget ratings not asked for in a week
+    cache = {k: v for k, v in cache.items() if time.time() - v.get("at", 0) < 7 * 86400}
+    c.write_json(cache_file, cache, compact=True)
+    picks.sort(key=lambda x: (-x["score"], x["title"] or ""))
+    return picks[:limit]
+
+
 def grouped_fixes(recent: list) -> list:
     """One line per title and fix: the same fix on several episodes of a
     series is "Kaiji · 4 episodes" (newest first, as given)"""
@@ -467,7 +543,7 @@ def health():
     return out
 
 
-MEDIA_PARTS = ("continue", "latest", "requests_live", "upcoming", "health")
+MEDIA_PARTS = ("continue", "latest", "requests_live", "upcoming", "health", "recommended")
 
 
 def carry_over(previous: dict | None, new: dict) -> dict:
@@ -489,7 +565,7 @@ def carry_over(previous: dict | None, new: dict) -> dict:
 def collect() -> dict:
     result, failed = {}, []
     for name, part in (("continue", continue_watching), ("latest", latest), ("requests_live", requests),
-                       ("upcoming", upcoming), ("health", health)):
+                       ("upcoming", upcoming), ("health", health), ("recommended", recommended)):
         try:
             result[name] = part()
         except Exception as e:  # one broken source mustn't blank the others

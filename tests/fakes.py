@@ -633,6 +633,17 @@ class FakeSeerr(FakeService):
         def request_count(req):
             return {"total": len(self.requests_list), "pending": 0, "processing": 1, "available": 1}
 
+        self.discover: dict = {"movies": [], "tv": [], "trending": []}
+        self.ratings: dict = {}
+
+        @self.route("GET", r"/api/v1/discover/(movies|tv|trending)")
+        def discover(req, kind):
+            return {"page": 1, "results": copy.deepcopy(self.discover[kind])}
+
+        @self.route("GET", r"/api/v1/(movie|tv)/(\d+)/(ratingscombined|ratings)")
+        def rating(req, kind, tmdb, _):
+            return self.ratings.get((kind, int(tmdb)), {})
+
         @self.route("GET", r"/api/v1/(movie|tv)/(\d+)")
         def details(req, kind, tmdb):
             return self.details.get((kind, int(tmdb)), {"title": f"TMDB {tmdb}"})
