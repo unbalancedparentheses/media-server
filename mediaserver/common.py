@@ -153,6 +153,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+# Built once: each build makes a new TLS context, which costs more than a
+# request to a local service (urllib's own urlopen shares one the same way)
+_OPENERS = {True: urllib.request.build_opener(), False: urllib.request.build_opener(_NoRedirect)}
+
+
 def request(url: str, method: str = "GET", headers: dict | None = None, body: Any = None,
             form: dict | None = None, timeout: float = 15, follow: bool = True) -> Response:
     """Any answer as a Response (status 0 when nothing answered); with
@@ -166,9 +171,8 @@ def request(url: str, method: str = "GET", headers: dict | None = None, body: An
         data = data.encode() if isinstance(data, str) else data
         hdrs.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
-    opener = urllib.request.build_opener() if follow else urllib.request.build_opener(_NoRedirect)
     try:
-        with opener.open(req, timeout=timeout) as resp:
+        with _OPENERS[follow].open(req, timeout=timeout) as resp:
             return Response(resp.status, dict(resp.headers), resp.read())
     except urllib.error.HTTPError as e:
         return Response(e.code, dict(e.headers or {}), e.read() if e.fp else b"")

@@ -397,7 +397,7 @@
                 export COVERAGE_FILE PYTHONDONTWRITEBYTECODE=1
                 cd ${self}
                 python3 -m coverage run --source=mediaserver -m unittest discover -q -s tests -t .
-                python3 -m coverage report --sort=cover --skip-covered --fail-under=80
+                python3 -m coverage report --sort=cover --skip-covered --fail-under=85
               '';
             }
           );
