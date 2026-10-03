@@ -19,8 +19,11 @@ def main(argv: list[str]) -> int:
         if argv[:1] == ["step"]:
             from mediaserver import steps
             return steps.main(argv[1:])
+        if argv[:1] == ["e2e"]:
+            from mediaserver import e2e
+            return e2e.main(argv[1:])
         if len(argv) < 1 or argv[0] not in COMMANDS:
-            print(f"Usage: python3 -m mediaserver {{{'|'.join(COMMANDS)}|step <name>...}}", file=sys.stderr)
+            print(f"Usage: python3 -m mediaserver {{{'|'.join(COMMANDS)}|e2e [--keep]|step <name>...}}", file=sys.stderr)
             return 2
         return importlib.import_module(COMMANDS[argv[0]]).main()
     except SetupError as e:

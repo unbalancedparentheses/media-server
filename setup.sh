@@ -48,8 +48,6 @@ MAX_BACKUPS=10
 . "$SCRIPT_DIR/scripts/setup-services.sh"
 # shellcheck source=scripts/maintenance.sh
 . "$SCRIPT_DIR/scripts/maintenance.sh"
-# shellcheck source=scripts/e2e.sh
-. "$SCRIPT_DIR/scripts/e2e.sh"
 for step in "$SCRIPT_DIR"/scripts/steps/*.sh; do
   # shellcheck source=/dev/null
   . "$step"
@@ -125,7 +123,7 @@ run_setup() {
   timed wait_for_services
   timed load_api_keys
   # Radarr indexers an interrupted e2e test left paused
-  e2e_resume_radarr_indexers || true
+  py e2e --resume-indexers || true
   timed py step qbittorrent
   timed py step jellyfin
   load_jellyfin_key
@@ -251,7 +249,7 @@ if [ "$MODE" = "test" ] || [ "$MODE" = "status" ] || [ "$MODE" = "e2e" ] || [ "$
   if [ "$MODE" = "doctor" ]; then DOCTOR_EXIT=0; py doctor || DOCTOR_EXIT=$?; exit "$DOCTOR_EXIT"; fi
   if [ "$MODE" = "e2e" ]; then
     E2E_EXIT=0
-    do_e2e || E2E_EXIT=$?
+    if [ "$E2E_KEEP" = true ]; then py e2e --keep || E2E_EXIT=$?; else py e2e || E2E_EXIT=$?; fi
     exit "$E2E_EXIT"
   fi
   VERIFY_EXIT=0

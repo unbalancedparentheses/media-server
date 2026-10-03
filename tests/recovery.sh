@@ -31,7 +31,7 @@ sandbox() {
   SCRIPT_DIR="$ROOT" DRY_RUN=false NON_INTERACTIVE=true PURGE=false
   mkdir -p "$CONFIG_DIR" "$STATE_DIR" "$LOG_DIR"
   # shellcheck source=/dev/null
-  for f in lib.sh service_registry.sh launchd.sh maintenance.sh e2e.sh; do . "$ROOT/scripts/$f"; done
+  for f in lib.sh service_registry.sh launchd.sh maintenance.sh; do . "$ROOT/scripts/$f"; done
   # shellcheck source=/dev/null
   for f in "$ROOT"/scripts/steps/*.sh; do . "$f"; done
   # The shell settings setup.sh runs with (its ERR trap comes from lib.sh):
@@ -131,58 +131,6 @@ test_entry_point_backup_and_restore() {
   expect_eq "$(jq -r .services.jellyfin.password "$STATE_DIR/credentials.json")" current "restored credentials"
 }
 
-# ─── e2e cleanup and pre-checks ──────────────────────────────────
-
-e2e_fakes() {
-  RADARR_KEY=r SONARR_KEY=s SEERR_KEY=k JELLYFIN_TOKEN=""
-  DL_COMPLETE="$MEDIA_DIR/downloads"
-  mkdir -p "$STATE_DIR/e2e"
-  echo '{"movie_id":"42"}' > "$STATE_DIR/e2e/owned.json"
-  api() {
-    case "$1 $2" in
-      "GET "*/queue*) echo '{"records":[]}' ;;
-      "DELETE "*) touch "$FAKE/deleted" ;;
-      *) return 22 ;;
-    esac
-  }
-}
-
-# Radarr not answering during cleanup: nothing counts as removed, the
-# record is kept for the next run
-test_cleanup_keeps_record_when_radarr_is_down() {
-  e2e_fakes
-  api_status() { echo 000; }
-  e2e_cleanup >/dev/null && fail "cleanup reported success"
-  [ -f "$STATE_DIR/e2e/owned.json" ] || fail "ownership record dropped"
-}
-
-# Movie already gone (404): cleanup succeeds and forgets it
-test_cleanup_treats_404_as_gone() {
-  e2e_fakes
-  api_status() { echo 404; }
-  e2e_cleanup >/dev/null || fail "cleanup failed"
-  [ ! -f "$STATE_DIR/e2e/owned.json" ] || fail "record kept after a clean run"
-  [ ! -f "$FAKE/deleted" ] || fail "tried to delete a movie that's gone"
-}
-
-# Movie still there (200): it's deleted
-test_cleanup_deletes_existing_movie() {
-  e2e_fakes
-  api_status() { echo 200; }
-  e2e_cleanup >/dev/null || fail "cleanup failed"
-  [ -f "$FAKE/deleted" ] || fail "movie not deleted"
-}
-
-# The pre-check can't reach Radarr: it must stop, not assume the test
-# titles are absent
-test_clean_slate_stops_when_radarr_is_down() {
-  RADARR_KEY=r SONARR_KEY=s SEERR_KEY=k
-  api() { return 22; }
-  local out
-  out=$(e2e_require_clean_slate 2>&1) && fail "went ahead without checking Radarr"
-  grep -q "Couldn't reach Radarr" <<< "$out" || fail "unexpected message: $out"
-}
-
 # ─── Tailscale ───────────────────────────────────────────────────
 
 # A route published for an old dashboard port is still removed
@@ -222,29 +170,6 @@ test_tailscale_removal_failure_is_reported() {
   [ -f "$STATE_DIR/tailscale-routes.json" ] || fail "record dropped after a failed removal"
 }
 
-# ─── e2e: Radarr indexers ────────────────────────────────────────
-
-# Restoring fails for one indexer: it stays recorded for the next run
-test_paused_indexers_kept_until_restored() {
-  RADARR_KEY=r
-  mkdir -p "$STATE_DIR/e2e"
-  echo '[{"id":1,"enableAutomaticSearch":true,"enableRss":true},{"id":2,"enableAutomaticSearch":true,"enableRss":false}]' > "$(e2e_paused_file)"
-  api_status() { echo 200; }
-  api() {
-    case "$1 $2" in
-      "GET "*/indexer/*) echo '{"enableAutomaticSearch":false,"enableRss":false}' ;;
-      "PUT "*/indexer/1*) return 0 ;;
-      "PUT "*/indexer/2*) [ -f "$FAKE/radarr_ok" ] ;;
-      *) return 22 ;;
-    esac
-  }
-  e2e_resume_radarr_indexers >/dev/null 2>&1 && fail "reported restored while one indexer failed"
-  expect_eq "$(jq -c '[.[].id]' "$(e2e_paused_file)")" "[2]" "still-paused record"
-  touch "$FAKE/radarr_ok"
-  e2e_resume_radarr_indexers >/dev/null || fail "restore failed"
-  [ ! -f "$(e2e_paused_file)" ] || fail "record kept after restoring"
-}
-
 # ─── Recovery edge cases ─────────────────────────────────────────
 
 # Tailscale's status can't be read: nothing counts as removed, record kept
@@ -257,35 +182,7 @@ test_tailscale_status_failure_keeps_record() {
   [ -f "$STATE_DIR/tailscale-routes.json" ] || fail "route record dropped"
 }
 
-# A corrupted paused-indexer record is kept and reported, never "restored"
-test_corrupt_paused_indexer_record_kept() {
-  RADARR_KEY=r
-  mkdir -p "$STATE_DIR/e2e"
-  echo '{not json' > "$(e2e_paused_file)"
-  api() { touch "$FAKE/api_called"; return 22; }
-  api_status() { echo 200; }
-  e2e_resume_radarr_indexers >/dev/null 2>&1 && fail "a corrupted record counted as restored"
-  [ -f "$(e2e_paused_file)" ] || fail "corrupted record deleted"
-}
-
 # ─── Smaller recovery cases ──────────────────────────────────────
-
-# e2e: pausing an indexer fails, so the test doesn't run with automatic
-# search still on, and what it paused is restored
-test_e2e_stops_when_pausing_indexers_fails() {
-  RADARR_KEY=r
-  api() {
-    case "$1 $2" in
-      "GET "*/api/v3/indexer) echo '[{"id":1,"enableAutomaticSearch":true,"enableRss":true}]' ;;
-      "GET "*/indexer/1) echo '{"id":1,"enableAutomaticSearch":true,"enableRss":true}' ;;
-      "PUT "*) [ -f "$FAKE/restoring" ] || { touch "$FAKE/restoring"; return 22; } ;;
-    esac
-  }
-  api_status() { echo 200; }
-  ( e2e_pause_radarr_indexers >/dev/null 2>&1; echo "ran on" ) | grep -q "ran on" && fail "carried on with search still on"
-  [ ! -f "$(e2e_paused_file)" ] || fail "paused-indexer record left after restoring"
-  return 0
-}
 
 # ─── Operation lock ──────────────────────────────────────────────
 

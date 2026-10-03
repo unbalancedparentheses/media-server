@@ -96,7 +96,7 @@ class FakeService:
                 self.end_headers()
                 self.wfile.write(data)
 
-            do_GET = do_POST = do_PUT = do_DELETE = handle_any
+            do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = handle_any
 
             def log_message(self, format, *args):  # noqa: A002 (the base class's name)
                 pass
