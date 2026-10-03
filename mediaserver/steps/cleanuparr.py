@@ -11,10 +11,9 @@ from typing import Any
 from mediaserver import api, creds, launchd, logins
 from mediaserver import common as c
 from mediaserver.api import ApiError
-from mediaserver.config import Config, Keys
+from mediaserver.config import Config, Keys, local
 from mediaserver.ui import err, info, ok, warn
 
-LOCAL = "http://127.0.0.1:11011"
 
 
 class Cleanuparr:
@@ -206,11 +205,11 @@ def require_login(cfg: Config) -> None:
     if launchd.loaded("cleanuparr"):
         key = c.cleanuparr_key(config_dir)
         try:
-            general = api.get(f"{LOCAL}/api/configuration/general", {"X-Api-Key": key})
+            general = api.get(f"{local('cleanuparr')}/api/configuration/general", {"X-Api-Key": key})
             if (general.get("auth") or {}).get("disableAuthForLocalAddresses") is False:
                 return
             general["auth"]["disableAuthForLocalAddresses"] = False
-            api.call("PUT", f"{LOCAL}/api/configuration/general", {"X-Api-Key": key}, body=general)
+            api.call("PUT", f"{local('cleanuparr')}/api/configuration/general", {"X-Api-Key": key}, body=general)
             ok("Cleanuparr: login required again")
             return
         except (ApiError, KeyError, TypeError, AttributeError):

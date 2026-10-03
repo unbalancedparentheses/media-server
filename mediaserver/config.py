@@ -56,6 +56,16 @@ def default_paths() -> Paths:
     return Paths(Path(os.environ.get("MEDIA_DIR", Path.home() / "media")))
 
 
+PORTS = {"jellyfin": 8096, "sonarr": 8989, "radarr": 7878, "prowlarr": 9696, "bazarr": 6767, "qbittorrent": 8081,
+         "sabnzbd": 8080, "seerr": 5055, "byparr": 8191, "cleanuparr": 11011}
+
+
+def local(name: str, host: str = "127.0.0.1") -> str:
+    """Where a service answers on this Mac. MEDIASERVER_URL_<NAME> overrides
+    it (the tests point the steps at fake services that way)."""
+    return os.environ.get(f"MEDIASERVER_URL_{name.upper()}") or f"http://{host}:{PORTS[name]}"
+
+
 @dataclass
 class Urls:
     """Where each service answers. Admin UIs listen on network.admin_bind;
@@ -67,30 +77,34 @@ class Urls:
     def admin_host(self) -> str:
         return "localhost" if self.admin_bind == "0.0.0.0" else self.admin_bind
 
-    def admin(self, port: int) -> str:
-        return f"http://{self.admin_host}:{port}"
+    def admin(self, name: str) -> str:
+        return local(name, self.admin_host)
 
     @property
-    def qbittorrent(self): return self.admin(8081)
+    def qbittorrent(self): return self.admin("qbittorrent")
     @property
-    def sonarr(self): return self.admin(8989)
+    def sonarr(self): return self.admin("sonarr")
     @property
-    def radarr(self): return self.admin(7878)
+    def radarr(self): return self.admin("radarr")
     @property
-    def prowlarr(self): return self.admin(9696)
+    def prowlarr(self): return self.admin("prowlarr")
     @property
-    def bazarr(self): return self.admin(6767)
+    def bazarr(self): return self.admin("bazarr")
     @property
-    def sabnzbd(self): return self.admin(8080)
+    def sabnzbd(self): return self.admin("sabnzbd")
     @property
-    def cleanuparr(self): return self.admin(11011)
-    jellyfin = "http://localhost:8096"
-    seerr = "http://localhost:5055"
-    byparr = "http://127.0.0.1:8191"
+    def cleanuparr(self): return self.admin("cleanuparr")
+    @property
+    def jellyfin(self): return local("jellyfin", "localhost")
+    @property
+    def seerr(self): return local("seerr", "localhost")
+    @property
+    def byparr(self): return local("byparr")
 
     @property
     def dashboard(self) -> str:
-        return "http://localhost" + ("" if self.dashboard_port == 80 else f":{self.dashboard_port}")
+        return os.environ.get("MEDIASERVER_URL_DASHBOARD") or \
+            "http://localhost" + ("" if self.dashboard_port == 80 else f":{self.dashboard_port}")
 
     def health_endpoints(self) -> list[tuple[str, str]]:
         return [("Jellyfin", f"{self.jellyfin}/health"), ("Sonarr", f"{self.sonarr}/ping"),

@@ -25,13 +25,10 @@ from pathlib import Path
 from typing import Any
 
 from mediaserver import common as c
+from mediaserver.config import local
 
 CONFIG = c.MEDIA / "config"
 STATE = c.MEDIA / ".state"
-JELLYFIN = "http://127.0.0.1:8096"
-SONARR = "http://127.0.0.1:8989/api/v3"
-RADARR = "http://127.0.0.1:7878/api/v3"
-SEERR = "http://127.0.0.1:5055/api/v1"
 
 
 def configure(config: Path, state: Path) -> None:
@@ -40,19 +37,19 @@ def configure(config: Path, state: Path) -> None:
 
 
 def jellyfin(path):
-    return c.get_json(f"{JELLYFIN}/{path}", c.jellyfin_auth(STATE))
+    return c.get_json(f"{local('jellyfin')}/{path}", c.jellyfin_auth(STATE))
 
 
 def sonarr(path):
-    return c.get_json(f"{SONARR}/{path}", {"X-Api-Key": c.arr_key(CONFIG, "sonarr")})
+    return c.get_json(f"{local('sonarr')}/api/v3/{path}", {"X-Api-Key": c.arr_key(CONFIG, "sonarr")})
 
 
 def radarr(path):
-    return c.get_json(f"{RADARR}/{path}", {"X-Api-Key": c.arr_key(CONFIG, "radarr")})
+    return c.get_json(f"{local('radarr')}/api/v3/{path}", {"X-Api-Key": c.arr_key(CONFIG, "radarr")})
 
 
 def seerr(path):
-    return c.get_json(f"{SEERR}/{path}", {"X-Api-Key": c.seerr_key(CONFIG)})
+    return c.get_json(f"{local('seerr')}/api/v1/{path}", {"X-Api-Key": c.seerr_key(CONFIG)})
 
 
 def poster(item):
@@ -224,7 +221,7 @@ def bazarr_wanted(kind: str) -> dict:
     key = c.bazarr_key(CONFIG)
     if not key:
         return {}
-    data = c.try_json(f"http://127.0.0.1:6767/api/{kind}/wanted?start=0&length=-1&apikey={key}", default={}) or {}
+    data = c.try_json(f"{local('bazarr')}/api/{kind}/wanted?start=0&length=-1&apikey={key}", default={}) or {}
     counts: dict = {}
     for row in data.get("data") or []:
         item = row.get("radarrId") if kind == "movies" else row.get("sonarrSeriesId")

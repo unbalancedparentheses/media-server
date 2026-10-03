@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 from mediaserver import common as c
+from mediaserver.config import local
 
 PROBES = ("https://www.gstatic.com/generate_204", "https://cloudflare.com/cdn-cgi/trace")
 
@@ -97,10 +98,10 @@ class Netwatch:
             c.log(f"re-tested {name}'s indexers")
 
         def all_tests() -> None:
-            retest("Prowlarr", "http://127.0.0.1:9696/api/v1/indexer/testall", c.arr_key(self.config, "prowlarr"))
+            retest("Prowlarr", local("prowlarr") + "/api/v1/indexer/testall", c.arr_key(self.config, "prowlarr"))
             apps = [threading.Thread(target=retest, args=(name, url, c.arr_key(self.config, app)), daemon=True)
-                    for name, url, app in (("Sonarr", "http://127.0.0.1:8989/api/v3/indexer/testall", "sonarr"),
-                                           ("Radarr", "http://127.0.0.1:7878/api/v3/indexer/testall", "radarr"))]
+                    for name, url, app in (("Sonarr", local("sonarr") + "/api/v3/indexer/testall", "sonarr"),
+                                           ("Radarr", local("radarr") + "/api/v3/indexer/testall", "radarr"))]
             for t in apps:
                 t.start()
             for t in apps:
@@ -109,7 +110,7 @@ class Netwatch:
         key = c.bazarr_key(self.config)
         if key:
             try:
-                c.http(f"http://127.0.0.1:6767/api/providers?apikey={key}", method="POST",
+                c.http(local("bazarr") + f"/api/providers?apikey={key}", method="POST",
                        form={"action": "reset"}, timeout=30)
                 c.log("cleared Bazarr's provider throttling")
             except c.HTTP_ERRORS:
@@ -150,7 +151,7 @@ class Netwatch:
 def main() -> None:
     config = Path(os.environ.get("NETWATCH_CONFIG", c.MEDIA / "config"))
     state = Path(os.environ.get("NETWATCH_STATE", c.MEDIA / ".state/netwatch"))
-    nw = Netwatch(config, state, os.environ.get("NETWATCH_CLEANUPARR_URL", "http://127.0.0.1:11011"),
+    nw = Netwatch(config, state, os.environ.get("NETWATCH_CLEANUPARR_URL", local("cleanuparr")),
                   Path(os.environ.get("NETWATCH_LOCK", state.parent / "lock")))
     state.mkdir(parents=True, exist_ok=True)
     (state / "cleanuparr-paused").unlink(missing_ok=True)  # older versions' pause flag

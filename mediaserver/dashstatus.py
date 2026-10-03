@@ -31,16 +31,17 @@ from pathlib import Path
 
 from mediaserver import common as c
 from mediaserver import dashmedia, launchd
+from mediaserver.config import local
 
-QBIT = "http://127.0.0.1:8081/api/v2"
 # 24-hour availability: a sample per service every slow round (5 minutes).
 # Byparr is checked on /docs: its /health opens a browser and can take
 # longer than the timeout.
-UPTIME_CHECKS = [("Jellyfin", "http://127.0.0.1:8096/health"), ("Seerr", "http://127.0.0.1:5055/api/v1/status"),
-                 ("Sonarr", "http://127.0.0.1:8989/ping"), ("Radarr", "http://127.0.0.1:7878/ping"),
-                 ("Prowlarr", "http://127.0.0.1:9696/ping"), ("Bazarr", "http://127.0.0.1:6767"),
-                 ("qBittorrent", "http://127.0.0.1:8081"), ("SABnzbd", "http://127.0.0.1:8080"),
-                 ("Cleanuparr", "http://127.0.0.1:11011/health"), ("Byparr", "http://127.0.0.1:8191/docs")]
+def uptime_checks() -> list[tuple[str, str]]:
+    return [("Jellyfin", local("jellyfin") + "/health"), ("Seerr", local("seerr") + "/api/v1/status"),
+            ("Sonarr", local("sonarr") + "/ping"), ("Radarr", local("radarr") + "/ping"),
+            ("Prowlarr", local("prowlarr") + "/ping"), ("Bazarr", local("bazarr")),
+            ("qBittorrent", local("qbittorrent")), ("SABnzbd", local("sabnzbd")),
+            ("Cleanuparr", local("cleanuparr") + "/health"), ("Byparr", local("byparr") + "/docs")]
 UPTIME_KEEP = 288
 
 
@@ -121,7 +122,7 @@ class Collector:
         if not auth:
             return []
         out = []
-        for s in c.try_json("http://127.0.0.1:8096/Sessions?ActiveWithinSeconds=120", auth, []) or []:
+        for s in c.try_json(local("jellyfin") + "/Sessions?ActiveWithinSeconds=120", auth, []) or []:
             item = s.get("NowPlayingItem")
             if not item:
                 continue
@@ -142,9 +143,9 @@ class Collector:
         return out
 
     def downloads(self, torrents: list) -> dict:
-        transfer = c.try_json(f"{QBIT}/transfer/info", default={}) or {}
+        transfer = c.try_json(f"{local('qbittorrent')}/api/v2/transfer/info", default={}) or {}
         key = c.sabnzbd_key(self.config)
-        sab = (c.try_json(f"http://127.0.0.1:8080/api?mode=queue&output=json&apikey={key}", default={}) or {}) if key else {}
+        sab = (c.try_json(local("sabnzbd") + f"/api?mode=queue&output=json&apikey={key}", default={}) or {}) if key else {}
         queue = sab.get("queue") or {}
         try:
             sab_speed = float(queue.get("kbpersec") or 0)
@@ -188,7 +189,7 @@ class Collector:
 
     def uptime(self) -> list:
         f = self.state / "dashstatus/uptime.json"
-        sample = {name: 200 <= c.status_code(url) < 400 for name, url in UPTIME_CHECKS}
+        sample = {name: 200 <= c.status_code(url) < 400 for name, url in uptime_checks()}
         hist = (c.read_json(f, []) or []) + [{"t": int(time.time()), "up": sample}]
         hist = hist[-UPTIME_KEEP:]
         c.write_json(f, hist, compact=True)
@@ -202,8 +203,8 @@ class Collector:
 
     def slow_data(self) -> dict:
         pk = c.arr_key(self.config, "prowlarr")
-        indexers = c.try_json("http://127.0.0.1:9696/api/v1/indexer", {"X-Api-Key": pk}, []) or []
-        statuses = c.try_json("http://127.0.0.1:9696/api/v1/indexerstatus", {"X-Api-Key": pk}, []) or []
+        indexers = c.try_json(local("prowlarr") + "/api/v1/indexer", {"X-Api-Key": pk}, []) or []
+        statuses = c.try_json(local("prowlarr") + "/api/v1/indexerstatus", {"X-Api-Key": pk}, []) or []
         names = {i["id"]: i["name"] for i in indexers}
         on = {i["id"] for i in indexers if i.get("enable")}
         now = time.time()
@@ -211,18 +212,18 @@ class Collector:
         off = [{"name": names.get(s["indexerId"], f"indexer {s['indexerId']}"), "until": s["disabledTill"]}
                for s in statuses if s.get("indexerId") in on and s.get("disabledTill") and iso_time(s["disabledTill"]) > now]
         since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        stats = c.try_json(f"http://127.0.0.1:9696/api/v1/indexerstats?startDate={since}", {"X-Api-Key": pk})
+        stats = c.try_json(local("prowlarr") + f"/api/v1/indexerstats?startDate={since}", {"X-Api-Key": pk})
         auth = c.jellyfin_auth(self.state)
-        counts = (c.try_json("http://127.0.0.1:8096/Items/Counts", auth, {}) or {}) if auth else {}
+        counts = (c.try_json(local("jellyfin") + "/Items/Counts", auth, {}) or {}) if auth else {}
         bk = c.bazarr_key(self.config)
-        badges = (c.try_json(f"http://127.0.0.1:6767/api/badges?apikey={bk}", default={}) or {}) if bk else {}
+        badges = (c.try_json(local("bazarr") + f"/api/badges?apikey={bk}", default={}) or {}) if bk else {}
         sk = c.seerr_key(self.config)
-        req = (c.try_json("http://127.0.0.1:5055/api/v1/request/count", {"X-Api-Key": sk}, {}) or {}) if sk else {}
+        req = (c.try_json(local("seerr") + "/api/v1/request/count", {"X-Api-Key": sk}, {}) or {}) if sk else {}
         disk = shutil.disk_usage(self.media)
         gb = 1024 ** 3
         return {
-            "sonarr": self.arr("http://127.0.0.1:8989", c.arr_key(self.config, "sonarr")),
-            "radarr": self.arr("http://127.0.0.1:7878", c.arr_key(self.config, "radarr")),
+            "sonarr": self.arr(local("sonarr"), c.arr_key(self.config, "sonarr")),
+            "radarr": self.arr(local("radarr"), c.arr_key(self.config, "radarr")),
             "prowlarr": {"indexers": len(indexers), "enabled": len(on), "off": off},
             "library": {"movies": counts.get("MovieCount"), "series": counts.get("SeriesCount"),
                         "episodes": counts.get("EpisodeCount")},
@@ -288,7 +289,7 @@ class Collector:
         if slow_due or self.media_data is None or (self.round_no % 4 == 0 and self.media_data.get("media_failed")):
             self.media_data = self.media_part()
         self.round_no += 1
-        torrents = c.try_json(f"{QBIT}/torrents/info", default=[]) or []
+        torrents = c.try_json(f"{local('qbittorrent')}/api/v2/torrents/info", default=[]) or []
         system = self.system()
         fast = {"system": system, "usage": self.services_usage(system.get("cpus") or 1, system.get("mem_total") or 0),
                 "playing": self.playing(), "downloads": self.downloads(torrents),

@@ -102,7 +102,7 @@ class Uptime(unittest.TestCase):
         hist = [{"t": i, "up": {"Byparr": v, "Jellyfin": True}} for i, v in enumerate([True, None, None, False])]
         c.write_json(root / "dashstatus/uptime.json", hist)
         col = Collector(root, root, root, 50, 10)
-        with mock.patch("mediaserver.dashstatus.UPTIME_CHECKS", [("Byparr", "x"), ("Jellyfin", "y")]), \
+        with mock.patch("mediaserver.dashstatus.uptime_checks", lambda: [("Byparr", "x"), ("Jellyfin", "y")]), \
                 mock.patch.object(c, "status_code", return_value=200):
             up = {u["name"]: u for u in col.uptime()}
         self.assertEqual(up["Byparr"]["pct"], 66)  # True, False, True (new sample); None skipped

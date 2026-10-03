@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import Any
 
 from mediaserver import common as c
+from mediaserver.config import local
 from mediaserver.common import background, log, read_json
 
 CONFIG = Path(os.environ.get("POSTIMPORT_CONFIG", Path.home() / "media/config"))
@@ -685,7 +686,7 @@ def jellyfin_updated(path):
     try:
         key = (STATE.parent / "dashstatus/jellyfin-key").read_text().strip()
         req = urllib.request.Request(
-            "http://127.0.0.1:8096/Library/Media/Updated", method="POST",
+            local("jellyfin") + "/Library/Media/Updated", method="POST",
             data=json.dumps({"Updates": [{"Path": str(path), "UpdateType": "Modified"}]}).encode(),
             headers={"Authorization": f'MediaBrowser Token="{key}"', "Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=15).close()
@@ -1033,7 +1034,7 @@ def main():
     STATE.mkdir(parents=True, exist_ok=True)
     if len(sys.argv) == 3 and sys.argv[1] in ("--check", "--fix"):
         return by_hand(sys.argv[1], sys.argv[2])
-    apps = [Arr("Sonarr", "http://127.0.0.1:8989", "series"), Arr("Radarr", "http://127.0.0.1:7878", "movie")]
+    apps = [Arr("Sonarr", local("sonarr"), "series"), Arr("Radarr", local("radarr"), "movie")]
     waiting = False
     while True:
         if operation_running():
