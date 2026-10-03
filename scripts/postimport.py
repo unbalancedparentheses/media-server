@@ -53,6 +53,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 CONFIG = Path(os.environ.get("POSTIMPORT_CONFIG", Path.home() / "media/config"))
 STATE = Path(os.environ.get("POSTIMPORT_STATE", Path.home() / "media/.state/postimport"))
@@ -417,13 +418,14 @@ class Arr:
         except OSError:
             return ""
 
-    def call(self, method, path, body=None):
+    def call(self, method, path, body=None) -> Any:
+        """The decoded JSON answer ({} when there's no body)"""
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"{self.url}/api/v3/{path}", data=data, method=method,
                                      headers={"X-Api-Key": self.key(), "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             raw = resp.read()
-        return json.loads(raw) if raw else None
+        return json.loads(raw) if raw else {}
 
     def imports_after(self, last_id):
         """Import events newer than last_id, oldest first"""

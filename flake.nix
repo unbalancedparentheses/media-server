@@ -432,6 +432,7 @@
             jq
             nginx
             nixfmt
+            pyright
             python3
           ];
         };

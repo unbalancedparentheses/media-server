@@ -1,3 +1,6 @@
+# Tests use possibly-None results directly (a None fails the test anyway)
+# and attach recorders to objects:
+# pyright: reportOptionalSubscript=false, reportArgumentType=false, reportAttributeAccessIssue=false
 """Tests for scripts/postimport.py: what counts as a bad download, which
 files get a stereo track or OCR'd subtitles, and what happens on
 rejection. Sonarr/Radarr are fakes; ffmpeg is used for real when it's on

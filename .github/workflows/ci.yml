@@ -28,6 +28,10 @@ jobs:
       - name: ShellCheck
         run: nix develop -c shellcheck -x -S warning setup.sh install.sh scripts/*.sh scripts/steps/*.sh tests/*.sh
 
+      # The Python parts (post-import checks, dashboard data, config checks)
+      - name: Pyright
+        run: nix develop -c pyright
+
       # Interrupted password changes, backup/restore (through setup.sh), e2e
       # cleanup when services don't answer; run with setup's shell settings,
       # no services needed
