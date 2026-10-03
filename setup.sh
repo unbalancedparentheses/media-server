@@ -135,7 +135,7 @@ run_setup() {
   timed configure_usenet_providers
   timed py step bazarr
   timed configure_sabnzbd_auth
-  timed configure_seerr
+  timed py step seerr
   timed py step moonbase
   timed py step intro-skipper
   timed py step unpackerr

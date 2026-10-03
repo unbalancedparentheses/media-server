@@ -19,7 +19,7 @@ from unittest import mock
 from mediaserver import api, creds, jellyfin, launchd, logins
 from mediaserver import common as c
 from mediaserver.config import Config, Keys, Paths
-from mediaserver.steps import bazarr, cleanuparr, introskipper, moonbase, postimport_settings, unpackerr
+from mediaserver.steps import bazarr, cleanuparr, introskipper, moonbase, postimport_settings, seerr, unpackerr
 from mediaserver.ui import SetupError
 
 
@@ -265,3 +265,31 @@ class Bazarr(unittest.TestCase):
         self.assertIsNone(bazarr.login_settings({"auth": {"type": "form", "username": "admin", "password": hashed, "apikey": "k"}}, "admin", "pw"))
         # "forms" (an older setup's typo) isn't a type Bazarr knows
         self.assertIsNotNone(bazarr.login_settings({"auth": {"type": "forms", "username": "admin", "password": hashed}}, "admin", "pw"))
+
+
+class SeerrTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = scratch()
+        self.addCleanup(shutil.rmtree, self.cfg.paths.media)
+
+    def test_existing_connection_follows_config(self):
+        conn = {"id": 3, "name": "Sonarr", "port": 1234, "apiKey": "old", "enableSearch": False, "activeDirectory": "/old",
+                "activeProfileId": 1, "activeProfileName": "Any", "other": "kept"}
+        want = seerr.synced(conn, "sonarr", self.cfg, "key", {"id": 4, "name": "HD-1080p"}, {"id": 9, "name": "Anime"})
+        p = self.cfg.paths
+        self.assertEqual((want["port"], want["apiKey"], want["enableSearch"]), (8989, "key", True))
+        self.assertEqual((want["activeDirectory"], want["activeAnimeDirectory"]), (str(p.tv), str(p.anime)))
+        self.assertEqual((want["activeProfileName"], want["activeAnimeProfileName"], want["animeSeriesType"]), ("HD-1080p", "Anime", "anime"))
+        self.assertEqual(want["other"], "kept")
+        # The configured profile missing: the connection keeps its own
+        self.assertEqual(seerr.synced(conn, "radarr", self.cfg, "key", None, None)["activeProfileName"], "Any")
+
+    def test_auto_approve_bit(self):
+        self.assertEqual(seerr.approval_permissions(32, True), 160)
+        self.assertEqual(seerr.approval_permissions(160, False), 32)
+        self.assertEqual(seerr.approval_permissions(160, True), 160)
+
+    def test_new_sonarr_connection_routes_anime(self):
+        conn = seerr.sonarr_connection(self.cfg, "k", {"id": 4, "name": "HD-1080p"}, {"id": 9, "name": "Anime"})
+        self.assertEqual((conn["seriesType"], conn["animeSeriesType"], conn["activeAnimeProfileId"]), ("standard", "anime", 9))
+        self.assertTrue(conn["enableSearch"])

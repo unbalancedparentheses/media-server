@@ -18,6 +18,7 @@ STEPS = {
     "moonbase": "moonbase",
     "intro-skipper": "introskipper",
     "bazarr": "bazarr",
+    "seerr": "seerr",
 }
 
 
