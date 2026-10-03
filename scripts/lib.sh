@@ -342,92 +342,15 @@ cfg() { echo "$CONFIG_JSON" | jq -r "$1"; }
 # cfg_bool <path> <default>: "true"/"false"; only a missing value gets the
 # default (jq's // would also replace an explicit false)
 cfg_bool() { echo "$CONFIG_JSON" | jq -r --argjson d "$2" "if $1 == null then \$d else ($1 == true) end"; }
-cfg_required_string() {
-  local jq_path="$1" label="$2" val
-  val=$(cfg "$jq_path // empty")
-  [ -n "$val" ] && [ "$val" != "null" ] || err "Missing required config: $label"
-}
-validate_required_config() {
-  cfg_required_string '.jellyfin.username' 'jellyfin.username'
-  cfg_required_string '.jellyfin.password' 'jellyfin.password'
-  cfg_required_string '.qbittorrent.username' 'qbittorrent.username'
-  cfg_required_string '.qbittorrent.password' 'qbittorrent.password'
-  cfg_required_string '.quality.sonarr_profile' 'quality.sonarr_profile'
-  cfg_required_string '.quality.sonarr_anime_profile' 'quality.sonarr_anime_profile'
-  cfg_required_string '.quality.radarr_profile' 'quality.radarr_profile'
-}
-# Quality profiles that ship with a fresh Sonarr/Radarr. Recyclarr used to
-# create the TRaSH profiles on top of these; without it, only the built-ins
-# exist, so a name outside this list would silently fall back to "Any".
-is_builtin_profile() {
-  case "$1" in
-    Any|SD|HD-720p|HD-1080p|Ultra-HD|"HD - 720p/1080p") return 0 ;;
-    *) return 1 ;;
-  esac
-}
-validate_quality_profile() {
-  local key="$1" name
-  name=$(cfg ".quality.$key")
-  is_builtin_profile "$name" || \
-    err "quality.$key: unknown profile '$name' (see config.toml.example for supported names)"
-}
 TIMEZONE_PATH='(.timezone // .qbittorrent.timezone)'
-is_non_negative_number() { [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; }
-is_non_negative_int() { [[ "$1" =~ ^[0-9]+$ ]]; }
+# Every key, type, range and combination (mediaserver/validate.py), all
+# problems at once; stops before anything changes
 validate_config_semantics() {
-  local seed_ratio seed_time timezone admin_bind dashboard_port problems
-  # Every key, type and range (scripts/validate_config.py), all problems at once
-  if ! problems=$(python3 "$SCRIPT_DIR/scripts/validate_config.py" <<< "$CONFIG_JSON" 2>&1); then
-    printf "\033[1;31m   ✗ %s has problems; nothing was changed:\033[0m\n" "$CONFIG_FILE"
-    while IFS= read -r line; do printf "       %s\n" "$line"; done <<< "$problems"
-    exit 1
-  fi
-
-  seed_ratio=$(cfg '.downloads.seeding_ratio')
-  seed_time=$(cfg '.downloads.seeding_time_minutes')
-  timezone=$(cfg "$TIMEZONE_PATH // empty")
-  # Older config.toml.example put timezone after [qbittorrent], so it parsed
-  # as qbittorrent.timezone; accept it but ask for it to be moved
-  if [ -z "$(cfg '.timezone // empty')" ] && [ -n "$timezone" ]; then
-    warn "timezone is inside [qbittorrent] in config.toml; move it above the first [section]"
-  fi
-
-  local jf_pass qbit_pass
-  jf_pass=$(cfg '.jellyfin.password // ""')
-  qbit_pass=$(cfg '.qbittorrent.password // ""')
-  [ "$jf_pass" = "changeme" ] && err "jellyfin.password is still the default 'changeme' — set a real password in config.toml"
-  [ "$qbit_pass" = "changeme" ] && err "qbittorrent.password is still the default 'changeme' — set a real password in config.toml"
-
-  is_non_negative_number "$seed_ratio" || err "downloads.seeding_ratio must be a non-negative number"
-  is_non_negative_int "$seed_time" || err "downloads.seeding_time_minutes must be a non-negative integer"
-  [ -n "$timezone" ] || err "timezone must be set"
-  admin_bind=$(cfg '.network.admin_bind // "0.0.0.0"')
-  # The services reach each other on localhost, so only these two work
-  case "$admin_bind" in
-    0.0.0.0|127.0.0.1) ;;
-    *) err "network.admin_bind must be \"0.0.0.0\" (every interface) or \"127.0.0.1\" (this Mac only)" ;;
-  esac
-  local disk_warn disk_min
-  disk_warn=$(cfg '.disk.warn_free_gb // 50')
-  disk_min=$(cfg '.disk.min_free_gb // 10')
-  is_non_negative_int "$disk_warn" || err "disk.warn_free_gb must be a whole number of GB"
-  is_non_negative_int "$disk_min" || err "disk.min_free_gb must be a whole number of GB"
-  dashboard_port=$(cfg '.network.dashboard_port // 80')
-  is_non_negative_int "$dashboard_port" || err "network.dashboard_port must be a port number"
-
-  case "$(cfg '.subtitles.want // "first"')" in first|all) ;; *) err 'subtitles.want must be "first" or "all"' ;; esac
-  case "$(cfg '.playback.subtitle_mode // "Always"')" in Always|Smart|OnlyForced|Default|None) ;; *) err 'playback.subtitle_mode must be "Always", "Smart", "OnlyForced", "Default" or "None"' ;; esac
-  local strikes
-  strikes=$(cfg '.cleanuparr.stalled_strikes // 6')
-  { is_non_negative_int "$strikes" && [ "$strikes" -ge 3 ]; } || err "cleanuparr.stalled_strikes must be a whole number, 3 or more"
-  local up_kib
-  up_kib=$(cfg '.downloads.upload_limit_kib // 100')
-  is_non_negative_int "$up_kib" || err "downloads.upload_limit_kib must be a whole number (0 = no limit)"
-
-  validate_quality_profile sonarr_profile
-  validate_quality_profile sonarr_anime_profile
-  validate_quality_profile radarr_profile
+  py validate-config || exit 1
 }
+
+# The parts already in Python (mediaserver/): python3 -m mediaserver <command>
+py() { PYTHONPATH="$SCRIPT_DIR" MEDIA_DIR="$MEDIA_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -m mediaserver "$@"; }
 
 get_api_key() {
   local f="$CONFIG_DIR/$1/config.xml"

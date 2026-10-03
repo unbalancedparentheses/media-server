@@ -26,7 +26,6 @@ ensure_config() {
     fi
   fi
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
-  validate_required_config
 
   # Prompt for credentials if still using defaults (interactive mode only)
   local jf_pass_check qbit_pass_check

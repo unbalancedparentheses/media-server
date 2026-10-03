@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from mediaserver import common as c
-from mediaserver import doctor, verify
+from mediaserver import doctor, validate, verify
 from mediaserver.config import Config, Paths
 
 
@@ -115,3 +115,32 @@ class DoctorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ValidateTests(unittest.TestCase):
+    """mediaserver/validate.py on the shipped example"""
+
+    def example(self, *replacements):
+        text = (Path(__file__).resolve().parent.parent / "config.toml.example").read_text().replace('"changeme"', '"real-password"')
+        for old, new in replacements:
+            text = text.replace(old, new)
+        path = Path(tempfile.mkdtemp()) / "config.toml"
+        path.write_text(text)
+        return validate.check_file(path)
+
+    def test_example_is_valid(self):
+        self.assertEqual(self.example(), [])
+
+    def test_typo_gets_a_suggestion(self):
+        self.assertIn('quality.prefer_h256: unknown setting (did you mean "prefer_h265"?)',
+                      self.example(("prefer_h265 = true", "prefer_h256 = true")))
+
+    def test_bad_values_and_combinations(self):
+        problems = self.example(("stalled_strikes = 6", "stalled_strikes = 1"), ("warn_free_gb = 50", "warn_free_gb = 5"))
+        self.assertIn("cleanuparr.stalled_strikes must be at least 3", problems)
+        self.assertTrue(any("warn_free_gb must be at least" in p for p in problems))
+
+    def test_not_toml(self):
+        path = Path(tempfile.mkdtemp()) / "config.toml"
+        path.write_text("this is = = not toml")
+        self.assertTrue(validate.check_file(path)[0].startswith("isn't valid TOML"))

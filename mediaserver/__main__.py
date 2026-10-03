@@ -9,15 +9,19 @@ from mediaserver.ui import SetupError
 COMMANDS = {
     "test": "mediaserver.verify",
     "doctor": "mediaserver.doctor",
+    "validate-config": "mediaserver.validate",
 }
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 1 or argv[0] not in COMMANDS:
-        print(f"Usage: python3 -m mediaserver {{{'|'.join(COMMANDS)}}}", file=sys.stderr)
-        return 2
     import importlib
     try:
+        if argv[:1] == ["step"]:
+            from mediaserver import steps
+            return steps.main(argv[1:])
+        if len(argv) < 1 or argv[0] not in COMMANDS:
+            print(f"Usage: python3 -m mediaserver {{{'|'.join(COMMANDS)}|step <name>...}}", file=sys.stderr)
+            return 2
         return importlib.import_module(COMMANDS[argv[0]]).main()
     except SetupError as e:
         return int(e.code or 1)

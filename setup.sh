@@ -50,8 +50,6 @@ MAX_BACKUPS=10
 . "$SCRIPT_DIR/scripts/maintenance.sh"
 # shellcheck source=scripts/e2e.sh
 . "$SCRIPT_DIR/scripts/e2e.sh"
-# The parts already in Python (mediaserver/): python3 -m mediaserver <command>
-py() { PYTHONPATH="$SCRIPT_DIR" MEDIA_DIR="$MEDIA_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -m mediaserver "$@"; }
 for step in "$SCRIPT_DIR"/scripts/steps/*.sh; do
   # shellcheck source=/dev/null
   . "$step"
@@ -108,9 +106,10 @@ done
 # Each step is timed (measure before optimizing); the summary lists the slowest
 STEP_TIMES=""
 timed() {
-  local start=$SECONDS
+  local start=$SECONDS name="$1"
+  [ "$1" = py ] && name="$3"   # py step <name>
   "$@"
-  STEP_TIMES+="$((SECONDS - start)) $1"$'\n'
+  STEP_TIMES+="$((SECONDS - start)) $name"$'\n'
 }
 
 run_setup() {
@@ -139,9 +138,9 @@ run_setup() {
   timed configure_seerr
   timed configure_moonbase
   timed configure_intro_skipper
-  timed configure_unpackerr
+  timed py step unpackerr
   timed configure_cleanuparr
-  timed configure_postimport
+  timed py step postimport
   timed write_api_proxy
 }
 
@@ -243,7 +242,6 @@ fi
 if [ "$MODE" = "test" ] || [ "$MODE" = "status" ] || [ "$MODE" = "e2e" ] || [ "$MODE" = "doctor" ]; then
   [ -f "$CONFIG_FILE" ] || err "$CONFIG_FILE not found — run 'nix run .#install' first"
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
-  validate_required_config
   validate_config_semantics
   load_runtime_settings
   read_setup_config

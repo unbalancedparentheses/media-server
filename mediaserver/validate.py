@@ -1,14 +1,18 @@
-#!/usr/bin/env python3
-"""Validate config.toml (as JSON on stdin) before setup changes anything.
+"""Validate config.toml before setup changes anything.
 
 Rejects unknown keys (with a "did you mean" suggestion), wrong types,
 out-of-range values and incompatible combinations, and prints every problem
 at once. Free-form keys are allowed only where they're meant to be: an
 indexer's `fields` (passed to Prowlarr as-is). Exit status 1 on problems.
 """
+from __future__ import annotations
+
 import difflib
 import json
 import sys
+from pathlib import Path
+
+from mediaserver.config import default_paths, load_toml
 
 BUILTIN_PROFILES = ["Any", "SD", "HD-720p", "HD-1080p", "Ultra-HD", "HD - 720p/1080p"]
 
@@ -164,9 +168,9 @@ def check_table(where, table, schema, required, problems):
             problems.append(f"{where}{key}: missing")
 
 
-def main():
-    config = json.load(sys.stdin)
-    problems = []
+def validate(config: dict) -> list[str]:
+    """Every problem with config.toml (parsed), all at once"""
+    problems: list[str] = []
     known_sections = [s for s in SCHEMA if s] + list(ARRAYS)
     top = {k: v for k, v in config.items() if not isinstance(v, (dict, list))}
     check_table("", top, SCHEMA[""], REQUIRED[""], problems)
@@ -200,11 +204,27 @@ def main():
     names = [e.get("name") for e in config.get("indexers", []) if isinstance(e, dict)]
     for dup in sorted({n for n in names if names.count(n) > 1 and n}):
         problems.append(f'[[indexers]] "{dup}" appears more than once')
+    return problems
 
+
+def check_file(path: Path) -> list[str]:
+    """Problems with the file, including not being valid TOML"""
+    try:
+        return validate(load_toml(path))
+    except OSError as e:
+        return [f"can't be read: {e.strerror}"]
+    except ValueError as e:  # tomllib.TOMLDecodeError
+        return [f"isn't valid TOML: {e}"]
+
+
+def main() -> int:
+    """setup.sh's config check: prints every problem in setup's style;
+    exit status 1 when there are any"""
+    path = default_paths().config_file
+    problems = check_file(path)
     if problems:
-        print("\n".join(problems))
-        sys.exit(1)
-
-
-if __name__ == "__main__":
-    main()
+        print(f"\033[1;31m   ✗ {path} has problems; nothing was changed:\033[0m", file=sys.stderr)
+        for line in problems:
+            print(f"       {line}", file=sys.stderr)
+        return 1
+    return 0

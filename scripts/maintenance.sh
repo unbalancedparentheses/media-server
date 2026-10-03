@@ -343,7 +343,7 @@ do_preflight() {
   done
   [ -f "${MEDIA_SERVICES_JSON:-}" ] && pf_ok "Nix service manifest" || pf_fail "not running through Nix (use 'nix run .#install')"
   if [ -f "$CONFIG_FILE" ]; then
-    if (CONFIG_JSON=$(load_config_json "$CONFIG_FILE") && validate_required_config && validate_config_semantics) >/dev/null 2>&1; then
+    if (CONFIG_JSON=$(load_config_json "$CONFIG_FILE") && validate_config_semantics) >/dev/null 2>&1; then
       pf_ok "$CONFIG_FILE is valid"
     else
       pf_fail "$CONFIG_FILE is invalid (run with --check-config for details)"
@@ -359,7 +359,6 @@ do_preflight() {
 do_check_config() {
   [ -f "$CONFIG_FILE" ] || err "$CONFIG_FILE not found"
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
-  validate_required_config
   validate_config_semantics
   info "Config validation passed"
   ok "Credentials, quality profiles, network settings and timezone are valid"
