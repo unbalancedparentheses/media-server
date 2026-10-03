@@ -423,19 +423,6 @@ test_usenet_disable_checks_sabnzbd_reply() {
   grep -q "Could not disable prov" <<< "$out" || fail "no warning: $out"
 }
 
-# Jellyfin's repository list can't be read: nothing is written (a guessed
-# list would drop the other plugins' repositories)
-test_plugin_repository_not_overwritten_when_unreadable() {
-  api() {
-    case "$1 $2" in
-      "GET "*/Repositories) return 22 ;;
-      "POST "*/Repositories) touch "$FAKE/overwritten" ;;
-    esac
-  }
-  jellyfin_pin_repository "Authorization: x" "Moonbase" "https://example/manifest.json" "Moonfin" >/dev/null 2>&1 && fail "reported success"
-  [ ! -f "$FAKE/overwritten" ] || fail "overwrote Jellyfin's repository list"
-}
-
 # ─── Smaller recovery cases ──────────────────────────────────────
 
 # Renaming the existing library: recorded only once Sonarr accepted it
@@ -570,22 +557,6 @@ test_unreadable_download_clients_not_readded() {
 }
 
 # ─── Jellyfin restarts ───────────────────────────────────────────
-
-# After a restart Jellyfin is "healthy" before it accepts logins: setup
-# waits for the login instead of carrying on without one (which skipped
-# Intro Skipper and the Moonfin offline patch on a fresh install)
-test_jellyfin_restart_waits_for_login() {
-  svc_restart() { :; }
-  wait_for() { :; }
-  echo 0 > "$FAKE/logins"
-  jellyfin_login() {
-    local n; n=$(( $(cat "$FAKE/logins") + 1 )); echo "$n" > "$FAKE/logins"
-    if [ "$n" -ge 3 ]; then JELLYFIN_TOKEN=tok; else JELLYFIN_TOKEN=""; fi
-  }
-  jellyfin_restart_ready >/dev/null 2>&1 || fail "gave up while Jellyfin was still starting"
-  expect_eq "$JELLYFIN_TOKEN" tok "token after the restart"
-  expect_eq "$(cat "$FAKE/logins")" 3 "login attempts"
-}
 
 echo "Failure-path tests"
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do

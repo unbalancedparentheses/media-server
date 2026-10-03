@@ -265,7 +265,9 @@
       var i=ref.indexOf(':');return 'http://'+h+':'+ADMIN_PORTS[ref.slice(0,i)]+ref.slice(i+1);
     }
     function admin(port,path){return adminOffHere?null:'http://'+h+':'+port+(path||'');}
-    function watchUrl(id){return id?moonfin+'#/item/'+id:moonfin;}  // Moonfin routes after the #
+    // Moonfin drops the route it starts with; its start page (patched by
+    // setup) opens ?open=<route> once Moonfin is up
+    function watchUrl(id){return id?moonfin+'?open=item/'+id:moonfin;}
     function img(id,tag,height){return id&&tag?jfBase+'/Items/'+id+'/Images/Primary?fillHeight='+(height||330)+'&quality=85&tag='+tag:null;}
 
     // ── Helpers ──

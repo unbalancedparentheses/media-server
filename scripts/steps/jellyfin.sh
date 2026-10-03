@@ -194,49 +194,6 @@ set_jellyfin_encoding() {
   fi
 }
 
-# Pin a plugin's repository in Jellyfin's list: add <url>, drop other
-# entries matching <pattern> (older or moving manifests), keep everything
-# else. If the list can't be read, nothing is written: saving a guessed
-# list would drop the other repositories.
-jellyfin_pin_repository() {  # auth-header name url pattern
-  local repos updated
-  repos=$(api GET "$JELLYFIN_URL/Repositories" -H "$1") && jq -e 'type == "array"' <<< "$repos" >/dev/null 2>&1 || \
-    { warn "Could not read Jellyfin's plugin repositories; $2's wasn't changed"; return 1; }
-  updated=$(jq -c --arg name "$2" --arg u "$3" --arg pat "$4" \
-    '[.[] | select((.Url | test($pat)) | not)] + [{Name: $name, Url: $u, Enabled: true}]' <<< "$repos")
-  [ "$(jq -c 'sort_by(.Url)' <<< "$updated")" = "$(jq -c 'sort_by(.Url)' <<< "$repos")" ] && return 0
-  api POST "$JELLYFIN_URL/Repositories" -H "$1" -d "$updated" >/dev/null || { warn "Could not set $2's plugin repository"; return 1; }
-  ok "Plugin repository pinned ($2)"
-}
-
-# After a restart Jellyfin answers /health before it accepts logins and has
-# loaded its plugins: restart it, then wait until logging in works
-jellyfin_restart_ready() {
-  local start
-  svc_restart jellyfin
-  sleep 3
-  wait_for "Jellyfin" "$JELLYFIN_URL/health" || return 1
-  start=$SECONDS
-  JELLYFIN_TOKEN=""
-  until [ -n "$JELLYFIN_TOKEN" ]; do
-    [ $((SECONDS - start)) -ge 180 ] && { warn "Jellyfin restarted but doesn't accept the login yet"; return 1; }
-    sleep 2
-    jellyfin_login
-  done
-}
-
-# A plugin's id once Jellyfin has loaded it (it can take a few seconds
-# after the login works); empty if it never shows up
-jellyfin_wait_plugin() {  # id-function
-  local start=$SECONDS id
-  while :; do
-    id=$("$1")
-    [ -n "$id" ] && { printf '%s' "$id"; return 0; }
-    [ $((SECONDS - start)) -ge 60 ] && return 1
-    sleep 2
-  done
-}
-
 # [playback] allow_remux (default false): when a device can't play a file
 # directly, Jellyfin either copies the video into a stream ("remux") or
 # converts it. Copying keeps the file's own keyframes, which in Blu-ray

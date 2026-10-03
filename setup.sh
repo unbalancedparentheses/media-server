@@ -136,8 +136,8 @@ run_setup() {
   timed configure_bazarr
   timed configure_sabnzbd_auth
   timed configure_seerr
-  timed configure_moonbase
-  timed configure_intro_skipper
+  timed py step moonbase
+  timed py step intro-skipper
   timed py step unpackerr
   timed py step cleanuparr
   timed py step postimport

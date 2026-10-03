@@ -13,16 +13,21 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from mediaserver import api, creds, launchd, logins
+from mediaserver import api, creds, jellyfin, launchd, logins
 from mediaserver import common as c
 from mediaserver.config import Config, Paths
-from mediaserver.steps import cleanuparr, postimport_settings, unpackerr
+from mediaserver.steps import cleanuparr, introskipper, moonbase, postimport_settings, unpackerr
 from mediaserver.ui import SetupError
 
 
 def scratch(data=None) -> Config:
     root = Path(tempfile.mkdtemp())
     return Config(data or {}, Paths(root))
+
+
+def run_value(fn, *args):
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        return fn(*args)
 
 
 def run(fn, *args):
@@ -150,3 +155,68 @@ class Credentials(unittest.TestCase):
         creds.record(state, "cleanuparr", "admin", "pw")
         self.assertEqual((state / "credentials.json").stat().st_mode & 0o777, 0o600)
         self.assertTrue(creds.match(state, "cleanuparr", "admin", "pw"))
+
+
+class JellyfinHelpers(unittest.TestCase):
+    def setUp(self):
+        self.cfg = scratch({"jellyfin": {"username": "admin", "password": "pw"}})
+        self.addCleanup(shutil.rmtree, self.cfg.paths.media)
+
+    def test_repository_list_unreadable_nothing_written(self):
+        """A guessed list would drop the other plugins' repositories"""
+        jf = jellyfin.Jellyfin(self.cfg)
+        posted = []
+        with mock.patch.object(jellyfin.Jellyfin, "get", side_effect=api.ApiError("down")), \
+                mock.patch.object(jellyfin.Jellyfin, "post", lambda self, path, body=None: posted.append(path)):
+            self.assertFalse(jf.pin_repository("Moonbase", "https://example/manifest.json", "Moonfin"))
+        self.assertEqual(posted, [])
+
+    def test_repository_replaced_others_kept(self):
+        jf = jellyfin.Jellyfin(self.cfg)
+        repos = [{"Name": "Old", "Url": "https://raw/Moonfin-Client/Plugin/main/manifest.json", "Enabled": True},
+                 {"Name": "Other", "Url": "https://other/manifest.json", "Enabled": True}]
+        posted = []
+        with mock.patch.object(jellyfin.Jellyfin, "get", return_value=repos), \
+                mock.patch.object(jellyfin.Jellyfin, "post", lambda self, path, body=None: posted.append(body)):
+            run(jf.pin_repository, "Moonbase", "https://pinned/manifest.json", "Moonfin-Client/Plugin")
+        self.assertEqual([r["Url"] for r in posted[0]], ["https://other/manifest.json", "https://pinned/manifest.json"])
+
+    def test_restart_waits_for_login(self):
+        """After a restart Jellyfin is "healthy" before it accepts logins:
+        wait for the login instead of carrying on without one (which
+        skipped Intro Skipper and the Moonfin patch on a fresh install)"""
+        jf = jellyfin.Jellyfin(self.cfg)
+        attempts = []
+
+        def login(tries=3):
+            attempts.append(1)
+            jf.token = "tok" if len(attempts) >= 3 else ""
+            return bool(jf.token)
+        with mock.patch.object(launchd, "restart", return_value=True), mock.patch.object(api, "wait_for", return_value=True), \
+                mock.patch.object(jellyfin.time, "sleep"), mock.patch.object(jf, "login", login):
+            self.assertTrue(run_value(jf.restart_ready))
+        self.assertEqual((jf.token, len(attempts)), ("tok", 3))
+
+
+class MoonfinWebApp(unittest.TestCase):
+    def test_patch_is_applied_once(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        (d / "flutter_bootstrap.js").write_text("_flutter.loader.load({\n  onEntrypointLoaded: x\n});")
+        (d / "index.html").write_text('<html><head><script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.0/dist/hls.min.js"></script></head></html>')
+        hls = d / "hls-from-nix.js"
+        hls.write_text("hls")
+        for _ in range(2):
+            moonbase.patch_web_app(d, str(hls))
+        index = (d / "index.html").read_text()
+        self.assertIn('src="vendor/hls/hls.min.js"', index)
+        self.assertEqual(index.count('id="media-server-open"'), 1)
+        self.assertEqual((d / "flutter_bootstrap.js").read_text().count("canvasKitBaseUrl"), 1)
+        self.assertEqual((d / "vendor/hls/hls.min.js").read_text(), "hls")
+
+    def test_intro_skipper_first_and_enabled(self):
+        want = introskipper.with_intro_skipper({"MediaSegmentProviderOrder": ["Other", "Intro Skipper"],
+                                                "DisabledMediaSegmentProviders": ["Intro Skipper", "X"], "Keep": 1})
+        self.assertEqual(want["MediaSegmentProviderOrder"], ["Intro Skipper", "Other"])
+        self.assertEqual(want["DisabledMediaSegmentProviders"], ["X"])
+        self.assertEqual(want["Keep"], 1)

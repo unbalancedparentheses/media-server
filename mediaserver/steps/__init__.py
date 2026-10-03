@@ -15,6 +15,8 @@ STEPS = {
     "cleanuparr": "cleanuparr",
     # Before the services start, too (see cleanuparr.require_login)
     "cleanuparr-require-login": "cleanuparr:run_require_login",
+    "moonbase": "moonbase",
+    "intro-skipper": "introskipper",
 }
 
 
