@@ -107,18 +107,19 @@ def length_text(minutes: int) -> str:
     return "" if not minutes else f"{minutes} min" if minutes < 60 else f"{minutes // 60} h {minutes % 60:02d} min"
 
 
-def tonight(limit: int = 24) -> list:
+def tonight(limit: int = 300) -> list:
     """Watch tonight: what's in the library and not started yet, films you
     haven't watched and series you haven't begun (Continue watching has the
     rest), newest first. Each says film, series or anime (from its folder),
-    how long it is, and for a series how much of it is here."""
+    how long it is, and for a series how much of it is here. All of them
+    (up to 300): the page filters, then shows the first few."""
     users = jellyfin("Users")
     if not users:
         return []
     uid = users[0]["Id"]   # one viewer for now
     anime_dir = str(STATE.parent / "anime") + "/"
     common = (f"userId={uid}&Recursive=true&IsPlayed=false&EnableImageTypes=Primary&SortBy=DateCreated&SortOrder=Descending"
-              "&Fields=Path,UserData,RecursiveItemCount,ProviderIds,CommunityRating&Limit=60")
+              "&Fields=Path,UserData,RecursiveItemCount,ProviderIds,CommunityRating&Limit=300")
     films = jellyfin(f"Items?IncludeItemTypes=Movie&{common}").get("Items", [])
     shows = jellyfin(f"Items?IncludeItemTypes=Series&{common}").get("Items", [])
     # Begun = in Continue watching: an episode in progress (none finished

@@ -94,7 +94,7 @@ DEFAULTS = {
     "warn_free_gb": 50,
     "library_dirs": [],
     "search_missing": True,
-    "fallback_profile": "",
+    "fallback_resolution": "",
 }
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".m4v"}
 # Audio every browser plays; anything else makes Jellyfin convert

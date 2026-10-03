@@ -101,7 +101,7 @@ SCHEMA = {
         "prefer_english_audio": boolean,
         "anime_block_dubs": boolean,
         "anime_release_groups": boolean,
-        "fallback_profile": one_of("", *BUILTIN_PROFILES),
+        "fallback_resolution": one_of("", "720p", "480p"),
     },
     "playback": {
         "subtitle_mode": one_of("Always", "Smart", "OnlyForced", "Default", "None"),

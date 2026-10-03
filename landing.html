@@ -115,7 +115,9 @@
   .chip-group{display:flex;gap:0.3rem;flex-wrap:wrap}
   .chips button{background:var(--surface);border:1px solid var(--border);color:var(--text2);border-radius:999px;padding:0.35rem 0.8rem;font:inherit;font-size:0.75rem;cursor:pointer;min-height:2rem}
   .chips button.on{border-color:var(--gold);color:var(--text)}
-  .sr-act{flex-shrink:0;font-size:0.72rem;color:var(--text2)}.sr-act.play{color:var(--green)}.sr-act.dim{color:var(--text3)}
+  .sr-acts{display:flex;gap:0.8rem;flex-shrink:0;align-items:center}
+  .sr-act{font-size:0.72rem;color:var(--text2);text-decoration:none;padding:0.2rem 0}.sr-act:hover{color:var(--text)}
+  .sr-act.play{color:var(--green)}.sr-act.dim{color:var(--text3)}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
   .worth-label:first-child{margin-top:0}
   .fix-bar i{transition:width 1s linear}
@@ -416,9 +418,10 @@
     var tonightKind=store('tonightKind')||'all',tonightLen=store('tonightLen')||0;
     function renderTonight(){
       if(!lastStatus||!lastStatus.tonight)return;
+      // Filtered over everything not started, then the newest 24 shown
       var items=lastStatus.tonight.filter(function(t){
         return(tonightKind==='all'||t.kind===tonightKind)&&(!tonightLen||(t.minutes&&t.minutes<tonightLen));
-      });
+      }).slice(0,24);
       show('tonight-sec',lastStatus.tonight.length>0);
       document.querySelectorAll('#tonight-filters button').forEach(function(b){
         var on=b.hasAttribute('data-kind')?b.getAttribute('data-kind')===tonightKind:+b.getAttribute('data-len')===+tonightLen;
@@ -735,30 +738,52 @@
     sq.addEventListener('keydown',function(e){if(e.key==='Escape'){sr.style.display='none';sq.blur();}});
     document.addEventListener('click',function(e){if(!e.target.closest('.search-wrap'))sr.style.display='none';});
     document.addEventListener('keydown',function(e){if(e.key==='/'&&document.activeElement!==sq){e.preventDefault();sq.focus();}});
+    // One row per title: library items (Jellyfin) and Seerr's results
+    // matched by TMDB id, each row saying what you can do with it: Play
+    // (only with a Jellyfin item to open), Request, Requested, or both Play
+    // and Request missing episodes for a series that's partly here
+    function mergeResults(lib,ask){
+      var rows=[],byTmdb={};
+      lib.forEach(function(i){
+        var row={title:i.Name,year:i.ProductionYear||'',kind:i.Type==='Series'?'series':'film',play:watchUrl(i.Id),request:null};
+        var t=(i.ProviderIds||{}).Tmdb;if(t)byTmdb[row.kind+':'+t]=row;
+        rows.push(row);
+      });
+      ask.forEach(function(x){
+        var kind=x.mediaType==='tv'?'series':'film',m=x.mediaInfo||{},st=m.status,url=seerrBase+'/'+x.mediaType+'/'+x.id;
+        var row=byTmdb[kind+':'+x.id];
+        if(!row){
+          row={title:x.title||x.name,year:(x.releaseDate||x.firstAirDate||'').slice(0,4),kind:kind,
+               play:(st===5||st===4)&&m.jellyfinMediaId?watchUrl(m.jellyfinMediaId):null,request:null};
+          rows.push(row);
+        }
+        if(st===4)row.request={label:'Request missing episodes',url:url};
+        else if(st===2||st===3)row.request={label:'Requested',url:url,dim:true};
+        else if(st===5&&!row.play)row.request={label:'In your library · open in Seerr',url:url,dim:true};
+        else if(!st||st===1)row.request={label:'＋ Request',url:url};
+      });
+      return rows;
+    }
+    var searchSeq=0;
     function search(){
-      var q=sq.value.trim();
+      var q=sq.value.trim(),my=++searchSeq;
       if(q.length<2){sr.style.display='none';return;}
       Promise.all([
-        fetch('/api/jellyfin/Items?Recursive=true&Limit=6&IncludeItemTypes=Movie,Series&SearchTerm='+encodeURIComponent(q)).then(function(r){return r.json()}).catch(function(){return{Items:[]}}),
+        fetch('/api/jellyfin/Items?Recursive=true&Limit=8&IncludeItemTypes=Movie,Series&Fields=ProviderIds&SearchTerm='+encodeURIComponent(q)).then(function(r){return r.json()}).catch(function(){return{Items:[]}}),
         fetch('/api/seerr/search?page=1&query='+encodeURIComponent(q)).then(function(r){return r.json()}).catch(function(){return{results:[]}})
       ]).then(function(res){
-        // One list: what you can play, then what you can ask for; a title in
-        // both shows once, with what you can do with it
-        var lib=res[0].Items||[],ask=(res[1].results||[]).filter(function(x){return x.mediaType==='movie'||x.mediaType==='tv';}),html='';
-        var here={};lib.forEach(function(i){here[(i.Name||'').toLowerCase()+'|'+(i.ProductionYear||'')]=1;});
-        ask=ask.filter(function(x){
-          var key=(x.title||x.name||'').toLowerCase()+'|'+(x.releaseDate||x.firstAirDate||'').slice(0,4);
-          return!(here[key]&&(x.mediaInfo||{}).status===5);
-        }).slice(0,8);
-        function action(label,cls){return'<span class="sr-act '+(cls||'')+'">'+label+'</span>';}
-        if(lib.length)html+='<div class="sr-group">In your library</div>'+lib.map(function(i){
-          return'<a class="sr-item" href="'+watchUrl(i.Id)+'"><span>'+esc(i.Name)+' <span class="tag">'+(i.ProductionYear||'')+' · '+(i.Type==='Series'?'series':'film')+'</span></span>'+action('▶ Play','play')+'</a>';
-        }).join('');
-        if(ask.length)html+='<div class="sr-group">Not in your library</div>'+ask.map(function(x){
-          var title=x.title||x.name,yr=(x.releaseDate||x.firstAirDate||'').slice(0,4),st=(x.mediaInfo||{}).status;
-          var act=st===5?action('▶ Play','play'):st===4?action('Some episodes · request the rest'):st===2||st===3?action('Requested','dim'):action('＋ Request');
-          return'<a class="sr-item" href="'+seerrBase+'/'+x.mediaType+'/'+x.id+'"><span>'+esc(title)+' <span class="tag">'+yr+' · '+(x.mediaType==='tv'?'series':'film')+'</span></span>'+act+'</a>';
-        }).join('');
+        // An older search answering late doesn't replace a newer one, or
+        // reopen the list after the field was cleared
+        if(my!==searchSeq)return;
+        var ask=(res[1].results||[]).filter(function(x){return x.mediaType==='movie'||x.mediaType==='tv';});
+        var rows=mergeResults(res[0].Items||[],ask),here=rows.filter(function(r){return r.play;}),other=rows.filter(function(r){return!r.play;}).slice(0,8);
+        function row(r){
+          return'<div class="sr-item"><span>'+esc(r.title)+' <span class="tag">'+esc(r.year)+' · '+r.kind+'</span></span><span class="sr-acts">'
+            +(r.play?'<a class="sr-act play" href="'+r.play+'">▶ Play</a>':'')
+            +(r.request?'<a class="sr-act'+(r.request.dim?' dim':'')+'" href="'+r.request.url+'">'+esc(r.request.label)+'</a>':'')+'</span></div>';
+        }
+        var html=(here.length?'<div class="sr-group">In your library</div>'+here.map(row).join(''):'')
+          +(other.length?'<div class="sr-group">Not in your library</div>'+other.map(row).join(''):'');
         sr.innerHTML=html||'<div class="sr-group">No results</div>';
         sr.style.display='block';
       });

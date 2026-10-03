@@ -93,8 +93,14 @@ class Recovery(unittest.TestCase):
         self.prowlarr = FakeApp("Prowlarr", lambda m, p, b: self.prowlarr_answer(m, p))
         self.statuses = []
         self.downloading = []
+        self.profiles = [{"id": 1, "name": "HD-1080p", "cutoff": 7, "minFormatScore": 0, "formatItems": [{"format": 3, "score": -10000}],
+                          "language": {"id": 1}, "items": [
+                              {"quality": {"id": 4, "name": "HDTV-720p"}, "allowed": False},
+                              {"name": "WEB 720p", "allowed": False, "items": [{"quality": {"id": 5, "name": "WEBDL-720p"}, "allowed": False}]},
+                              {"quality": {"id": 7, "name": "Bluray-1080p"}, "allowed": True},
+                              {"quality": {"id": 1, "name": "SDTV"}, "allowed": False}]}]
         self.state = {}
-        self.settings = {"search_missing": True, "fallback_profile": ""}
+        self.settings = {"search_missing": True, "fallback_resolution": ""}
         self.logs = []
         patcher = mock.patch.object(stuck.c, "log", self.logs.append)
         patcher.start()
@@ -107,8 +113,11 @@ class Recovery(unittest.TestCase):
             return {"records": [{"movieId": m} for m in self.downloading]}
         if path.startswith("release"):
             return self.releases.get(path, [])
-        if path == "qualityprofile":
-            return [{"id": 1, "name": "HD-1080p"}, {"id": 2, "name": "HD-720p"}]
+        if path == "qualityprofile" and method == "GET":
+            return self.profiles
+        if path == "qualityprofile" and method == "POST":
+            self.profiles.append(dict(body, id=len(self.profiles) + 1))
+            return self.profiles[-1]
         if path.startswith("movie/") and method == "GET":
             return {"id": int(path.split("/")[1]), "qualityProfileId": 1}
         if path.startswith("indexer"):
@@ -153,10 +162,28 @@ class Recovery(unittest.TestCase):
         waits = [stuck.wait_after(n) for n in (1, 2, 3, 4, 5, 6, 7)]
         self.assertEqual(waits, [3600, 7200, 14400, 28800, 57600, 86400, 86400])
 
-    def test_switched_off(self):
-        self.settings["search_missing"] = False
+    def test_switched_off_asks_the_indexers_nothing(self):
         self.round(0)
-        self.assertEqual(self.searches(self.radarr) + self.searches(self.sonarr), [])
+        self.settings["search_missing"] = False
+        for app in (self.radarr, self.sonarr, self.prowlarr):
+            app.calls.clear()
+        for hour in range(1, 40):
+            self.round(hour * 3600)
+        self.assertEqual(self.radarr.calls + self.sonarr.calls + self.prowlarr.calls, [])
+        self.assertEqual(self.state["items"], {})   # no old schedule shown
+
+    def test_downloading_keeps_its_history(self):
+        for hour in range(0, 4):
+            self.round(hour * 3600)
+        searches = self.state["items"]["radarr:1"]["searches"]
+        self.assertGreater(searches, 0)
+        self.downloading = [1]   # grabbed: downloading now
+        self.round(5 * 3600)
+        self.assertTrue(self.state["items"]["radarr:1"]["downloading"])
+        self.downloading = []   # the download failed: missing again, same schedule
+        self.round(6 * 3600)
+        self.assertEqual(self.state["items"]["radarr:1"]["searches"] >= searches, True)
+        self.assertNotIn("downloading", self.state["items"]["radarr:1"])
 
     def test_what_arrived_is_forgotten(self):
         self.round(0)
@@ -193,21 +220,32 @@ class Recovery(unittest.TestCase):
         self.releases["release?movieId=1"] = [release(rejections=["Quality is not wanted in profile"])]
         for day in range(0, 9):
             self.round(day * DAY)
-        self.assertFalse([c for c in self.radarr.calls if c[0] == "PUT"])   # not set: never
-        self.settings["fallback_profile"] = "HD-720p"
+        self.assertFalse([c for c in self.radarr.calls if c[0] in ("PUT", "POST") and c[1] != "command"])   # not set: never
+        self.settings["fallback_resolution"] = "720p"
         self.round(9 * DAY)
-        puts = [(p, b["qualityProfileId"]) for m, p, b in self.radarr.calls if m == "PUT"]
-        self.assertIn(("movie/1", 2), puts)
-        self.assertEqual(self.state["items"]["radarr:1"]["fallback"], "HD-720p")
-        self.assertIn("switched to the HD-720p profile", stuck.explain(self.state["items"]["radarr:1"]))
+        wider = next(p for p in self.profiles if p["name"] == "HD-1080p (+720p)")
+        puts = [(p, b["qualityProfileId"]) for m, p, b in self.radarr.calls if m == "PUT" and p.startswith("movie/")]
+        self.assertIn(("movie/1", wider["id"]), puts)
+        self.assertEqual(self.state["items"]["radarr:1"]["fallback"], "HD-1080p (+720p)")
+        self.assertIn("now also accepts lower resolutions", stuck.explain(self.state["items"]["radarr:1"]))
+
+    def test_the_copy_only_adds_the_resolution(self):
+        wider = stuck.widened(self.profiles[0], "720p")
+        allowed = {(i.get("quality") or {}).get("name") or i.get("name"): i["allowed"] for i in wider["items"]}
+        self.assertEqual(allowed, {"HDTV-720p": True, "WEB 720p": True, "Bluray-1080p": True, "SDTV": False})
+        self.assertTrue(wider["items"][1]["items"][0]["allowed"])
+        for kept in ("cutoff", "minFormatScore", "formatItems", "language"):
+            self.assertEqual(wider[kept], self.profiles[0][kept], kept)
+        self.assertNotIn("id", wider)
+        self.assertFalse(self.profiles[0]["items"][0]["allowed"])   # the original is untouched
 
     def test_no_fallback_when_quality_isnt_the_only_reason(self):
-        self.settings["fallback_profile"] = "HD-720p"
+        self.settings["fallback_resolution"] = "720p"
         self.releases["release?movieId=1"] = [release(rejections=["Quality is not wanted in profile"]),
                                               release(rejections=["Language is not wanted in profile"])]
         for day in range(0, 9):
             self.round(day * DAY)
-        self.assertFalse([c for c in self.radarr.calls if c[0] == "PUT"])
+        self.assertFalse([c for c in self.radarr.calls if c[0] in ("PUT", "POST") and c[1] != "command"])
 
     def test_indexers_retested_when_some_are_off(self):
         self.round(0)

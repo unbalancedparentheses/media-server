@@ -59,8 +59,9 @@ prefer_english_audio = true   # movies and TV: prefer releases with English audi
 anime_block_dubs = true       # anime: never grab English-dub-only releases
                               # (Japanese audio + subtitles; dual audio is fine)
 anime_release_groups = true   # anime: prefer well-rated release groups (TRaSH tiers)
-fallback_profile = ""         # "" = never. A profile (e.g. "HD-720p") to switch a title to after a
-                              # week of releases turned down only for their quality
+fallback_resolution = ""      # "" = never. "720p" or "480p": after a week of releases turned down only
+                              # for their quality, a title's profile (a copy of it) also allows this;
+                              # nothing else in the profile changes (for a series: the whole series)
 
 # ─── Playback (Jellyfin user defaults) ──────────────────────────
 # subtitle_mode: "Always", "Smart" (only when the audio isn't your
@@ -131,7 +132,9 @@ drop_picture_subtitles = true   # remove a picture subtitle track when its langu
                                 # (players otherwise pick the picture one, burned into the video)
 default_tracks = true     # make each file's default audio/subtitles your preferences ([playback], [subtitles])
 search_missing = true     # search again for what's still missing (Sonarr/Radarr only do it once):
-                          # hourly at most, waiting longer each time, within your profiles and filters
+                          # at most 3 search commands an hour (a season search counts as one) and 2
+                          # look-only searches to explain why, each title waiting longer each time,
+                          # within your profiles and filters. false: none of it, no indexer queries
 
 # ─── Indexers (Prowlarr) ───────────────────────────────────────
 
