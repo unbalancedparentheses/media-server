@@ -46,7 +46,8 @@ class Rounds(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root)
-        for patcher in (mock.patch.object(c, "try_json", return_value=[]), mock.patch.object(c, "status_code", return_value=200)):
+        for patcher in (mock.patch.object(c, "try_json", return_value=[]), mock.patch.object(c, "status_code", return_value=200),
+                        mock.patch("mediaserver.control.Speed.state", return_value={"answering": False})):
             patcher.start()
             self.addCleanup(patcher.stop)
 

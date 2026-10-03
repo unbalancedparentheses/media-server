@@ -54,3 +54,24 @@ location = /api/sabnzbd/ {
     set $upstream_api_sabnzbd "http://{{ADMIN_HOST}}:8080/api?apikey={{SABNZBD_KEY}}&output=json&mode=$arg_mode&limit=$arg_limit";
     proxy_pass $upstream_api_sabnzbd;
 }
+
+# The one change the dashboard can make: download/upload speed limits
+# (mediaserver/control.py, run by dashstatus on this Mac). Only from this
+# Mac, the home network and Tailscale; it takes JSON with an
+# X-Requested-With header only, so another website can't make a browser
+# change it (that needs a CORS preflight, which isn't answered).
+location = /api/control/speed {
+    limit_except GET POST { deny all; }
+    allow 127.0.0.1;
+    allow ::1;
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 192.168.0.0/16;
+    allow 100.64.0.0/10;
+    allow fd00::/8;
+    deny all;
+    limit_req zone=api burst=10 nodelay;
+    client_max_body_size 4k;
+    set $upstream_control http://127.0.0.1:8099/speed;
+    proxy_pass $upstream_control;
+}

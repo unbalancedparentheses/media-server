@@ -57,7 +57,9 @@ def default_paths() -> Paths:
 
 
 PORTS = {"jellyfin": 8096, "sonarr": 8989, "radarr": 7878, "prowlarr": 9696, "bazarr": 6767, "qbittorrent": 8081,
-         "sabnzbd": 8080, "seerr": 5055, "byparr": 8191, "cleanuparr": 11011}
+         "sabnzbd": 8080, "seerr": 5055, "byparr": 8191, "cleanuparr": 11011,
+         # The dashboard's speed-limit control (dashstatus, this Mac only; nginx passes it on)
+         "control": 8099}
 
 
 def local(name: str, host: str = "127.0.0.1") -> str:

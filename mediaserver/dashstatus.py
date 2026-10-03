@@ -30,8 +30,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mediaserver import common as c
-from mediaserver import dashmedia, launchd
-from mediaserver.config import local
+from mediaserver import control, dashmedia, launchd
+from mediaserver.config import PORTS, local
 
 # 24-hour availability: a sample per service every slow round (5 minutes).
 # Byparr is checked on /docs: its /health opens a browser and can take
@@ -316,6 +316,7 @@ class Collector:
                 "playing": self.playing(), "downloads": self.downloads(torrents),
                 "connection": c.read_text(self.state / "netwatch/connection") or "unknown",
                 "jellyfin_up": 200 <= c.status_code(f"{local('jellyfin')}/health") < 400,
+                "speed_limit": control.Speed(self.config).state(),
                 "fixing": dashmedia.fixing_now(self.state)}
         slow = self.slow or {}
         status = {**fast, **slow, **(self.media_data or {}), "attention": self.attention(fast, slow, torrents or []),
@@ -334,6 +335,11 @@ def main() -> None:
     out = Path(os.environ.get("DASH_OUT", config / "nginx/www/status.json"))
     collector = Collector(config, state, media, int(os.environ.get("DISK_WARN_GB", "50")),
                           int(os.environ.get("DISK_MIN_GB", "10")))
+    # The speed-limit control the page uses (127.0.0.1; nginx passes it on)
+    try:
+        control.serve(config, int(os.environ.get("DASH_CONTROL_PORT", PORTS["control"])))
+    except OSError as e:
+        c.log(f"the speed control couldn't start: {e}")
     while True:
         try:
             collector.round(out)

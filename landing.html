@@ -106,6 +106,16 @@
   .step-now{font-size:0.68rem;color:var(--text2);margin-top:0.3rem}
   .fix-bar{max-width:16rem;margin-top:0.3rem}
   .worth-label{font-size:0.72rem;color:var(--text2);margin:0.9rem 0 0.5rem}
+  .speed-wrap{position:relative}
+  #speed-btn.limited{border-color:var(--amber);color:var(--amber)}
+  .speed-pop{position:absolute;right:0;top:calc(100% + 0.4rem);z-index:50;width:min(20rem,90vw);background:var(--surface);border:1px solid var(--border-hover);border-radius:12px;padding:0.9rem;box-shadow:0 12px 40px #0008}
+  .sp-title{font-size:0.82rem;font-weight:500;margin-bottom:0.6rem}
+  .sp-fields label{display:flex;align-items:center;gap:0.5rem;font-size:0.78rem;color:var(--text2);margin:0.4rem 0}
+  .sp-fields input{width:5rem;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0.4rem;font:inherit;margin-left:auto}
+  .sp-hint{font-size:0.68rem;color:var(--text3);margin:0.2rem 0 0.6rem}
+  .sp-presets{margin:0}
+  .sp-foot{display:flex;align-items:center;justify-content:space-between;gap:0.6rem;margin-top:0.8rem}
+  .sp-msg{font-size:0.7rem;color:var(--text2)}
   .tabs{display:flex;gap:0.25rem;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:0.2rem}
   .tabs a{padding:0.45rem 0.85rem;border-radius:8px;color:var(--text2);text-decoration:none;font-size:0.82rem;white-space:nowrap}
   .tabs a.on{background:var(--surface2);color:var(--text)}
@@ -220,6 +230,20 @@
       <div class="actions">
         <a class="btn primary" id="watch-btn" href="#">▶ Watch</a>
         <a class="btn label-hide" id="request-btn" href="#">＋<span> Request</span></a>
+        <div class="speed-wrap">
+          <button class="btn label-hide" id="speed-btn" aria-haspopup="dialog" aria-expanded="false" title="Download and upload speed">⇅<span id="speed-label"> Speed</span></button>
+          <div class="speed-pop hidden" id="speed-pop" role="dialog" aria-label="Download and upload speed">
+            <div class="sp-title">Download and upload speed</div>
+            <div class="chips sp-mode"><button data-mode="full">Full speed</button><button data-mode="limit">Limit</button></div>
+            <div class="sp-fields" id="sp-fields">
+              <label>↓ Download <input id="sp-down" type="number" min="0" step="0.5" inputmode="decimal"> MB/s</label>
+              <label>↑ Upload <input id="sp-up" type="number" min="0" step="0.1" inputmode="decimal"> MB/s</label>
+              <div class="sp-hint">0 = no limit that way</div>
+              <div class="chips sp-presets"><button data-down="10" data-up="1">↓10 ↑1</button><button data-down="5" data-up="0.5">↓5 ↑0.5</button><button data-down="2" data-up="0.2">↓2 ↑0.2</button><button data-down="0" data-up="0.1">Upload ↑0.1</button></div>
+            </div>
+            <div class="sp-foot"><span class="sp-msg" id="sp-msg"></span><button class="btn primary" id="sp-apply">Apply</button></div>
+          </div>
+        </div>
         <nav class="tabs" aria-label="Views"><a href="#" data-view="home">Home</a><a href="#manage" data-view="manage">Manage<span class="tab-count" id="manage-count"></span></a></nav>
       </div>
     </div>
@@ -414,6 +438,61 @@
     }
     window.addEventListener('hashchange',function(){applyView();window.scrollTo(0,0);});
 
+    // ── Speed limits: qBittorrent's alternative limits and SABnzbd's limit,
+    // through /api/control/speed (this Mac, home network, Tailscale) ──
+    var speedMode='full',speedOpen=false;
+    function mbps(kib){return kib?Math.round(kib/1024*10)/10:0;}
+    function speedText(l){
+      if(!l||!l.answering)return' Speed';
+      if(!l.limited)return' Full speed';
+      var parts=[l.down?'↓ '+mbps(l.down)+' MB/s':'',l.up?'↑ '+mbps(l.up)+' MB/s':''].filter(Boolean);
+      return' '+(parts.join(' · ')||'Limited');
+    }
+    function renderSpeed(l,fromServer){
+      document.getElementById('speed-label').textContent=speedText(l);
+      document.getElementById('speed-btn').classList.toggle('limited',!!(l&&l.limited));
+      if(speedOpen&&!fromServer)return;   // don't overwrite what's being typed
+      if(l&&l.answering){
+        speedMode=l.limited?'limit':'full';
+        document.getElementById('sp-down').value=mbps(l.down);
+        document.getElementById('sp-up').value=mbps(l.up);
+      }
+      paintSpeedMode();
+    }
+    function paintSpeedMode(){
+      document.querySelectorAll('.sp-mode button').forEach(function(b){var on=b.getAttribute('data-mode')===speedMode;b.classList.toggle('on',on);b.setAttribute('aria-pressed',on?'true':'false');});
+      show('sp-fields',speedMode==='limit');
+    }
+    document.getElementById('speed-btn').addEventListener('click',function(){
+      speedOpen=!speedOpen;show('speed-pop',speedOpen);this.setAttribute('aria-expanded',speedOpen?'true':'false');
+      document.getElementById('sp-msg').textContent='';
+      if(speedOpen&&lastStatus)renderSpeed(lastStatus.speed_limit,true);
+    });
+    document.addEventListener('click',function(e){if(speedOpen&&!e.target.closest('.speed-wrap')){speedOpen=false;show('speed-pop',false);document.getElementById('speed-btn').setAttribute('aria-expanded','false');}});
+    document.addEventListener('keydown',function(e){if(e.key==='Escape'&&speedOpen){speedOpen=false;show('speed-pop',false);document.getElementById('speed-btn').focus();}});
+    document.querySelector('.sp-mode').addEventListener('click',function(e){var b=e.target.closest('button');if(b){speedMode=b.getAttribute('data-mode');paintSpeedMode();}});
+    document.querySelector('.sp-presets').addEventListener('click',function(e){
+      var b=e.target.closest('button');if(!b)return;
+      document.getElementById('sp-down').value=b.getAttribute('data-down');document.getElementById('sp-up').value=b.getAttribute('data-up');
+    });
+    function speedRequest(){
+      if(speedMode==='full')return{limited:false};
+      var d=parseFloat(document.getElementById('sp-down').value)||0,u=parseFloat(document.getElementById('sp-up').value)||0;
+      if(d<0||u<0)return null;
+      return{limited:true,down:Math.round(d*1024),up:Math.round(u*1024)};
+    }
+    document.getElementById('sp-apply').addEventListener('click',function(){
+      var body=speedRequest(),msg=document.getElementById('sp-msg');
+      if(!body){msg.textContent='Speeds can\'t be negative';return;}
+      msg.textContent='Applying…';
+      fetch('/api/control/speed',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'media-server'},body:JSON.stringify(body)})
+        .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j};});})
+        .then(function(res){
+          if(!res.ok){msg.textContent=res.j.error||'Not applied';return;}
+          msg.textContent='Applied';renderSpeed(res.j,true);if(lastStatus)lastStatus.speed_limit=res.j;
+        }).catch(function(){msg.textContent='Not applied: the dashboard couldn\'t reach it (only from this Mac, your home network or Tailscale)';});
+    });
+
     // ── Watch tonight: filters remembered on this device ──
     var tonightKind=store('tonightKind')||'all',tonightLen=store('tonightLen')||0;
     function renderTonight(){
@@ -436,6 +515,7 @@
       if(b.hasAttribute('data-kind')){tonightKind=b.getAttribute('data-kind');store('tonightKind',tonightKind);}
       else{tonightLen=+b.getAttribute('data-len');store('tonightLen',tonightLen);}
       renderTonight();
+      renderSpeed(s.speed_limit,false);
     });
 
     // Why Jellyfin converts, in plain words
