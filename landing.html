@@ -814,9 +814,16 @@
 
     // ── Search: your library first, then titles to request ──
     var sq=document.getElementById('search'),sr=document.getElementById('search-results'),stimer;
-    sq.addEventListener('input',function(){clearTimeout(stimer);stimer=setTimeout(search,300);});
-    sq.addEventListener('keydown',function(e){if(e.key==='Escape'){sr.style.display='none';sq.blur();}});
-    document.addEventListener('click',function(e){if(!e.target.closest('.search-wrap'))sr.style.display='none';});
+    // Any change of mind (typing, clearing, Escape, clicking away) cancels
+    // what's still on its way, at once, not when the next search starts
+    function cancelSearch(){searchSeq++;}
+    sq.addEventListener('input',function(){
+      cancelSearch();clearTimeout(stimer);
+      if(sq.value.trim().length<2){sr.style.display='none';return;}
+      stimer=setTimeout(search,300);
+    });
+    sq.addEventListener('keydown',function(e){if(e.key==='Escape'){cancelSearch();clearTimeout(stimer);sr.style.display='none';sq.blur();}});
+    document.addEventListener('click',function(e){if(!e.target.closest('.search-wrap')){cancelSearch();clearTimeout(stimer);sr.style.display='none';}});
     document.addEventListener('keydown',function(e){if(e.key==='/'&&document.activeElement!==sq){e.preventDefault();sq.focus();}});
     // One row per title: library items (Jellyfin) and Seerr's results
     // matched by TMDB id, each row saying what you can do with it: Play

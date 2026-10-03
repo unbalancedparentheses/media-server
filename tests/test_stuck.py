@@ -239,6 +239,23 @@ class Recovery(unittest.TestCase):
         self.assertNotIn("id", wider)
         self.assertFalse(self.profiles[0]["items"][0]["allowed"])   # the original is untouched
 
+    def test_outdated_copy_brought_in_step(self):
+        """The copy already exists but the original's minimum score changed:
+        the copy follows, not only on qualities"""
+        self.settings["fallback_resolution"] = "720p"
+        old = stuck.widened(self.profiles[0], "720p")
+        self.profiles.append(dict(old, id=2))
+        self.profiles[0]["minFormatScore"] = 50
+        self.releases["release?movieId=1"] = [release(rejections=["Quality is not wanted in profile"])]
+        for day in range(0, 9):
+            self.round(day * DAY)
+        puts = [b for m, p, b in self.radarr.calls if m == "PUT" and p == "qualityprofile/2"]
+        self.assertEqual(puts[-1]["minFormatScore"], 50)
+
+    def test_copy_of_a_copy_keeps_the_origin_name(self):
+        twice = stuck.widened(stuck.widened(self.profiles[0], "720p"), "720p")
+        self.assertEqual(twice["name"], "HD-1080p (+720p)")
+
     def test_no_fallback_when_quality_isnt_the_only_reason(self):
         self.settings["fallback_resolution"] = "720p"
         self.releases["release?movieId=1"] = [release(rejections=["Quality is not wanted in profile"]),

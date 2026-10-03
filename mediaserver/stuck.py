@@ -35,6 +35,7 @@ import time
 from typing import Any
 
 from mediaserver import common as c
+from mediaserver.pins import fallback_name, profile_origin
 
 RUN_EVERY = 3600
 SEARCHES_PER_RUN = 3
@@ -281,7 +282,10 @@ class Stuck:
                 existing = next((p for p in profiles if p.get("name") == name), None)
                 if existing:
                     target = existing["id"]
-                    if existing.get("items") != wider["items"]:
+                    # In step with the original in everything it keeps
+                    # (language, scores, minimum score, cutoff), not only
+                    # the qualities
+                    if {k: v for k, v in existing.items() if k != "id"} != wider:
                         app.call("PUT", f"qualityprofile/{target}", dict(wider, id=target))
                 else:
                     target = (app.call("POST", "qualityprofile", wider) or {}).get("id")
@@ -325,7 +329,7 @@ def widened(profile: dict, resolution: str) -> dict:
             entry["allowed"] = True
         return entry
     copy = {k: v for k, v in profile.items() if k != "id"}
-    copy["name"] = f"{profile.get('name')} (+{resolution})"
+    copy["name"] = fallback_name(profile_origin(profile.get("name") or ""), resolution)
     copy["items"] = [allow(x) for x in profile.get("items") or []]
     return copy
 

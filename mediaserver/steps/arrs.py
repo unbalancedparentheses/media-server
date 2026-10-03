@@ -13,7 +13,7 @@ from mediaserver import common as c
 from mediaserver.api import ApiError
 from mediaserver.arr import set_login, sync_fields
 from mediaserver.config import Config, Keys
-from mediaserver.pins import ANIME_PROFILE
+from mediaserver.pins import ANIME_PROFILE, profile_origin
 from mediaserver.ui import err, info, ok, warn
 
 JUNK_SCORE = -10000
@@ -264,7 +264,8 @@ def preference_score(cfg: Config, name: str, score: int) -> int:
 def scored_profile(profile: dict, formats: list[dict]) -> dict:
     """The profile with each format's score (0 outside its scope) and a
     minimum score of at least 0, which rejection relies on"""
-    is_anime = profile.get("name") == ANIME_PROFILE
+    # The Anime profile and its fallback copies (Anime (+720p))
+    is_anime = profile_origin(profile.get("name") or "") == ANIME_PROFILE
     scores = {f["id"]: (f["score"] if f["scope"] == "all" or (f["scope"] == "anime") == is_anime else 0) for f in formats}
     items = [dict(i, score=scores[i["format"]]) if i.get("format") in scores else i for i in profile.get("formatItems") or []]
     have = {i.get("format") for i in profile.get("formatItems") or []}

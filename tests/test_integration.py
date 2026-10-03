@@ -221,3 +221,31 @@ class ChangedConfig(Stack):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FallbackThenReinstall(Stack):
+    """A fallback copy of the Anime profile (stuck.py) keeps its anime scores,
+    dub blocking included, through a reinstall"""
+
+    def test_anime_copy_keeps_dub_blocking(self):
+        from mediaserver import stuck
+        self.run_steps()
+        sonarr = self.stack.sonarr
+        profiles = sonarr.resources["qualityprofile"]
+        anime = next(p for p in profiles.items if p["name"] == "Anime")
+        dubs = next(f["id"] for f in sonarr.resources["customformat"].items if f["name"] == "Dubs Only")
+
+        def score(profile, fid):
+            return next(i["score"] for i in profile["formatItems"] if i["format"] == fid)
+        self.assertLess(score(anime, dubs), 0)
+        copy = profiles.add(stuck.widened(anime, "720p"))
+        self.assertEqual(copy["name"], "Anime (+720p)")
+        self.run_steps()   # a reinstall
+        copy = next(p for p in profiles.items if p["name"] == "Anime (+720p)")
+        self.assertEqual(score(copy, dubs), score(anime, dubs))
+        # A standard profile's copy doesn't get anime scores
+        base = next(p for p in profiles.items if p["name"] == "HD-1080p")
+        std = profiles.add(stuck.widened(base, "720p"))
+        self.run_steps()
+        std = next(p for p in profiles.items if p["id"] == std["id"])
+        self.assertEqual(score(std, dubs), 0)
