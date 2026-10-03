@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
-"""dashmedia: the media half of the dashboard's data. dashstatus.sh runs it
-every slow round (5 minutes) and merges the JSON it prints into
-status.json, so the API keys stay on the server.
+"""dashmedia: the media half of the dashboard's data, which dashstatus
+gathers every slow round (5 minutes) into status.json, so the API keys
+stay on the server.
 
   continue   what each user is in the middle of, and the next episode of
              what they're watching (Jellyfin's resume and next up)
@@ -15,55 +14,43 @@ status.json, so the API keys stay on the server.
              in Japanese whose files have no Japanese audio
 
 Each part is independent: one that fails is left out (and listed in
-media_failed, so dashstatus retries soon) and the page shows what it has. Environment: DASH_CONFIG, DASH_STATE (as dashstatus.sh).
+media_failed, so dashstatus retries soon) and the page shows what it has.
 """
-import json
-import os
-import re
-import sys
+from __future__ import annotations
+
 import time
-import urllib.parse
-import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-CONFIG = Path(os.environ.get("DASH_CONFIG", Path.home() / "media/config"))
-STATE = Path(os.environ.get("DASH_STATE", Path.home() / "media/.state"))
+from mediaserver import common as c
+
+CONFIG = c.MEDIA / "config"
+STATE = c.MEDIA / ".state"
 JELLYFIN = "http://127.0.0.1:8096"
 SONARR = "http://127.0.0.1:8989/api/v3"
 RADARR = "http://127.0.0.1:7878/api/v3"
 SEERR = "http://127.0.0.1:5055/api/v1"
 
 
-def get(url, headers):
-    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=15) as resp:
-        return json.loads(resp.read() or b"null")
-
-
-def arr_key(name):
-    try:
-        m = re.search(r"<ApiKey>(.*?)</ApiKey>", (CONFIG / name / "config.xml").read_text())
-        return m.group(1) if m else ""
-    except OSError:
-        return ""
+def configure(config: Path, state: Path) -> None:
+    global CONFIG, STATE
+    CONFIG, STATE = config, state
 
 
 def jellyfin(path):
-    key = (STATE / "dashstatus/jellyfin-key").read_text().strip()
-    return get(f"{JELLYFIN}/{path}", {"Authorization": f'MediaBrowser Token="{key}"'})
+    return c.get_json(f"{JELLYFIN}/{path}", c.jellyfin_auth(STATE))
 
 
 def sonarr(path):
-    return get(f"{SONARR}/{path}", {"X-Api-Key": arr_key("sonarr")})
+    return c.get_json(f"{SONARR}/{path}", {"X-Api-Key": c.arr_key(CONFIG, "sonarr")})
 
 
 def radarr(path):
-    return get(f"{RADARR}/{path}", {"X-Api-Key": arr_key("radarr")})
+    return c.get_json(f"{RADARR}/{path}", {"X-Api-Key": c.arr_key(CONFIG, "radarr")})
 
 
 def seerr(path):
-    key = json.loads((CONFIG / "seerr/settings.json").read_text())["main"]["apiKey"]
-    return get(f"{SEERR}/{path}", {"X-Api-Key": key})
+    return c.get_json(f"{SEERR}/{path}", {"X-Api-Key": c.seerr_key(CONFIG)})
 
 
 def poster(item):
@@ -162,7 +149,7 @@ def requests():
         kind = "tv" if r.get("type") == "tv" else "movie"
         try:
             details = seerr(f"{kind}/{media.get('tmdbId')}")
-        except OSError:
+        except c.HTTP_ERRORS:
             details = {}
         item = {"title": details.get("title") or details.get("name") or f"TMDB {media.get('tmdbId')}",
                 "year": (details.get("releaseDate") or details.get("firstAirDate") or "")[:4],
@@ -247,11 +234,7 @@ def upcoming():
 
 
 def health():
-    status = {}
-    try:
-        status = json.loads((STATE / "postimport/status.json").read_text())
-    except (OSError, ValueError):
-        pass
+    status = c.read_json(STATE / "postimport/status.json", {}) or {}
     week = time.time() - 7 * 86400
     out = {"fixed": [r for r in status.get("recent", []) if r.get("time", 0) > week][:6],
            "looking": status.get("looking", []), "kept": status.get("kept", []),
@@ -277,21 +260,17 @@ def health():
     return out
 
 
-def main():
+def collect() -> dict:
     result, failed = {}, []
     for name, part in (("continue", continue_watching), ("latest", latest), ("requests_live", requests),
                        ("upcoming", upcoming), ("health", health)):
         try:
             result[name] = part()
         except Exception as e:  # one broken source mustn't blank the others
-            print(f"dashmedia: {name}: {e}", file=sys.stderr)
+            c.log(f"dashmedia: {name}: {e}")
             failed.append(name)
     # dashstatus asks again next round instead of in 5 minutes (e.g. right
     # after the services restart)
     result["media_failed"] = failed
     result["media_updated"] = int(datetime.now(timezone.utc).timestamp())
-    print(json.dumps(result, separators=(",", ":")))
-
-
-if __name__ == "__main__":
-    main()
+    return result

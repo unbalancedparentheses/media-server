@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """postimport: checks and fixes every file Sonarr and Radarr import, so it
 plays directly everywhere. Runs as a launchd agent (see flake.nix).
 
@@ -35,12 +34,14 @@ Settings come from $POSTIMPORT_STATE/settings.json, which setup writes from
 config.toml; progress is kept in state.json, and status.json is what the
 dashboard and `nix run .#doctor` show.
 
-By hand: postimport.py --check FILE (what's wrong with it, changes nothing)
-or postimport.py --fix FILE (steps 2 and 3 now).
+By hand: nix run .#postimport -- --check FILE (what's wrong with it,
+changes nothing) or --fix FILE (steps 2 and 3 now).
 
 Environment: POSTIMPORT_CONFIG (~/media/config), POSTIMPORT_STATE
 (~/media/.state/postimport), POSTIMPORT_INTERVAL.
 """
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -54,6 +55,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from mediaserver import common as c
+from mediaserver.common import background, log, read_json
 
 CONFIG = Path(os.environ.get("POSTIMPORT_CONFIG", Path.home() / "media/config"))
 STATE = Path(os.environ.get("POSTIMPORT_STATE", Path.home() / "media/.state/postimport"))
@@ -95,10 +99,6 @@ LANGUAGES = {
 TAG_TO_LANGUAGE = {c: two for two, codes in LANGUAGES.items() for c in codes + [two]}
 
 
-def log(message):
-    print(f"{time.strftime('%F %T')} {message}", flush=True)
-
-
 def language_of(code):
     """Any tag ("eng", "en", "en-US") → ISO 639-1, or "" when unknown/untagged"""
     code = (code or "").lower().split("-")[0]
@@ -113,40 +113,13 @@ def stream_language(stream):
     return language_of(tags(stream).get("language"))
 
 
-def read_json(path, default):
-    try:
-        return json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return default
-
-
-def write_json(path, data):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(json.dumps(data, indent=1))
-    os.replace(tmp, path)
-
-
 def operation_running():
-    """An install/update/restore/e2e holds setup's lock (and is alive)"""
-    try:
-        owner = int((LOCK / "pid").read_text().strip())
-        os.kill(owner, 0)
-        return True
-    except (OSError, ValueError):
-        return False
+    return c.operation_running(LOCK)
 
 
 def notify(title, message):
     log(f"notify: {title}: {message}")
-    script = f"display notification {json.dumps(message)} with title {json.dumps(title)}"
-    subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, check=False)
-
-
-def background(cmd):
-    """Run with background priority (low CPU, efficiency cores) on macOS"""
-    return (["/usr/sbin/taskpolicy", "-b"] + cmd) if os.path.exists("/usr/sbin/taskpolicy") else cmd
+    c.notify(title, message)
 
 
 # ─── Inspecting files ────────────────────────────────────────────
@@ -659,7 +632,7 @@ def display_name(path):
 
 
 def save(state):
-    write_json(STATE / "state.json", state)
+    c.write_json(STATE / "state.json", state)
 
 
 def load_settings():
@@ -706,7 +679,7 @@ def main():
             worker.check_rejections()
             worker.sweep()
             save(worker.state)
-            write_json(STATE / "status.json", worker.status())
+            c.write_json(STATE / "status.json", worker.status())
         time.sleep(int(os.environ.get("POSTIMPORT_INTERVAL", "60")))
 
 

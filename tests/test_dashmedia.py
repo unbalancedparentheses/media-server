@@ -1,15 +1,12 @@
-"""Tests for scripts/dashmedia.py: what each request's status says, which
+"""Tests for mediaserver/dashmedia.py: what each request's status says, which
 release date a movie is waiting for, and grouping new episodes.
 
-Run: nix run .#unit   (or: python3 -m unittest discover -s tests)
+Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
-import sys
 import unittest
-from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-import dashmedia as dm  # noqa: E402
+from mediaserver import dashmedia as dm
 
 TODAY = "2026-10-03"
 

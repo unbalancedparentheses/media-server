@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks and fixes for every imported file (scripts/postimport.py, a
+# Checks and fixes for every imported file (mediaserver/postimport.py, a
 # launchd agent). It reads these settings each round, so a change needs no
 # restart.
 

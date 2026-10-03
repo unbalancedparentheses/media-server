@@ -461,78 +461,6 @@ test_plugin_repository_not_overwritten_when_unreadable() {
   [ ! -f "$FAKE/overwritten" ] || fail "overwrote Jellyfin's repository list"
 }
 
-# ─── netwatch ────────────────────────────────────────────────────
-
-# Load netwatch's functions against a fake Cleanuparr whose queue cleaner
-# state lives in $FAKE/cleaner ("true"/"false"); $FAKE/put_fails makes
-# changing it fail, $FAKE/offline makes the connection check fail
-netwatch_fakes() {
-  mkdir -p "$CONFIG_DIR/cleanuparr"
-  sqlite3 "$CONFIG_DIR/cleanuparr/users.db" "CREATE TABLE users (api_key TEXT); INSERT INTO users VALUES ('k');"
-  NETWATCH_CONFIG="$CONFIG_DIR" NETWATCH_STATE="$STATE_DIR/netwatch" NETWATCH_LIB=1
-  # shellcheck source=/dev/null
-  . "$ROOT/scripts/netwatch.sh"
-  probe() { [ ! -e "$FAKE/offline" ]; }
-  after_reconnect() { touch "$FAKE/reconnected"; }
-  curl() {
-    local IFS=' '  # "$*" joins with IFS's first character (setup's is a newline)
-    case "$*" in
-      *"-X PUT"*)
-        [ -e "$FAKE/put_fails" ] && return 22
-        jq -r .enabled <<< "${*: -1}" > "$FAKE/cleaner" ;;
-      *queue_cleaner*) printf '{"enabled":%s}\n' "$(cat "$FAKE/cleaner")" ;;
-    esac
-  }
-  NW_STATE=unknown NW_MISSES=0
-}
-
-# Pausing fails the first time the Mac is seen offline: the next round
-# retries it (it used to be tried once per transition)
-test_netwatch_retries_failed_pause() {
-  netwatch_fakes
-  echo true > "$FAKE/cleaner"
-  netwatch_round >/dev/null   # online
-  touch "$FAKE/offline" "$FAKE/put_fails"
-  for _ in 1 2 3; do netwatch_round >/dev/null; done
-  expect_eq "$NW_STATE" offline "state after 3 failed checks"
-  expect_eq "$(cat "$FAKE/cleaner")" true "cleaner while pausing fails"
-  rm "$FAKE/put_fails"
-  netwatch_round >/dev/null
-  expect_eq "$(cat "$FAKE/cleaner")" false "cleaner once pausing works"
-}
-
-# Online, the cleaner follows config.toml (via setup's file), even "off":
-# a stale pause never turns it on against the setting
-test_netwatch_follows_config_when_online() {
-  netwatch_fakes
-  mkdir -p "$STATE_DIR/netwatch"
-  echo false > "$STATE_DIR/netwatch/cleanuparr-wanted"
-  echo true > "$FAKE/cleaner"
-  netwatch_round >/dev/null
-  expect_eq "$(cat "$FAKE/cleaner")" false "cleaner with cleanuparr.enabled = false"
-  echo true > "$STATE_DIR/netwatch/cleanuparr-wanted"
-  netwatch_round >/dev/null
-  expect_eq "$(cat "$FAKE/cleaner")" true "cleaner with cleanuparr.enabled = true"
-}
-
-# Restarted while offline, with the cleaner paused: nothing turns it on
-# before a check succeeds, and coming back online resumes it once
-test_netwatch_restart_offline_keeps_cleaner_paused() {
-  netwatch_fakes
-  echo false > "$FAKE/cleaner"
-  touch "$FAKE/offline"
-  for _ in 1 2; do
-    netwatch_round >/dev/null
-    expect_eq "$(cat "$FAKE/cleaner")" false "cleaner before the connection is known"
-  done
-  netwatch_round >/dev/null
-  expect_eq "$NW_STATE" offline "state"
-  rm "$FAKE/offline"
-  netwatch_round >/dev/null
-  expect_eq "$(cat "$FAKE/cleaner")" true "cleaner back online"
-  [ -f "$FAKE/reconnected" ] || fail "indexers not re-tested after reconnecting"
-}
-
 # ─── Smaller recovery cases ──────────────────────────────────────
 
 # Renaming the existing library: recorded only once Sonarr accepted it
@@ -614,26 +542,6 @@ test_entry_point_refuses_concurrent_operation() {
   expect_eq "$(cat "$STATE_DIR/lock/pid")" "$owner" "lock still the first operation's"
 }
 
-# netwatch leaves Cleanuparr alone during an install, and runs the
-# post-reconnect re-tests once the install is done
-test_netwatch_waits_for_running_operation() {
-  netwatch_fakes
-  echo true > "$FAKE/cleaner"
-  touch "$FAKE/offline"
-  for _ in 1 2 3; do netwatch_round >/dev/null; done
-  expect_eq "$(cat "$FAKE/cleaner")" false "paused while offline"
-  command sleep 30 & local owner=$!
-  mkdir -p "$STATE_DIR/lock"; echo "$owner" > "$STATE_DIR/lock/pid"
-  rm "$FAKE/offline"
-  netwatch_round >/dev/null
-  expect_eq "$(cat "$FAKE/cleaner")" false "cleaner during the install"
-  [ ! -f "$FAKE/reconnected" ] || fail "re-tested during the install"
-  kill "$owner"; wait "$owner" 2>/dev/null; rm -rf "$STATE_DIR/lock"
-  netwatch_round >/dev/null
-  expect_eq "$(cat "$FAKE/cleaner")" true "cleaner after the install"
-  [ -f "$FAKE/reconnected" ] || fail "re-tests never ran after the install"
-}
-
 # ─── Config validation ───────────────────────────────────────────
 
 # A typo is caught before anything changes, with a suggestion
@@ -702,31 +610,6 @@ test_jellyfin_restart_waits_for_login() {
   jellyfin_restart_ready >/dev/null 2>&1 || fail "gave up while Jellyfin was still starting"
   expect_eq "$JELLYFIN_TOKEN" tok "token after the restart"
   expect_eq "$(cat "$FAKE/logins")" 3 "login attempts"
-}
-
-# ─── Dashboard data ──────────────────────────────────────────────
-
-# Right after a restart the services aren't answering yet, so part of the
-# media data fails: it's asked for again a minute later (every 4th round),
-# not after the 5-minute slow round, and the slow round itself (which also
-# records uptime samples) isn't repeated
-test_dashstatus_retries_failed_media_data() {
-  # shellcheck source=/dev/null
-  DASHSTATUS_LIB=1 DASH_OUT="$FAKE/status.json" . "$ROOT/scripts/dashstatus.sh"
-  echo 0 > "$FAKE/slow"; echo 0 > "$FAKE/media"
-  slow_json() { echo $(( $(cat "$FAKE/slow") + 1 )) > "$FAKE/slow"; echo '{}'; }
-  media_json() {
-    local n; n=$(( $(cat "$FAKE/media") + 1 )); echo "$n" > "$FAKE/media"
-    if [ "$n" -lt 3 ]; then echo '{"media_failed": ["requests_live"]}'; else echo '{"requests_live": [], "media_failed": []}'; fi
-  }
-  system_json() { echo '{}'; }; playing_json() { echo '[]'; }; downloads_json() { echo '{}'; }
-  attention_json() { echo '[]'; }; get() { echo '[]'; }
-  DASH_ROUND=0 DASH_SLOW="" DASH_MEDIA=""
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do dashstatus_round; done
-  expect_eq "$(cat "$FAKE/slow")" 1 "slow rounds in 12 rounds"
-  expect_eq "$(cat "$FAKE/media")" 3 "media asks (rounds 0 and 4 fail, 8 works, then it waits)"
-  expect_eq "$(jq -c .requests_live "$FAKE/status.json")" "[]" "status.json has the media data"
 }
 
 echo "Failure-path tests"

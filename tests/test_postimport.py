@@ -1,26 +1,24 @@
 # Tests use possibly-None results directly (a None fails the test anyway)
 # and attach recorders to objects:
 # pyright: reportOptionalSubscript=false, reportArgumentType=false, reportAttributeAccessIssue=false
-"""Tests for scripts/postimport.py: what counts as a bad download, which
+"""Tests for mediaserver/postimport.py: what counts as a bad download, which
 files get a stereo track or OCR'd subtitles, and what happens on
 rejection. Sonarr/Radarr are fakes; ffmpeg is used for real when it's on
 PATH (nix run .#unit provides it).
 
-Run: nix run .#unit   (or: python3 -m unittest discover -s tests)
+Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
 import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-import postimport as pi  # noqa: E402
+from mediaserver import postimport as pi
 
 pi.log = lambda message: None  # quiet; the tests check results, not logs
 

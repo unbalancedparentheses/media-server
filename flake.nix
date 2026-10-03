@@ -124,51 +124,37 @@
               };
             };
 
-          # Checks free space on the media disk every 30 minutes and shows a
-          # macOS notification (at most every 6 hours) when it runs low
-          diskwatchStart = pkgs.writeShellScript "diskwatch" ''
-            set -u
-            last_file="$DISKWATCH_STATE/last-warning"
-            mkdir -p "$DISKWATCH_STATE"
-            while :; do
-              free_kb=$(/bin/df -Pk "$MEDIA_DIR" | /usr/bin/awk 'NR == 2 { print $4 }')
-              free_gb=$(( ''${free_kb:-0} / 1024 / 1024 ))
-              if [ "$free_gb" -lt "$DISK_WARN_GB" ]; then
-                echo "$(/bin/date '+%F %T') low disk space: $free_gb GB free (warning below $DISK_WARN_GB GB)"
-                now=$(/bin/date +%s)
-                last=$(cat "$last_file" 2>/dev/null || echo 0)
-                if [ $(( now - last )) -ge 21600 ]; then
-                  /usr/bin/osascript -e "display notification \"Only $free_gb GB free on the media disk. Imports stop below $DISK_MIN_GB GB; delete something or add space.\" with title \"Media server: disk almost full\" sound name \"Basso\"" || true
-                  echo "$now" > "$last_file"
-                fi
-              fi
-              sleep 1800
-            done
+          # The Python package: the background services below (and, as the
+          # migration goes on, setup itself). Copied on its own so the
+          # services restart only when the Python code changes.
+          mediaserverPkg = pkgs.runCommand "mediaserver-python" { } ''
+            mkdir -p $out
+            cp -r ${./mediaserver} $out/mediaserver
           '';
+          python = "${pkgs.python3}/bin/python3";
+          # A service: python3 -m mediaserver.<module>, with extra tools on PATH
+          pyService =
+            name: tools:
+            pkgs.writeShellScript name ''
+              export PATH=${lib.makeBinPath tools}:/usr/bin:/bin:/usr/sbin
+              export PYTHONPATH=${mediaserverPkg} PYTHONDONTWRITEBYTECODE=1
+              exec ${python} -m mediaserver.${name} "$@"
+            '';
 
+          # Free space on the media disk; a notification when it runs low
+          diskwatchStart = pyService "diskwatch" [ ];
           # Keeps the stack sensible when the Mac goes offline and comes back
-          # (scripts/netwatch.sh explains what it does)
-          netwatchStart = pkgs.writeShellScript "netwatch" ''
-            export PATH=${pkgs.curl}/bin:${pkgs.jq}/bin:/usr/bin:/bin
-            exec ${pkgs.bash}/bin/bash ${./scripts/netwatch.sh}
-          '';
-
+          netwatchStart = pyService "netwatch" [ ];
           # Gathers the dashboard's live data into one file the page reads
-          # (scripts/dashstatus.sh explains what it collects)
-          dashstatusStart = pkgs.writeShellScript "dashstatus" ''
-            export PATH=${pkgs.curl}/bin:${pkgs.jq}/bin:${pkgs.python3}/bin:/usr/bin:/bin:/usr/sbin
-            export DASH_MEDIA_SCRIPT=${./scripts/dashmedia.py}
-            exec ${pkgs.bash}/bin/bash ${./scripts/dashstatus.sh}
-          '';
-
+          dashstatusStart = pyService "dashstatus" [ ];
           # Checks and fixes every imported file: replaces broken or dubbed
-          # downloads, adds stereo audio, reads picture subtitles into text
-          # (scripts/postimport.py explains it). Jellyfin's ffmpeg has
-          # Apple's AAC encoder; pgsrip does the OCR (with Tesseract).
-          postimportStart = pkgs.writeShellScript "postimport" ''
-            export PATH=${pkgs.jellyfin-ffmpeg}/bin:${pkgs.pgsrip}/bin:/usr/bin:/bin:/usr/sbin
-            exec ${pkgs.python3}/bin/python3 ${./scripts/postimport.py} "$@"
-          '';
+          # downloads, adds stereo audio, reads picture subtitles into text.
+          # Jellyfin's ffmpeg has Apple's AAC encoder; pgsrip does the OCR.
+          postimportStart = pyService "postimport" [
+            pkgs.jellyfin-ffmpeg
+            pkgs.pgsrip
+          ];
+          # (each module's docstring in mediaserver/ explains what it does)
 
           # Placeholders filled in by setup.sh when it writes the launchd agents:
           # @MEDIA@ (~/media), @CONFIG@ (~/media/config), @STATE@ (~/media/.state),
@@ -417,8 +403,8 @@
               ];
               text = ''
                 bash ${self}/tests/recovery.sh
-                echo "Post-import tests"
-                cd ${self}/tests && python3 -m unittest -q test_postimport test_dashmedia
+                echo "Python tests"
+                cd ${self} && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -q -s tests -t .
               '';
             }
           );

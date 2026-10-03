@@ -1,6 +1,6 @@
 {
-  "include": ["scripts", "tests"],
-  "extraPaths": ["scripts"],
+  "include": ["mediaserver", "scripts", "tests"],
+  "extraPaths": ["."],
   "pythonVersion": "3.11",
   "typeCheckingMode": "standard"
 }
