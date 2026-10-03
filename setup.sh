@@ -126,15 +126,15 @@ run_setup() {
   timed load_api_keys
   # Radarr indexers an interrupted e2e test left paused
   e2e_resume_radarr_indexers || true
-  timed configure_qbittorrent
+  timed py step qbittorrent
   timed configure_jellyfin
-  timed configure_sabnzbd
+  timed py step sabnzbd
   timed configure_arrs
   timed configure_junk_filters
   timed py step prowlarr
-  timed configure_usenet_providers
+  timed py step usenet-providers
   timed py step bazarr
-  timed configure_sabnzbd_auth
+  timed py step sabnzbd-login
   timed py step seerr
   timed py step moonbase
   timed py step intro-skipper

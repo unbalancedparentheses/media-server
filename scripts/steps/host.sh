@@ -146,19 +146,6 @@ XML
   return 0
 }
 
-# qBittorrent's Web UI login is written before first start, which avoids
-# the random first-run password that's only printed to its log. On macOS
-# qBittorrent reads qBittorrent.ini. An existing password is kept here;
-# configure_qbittorrent changes it when config.toml's differs.
-seed_qbittorrent_config() {
-  local bind="${ADMIN_BIND:-0.0.0.0}"
-  [ -f "$QBIT_INI" ] && grep -q '^WebUI\\Password_PBKDF2=' "$QBIT_INI" && return 0
-  mkdir -p "$(dirname "$QBIT_INI")"
-  [ "$bind" = "0.0.0.0" ] && bind="*"
-  qbit_ini_set_login "$(cfg '.qbittorrent.username')" "$(cfg '.qbittorrent.password')" "$bind"
-  ok "qBittorrent: qBittorrent.ini"
-}
-
 seed_sabnzbd_config() {
   local file="$CONFIG_DIR/sabnzbd/sabnzbd.ini"
   [ -f "$file" ] && return 0
@@ -200,7 +187,7 @@ write_service_configs() {
   seed_arr_config sonarr 8989
   seed_arr_config radarr 7878
   seed_arr_config prowlarr 9696
-  seed_qbittorrent_config
+  py step seed-qbittorrent || exit 1
   seed_sabnzbd_config
   write_nginx_config
   ok "Service configs ready"

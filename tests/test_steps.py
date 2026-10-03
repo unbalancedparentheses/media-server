@@ -19,7 +19,7 @@ from unittest import mock
 from mediaserver import api, arr, creds, jellyfin, launchd, logins
 from mediaserver import common as c
 from mediaserver.config import Config, Keys, Paths
-from mediaserver.steps import bazarr, cleanuparr, introskipper, moonbase, postimport_settings, prowlarr, seerr, unpackerr
+from mediaserver.steps import bazarr, cleanuparr, downloads, introskipper, moonbase, postimport_settings, prowlarr, seerr, unpackerr
 from mediaserver.ui import SetupError
 
 
@@ -353,3 +353,55 @@ class ArrLogin(unittest.TestCase):
                 self.assertEqual(creds.get(cfg.paths.state, "sonarr", "password"), expected)
                 if change:
                     state[change] = True
+
+
+class Downloads(unittest.TestCase):
+    def setUp(self):
+        self.cfg = scratch({"qbittorrent": {"username": "admin", "password": "pw"}, "downloads": {"seeding_ratio": 1, "seeding_time_minutes": 60},
+                            "usenet_providers": [{"name": "prov", "enable": False}]})
+        self.addCleanup(shutil.rmtree, self.cfg.paths.media)
+        (self.cfg.paths.config / "sabnzbd").mkdir(parents=True)
+        (self.cfg.paths.config / "sabnzbd/sabnzbd.ini").write_text("api_key = k\n")
+
+    def test_qbittorrent_ini_login(self):
+        """Written like qBittorrent does (PBKDF2); the check reads it back"""
+        downloads.ini_set_login(self.cfg.paths.config, "admin", "pw", "127.0.0.1")
+        ini = logins.qbit_ini(self.cfg.paths.config)
+        text = ini.read_text()
+        self.assertTrue(text.startswith("[LegalNotice]"))
+        self.assertIn("WebUI\\Address=127.0.0.1", text)
+        self.assertTrue(logins.qbittorrent_password_is(self.cfg.paths.config, "pw"))
+        self.assertFalse(logins.qbittorrent_password_is(self.cfg.paths.config, "other"))
+        self.assertEqual(ini.stat().st_mode & 0o777, 0o600)
+        downloads.ini_set_login(self.cfg.paths.config, "admin", "new")
+        self.assertEqual(ini.read_text().count("WebUI\\Password_PBKDF2"), 1)
+        self.assertIn("WebUI\\Address=127.0.0.1", ini.read_text())  # kept
+
+    def test_preferences(self):
+        prefs = downloads.preferences(self.cfg)
+        self.assertEqual((prefs["web_ui_address"], prefs["up_limit"], prefs["max_ratio"]), ("*", 100 * 1024, 1))
+        self.assertTrue(prefs["bypass_local_auth"] and prefs["auto_tmm_enabled"])
+
+    def sab(self, answers):
+        """A fake SABnzbd: answers[(mode, section)] → answer (None = no answer)"""
+        def request(url, method="GET", headers=None, body=None, form=None, timeout=15, follow=True):
+            answer = answers((form or {}).get("mode"), (form or {}).get("section"), form or {})
+            return c.Response(0, {}, b"") if answer is None else c.Response(200, {}, json.dumps(answer).encode())
+        return mock.patch.object(c, "request", request)
+
+    def test_disable_checks_sabnzbd_really_did(self):
+        """SABnzbd accepts the request but the server stays on: not
+        reported as disabled"""
+        def answers(mode, section, form):
+            if mode == "get_config":
+                return {"config": {"servers": [{"name": "prov", "enable": 1}]}}
+            return {"status": False, "error": "nope"}
+        with self.sab(answers), mock.patch.object(downloads.time, "sleep"):
+            out = run(downloads.usenet_providers, self.cfg)
+        self.assertNotIn("prov disabled", out)
+        self.assertIn("Could not disable prov", out)
+
+    def test_unreadable_server_list_reported(self):
+        with self.sab(lambda mode, section, form: None), mock.patch.object(downloads.time, "sleep"):
+            out = run(downloads.usenet_providers, self.cfg)
+        self.assertIn("Couldn't read SABnzbd's servers", out)

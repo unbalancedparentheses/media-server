@@ -407,22 +407,6 @@ test_migration_adopts_series_added_before_crash() {
   [ -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "not marked complete"
 }
 
-# SABnzbd accepts the request but the server stays on: not reported as disabled
-test_usenet_disable_checks_sabnzbd_reply() {
-  SABNZBD_KEY=k
-  CONFIG_JSON='{"usenet_providers":[{"name":"prov","enable":false}]}'
-  curl() {
-    case "$*" in
-      *section=servers*get_config*|*get_config*section=servers*) echo '{"config":{"servers":[{"name":"prov","enable":1}]}}' ;;
-      *) echo '{"status":false,"error":"nope"}' ;;
-    esac
-  }
-  local out
-  out=$(configure_usenet_providers 2>&1)
-  grep -q "prov disabled" <<< "$out" && fail "reported disabled while SABnzbd still has it on"
-  grep -q "Could not disable prov" <<< "$out" || fail "no warning: $out"
-}
-
 # ─── Smaller recovery cases ──────────────────────────────────────
 
 # Renaming the existing library: recorded only once Sonarr accepted it
@@ -441,17 +425,6 @@ test_rename_retried_after_interruption() {
   set_renaming Sonarr http://s k series >/dev/null 2>&1
   [ -f "$FAKE/renamed" ] || fail "rename not retried"
   [ -f "$STATE_DIR/renamed-sonarr" ] || fail "not recorded after renaming"
-}
-
-# SABnzbd's server list can't be read: disabling a provider is reported,
-# not silently skipped
-test_usenet_unreadable_server_list_reported() {
-  SABNZBD_KEY=k
-  CONFIG_JSON='{"usenet_providers":[{"name":"prov","enable":false}]}'
-  curl() { return 7; }
-  local out
-  out=$(configure_usenet_providers 2>&1)
-  grep -q "Couldn't read SABnzbd's servers" <<< "$out" || fail "no warning: $out"
 }
 
 # e2e: pausing an indexer fails, so the test doesn't run with automatic

@@ -20,6 +20,12 @@ STEPS = {
     "bazarr": "bazarr",
     "seerr": "seerr",
     "prowlarr": "prowlarr",
+    "qbittorrent": "downloads:qbittorrent",
+    "sabnzbd": "downloads:sabnzbd",
+    "usenet-providers": "downloads:usenet_providers",
+    "sabnzbd-login": "downloads:sabnzbd_login",
+    # Before qBittorrent's first start (host setup)
+    "seed-qbittorrent": "downloads:seed_qbittorrent",
 }
 
 
