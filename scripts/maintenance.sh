@@ -17,6 +17,7 @@ STATE_RECORDS=(
   .state/tailscale-routes.json
   .state/renamed-sonarr
   .state/renamed-radarr
+  .state/postimport/state.json
 )
 do_backup() {
   [ -d "$CONFIG_DIR" ] || err "Config directory not found: $CONFIG_DIR"

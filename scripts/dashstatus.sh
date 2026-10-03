@@ -181,6 +181,7 @@ uptime_json() {
 # What needs you, with what to do; facts only, from the data gathered
 attention_json() {  # fast slow torrents
   jq -nc --argjson f "$1" --argjson s "$2" --argjson ts "$3" --arg conn "$(cat "$state/netwatch/connection" 2>/dev/null)" \
+    --argjson pi "$(cat "$state/postimport/status.json" 2>/dev/null || echo '{}')" \
     --argjson paused "$([ -f "$state/e2e/paused-indexers.json" ] && echo true || echo false)" '
     [ (if $conn == "offline" then {level: "warn", text: "The Mac is offline: nothing can download, and Cleanuparr is paused", action: "It resumes on its own when the connection is back"} else empty end),
       (if ($s.disk.free_gb // 1e9) < ($s.disk.min_gb // 10) then {level: "error", text: "Only \($s.disk.free_gb) GB free: imports have stopped", action: "Delete something in Sonarr or Radarr"}
@@ -190,6 +191,8 @@ attention_json() {  # fast slow torrents
       ($s.radarr.health // [] | .[] | select(.type == "error") | {level: "error", text: "Radarr: \(.message)", action: "Radarr → System → Status"}),
       ($ts[]? | select(.progress < 1 and (.state == "stalledDL" or .state == "metaDL") and (now - .added_on) > 86400)
         | {level: "warn", text: "Not moving for over a day: \(.name[0:70]) (\(.num_seeds) seeders)", action: "Sonarr/Radarr → Activity: remove it with \"Blocklist release\" to try another"}),
+      ($pi.looking[]? | {level: "info", text: "Rejected \(.title): \(.reason)", action: "A better release is being looked for"}),
+      ($pi.kept[]? | {level: "warn", text: "Kept \(.title) although \(.reason)", action: "No better release found; Interactive Search to pick one"}),
       (if $paused then {level: "error", text: "An end-to-end test left Radarr indexers paused", action: "Run nix run .#install"} else empty end),
       ($f.playing[]? | select(.method == "Transcode" and (.reasons | index("SubtitleCodecNotSupported")))
         | {level: "info", text: "\(.user) is watching \(.title) with picture subtitles burned into the video (heavy on the CPU)", action: "Pick a text subtitle (External/SRT) in the player"})

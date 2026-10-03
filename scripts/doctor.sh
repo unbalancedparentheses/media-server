@@ -17,6 +17,7 @@ do_doctor() {
   doctor_downloads
   doctor_subtitles
   doctor_library
+  doctor_postimport
   doctor_disk
   doctor_records
 
@@ -183,6 +184,27 @@ doctor_library() {
   else
     good "Subtitles in \"$lang\": all available as text where present"
   fi
+}
+
+# What the checks after each download (postimport) found and did
+doctor_postimport() {
+  local status="$STATE_DIR/postimport/status.json" age
+  if [ ! -f "$status" ]; then
+    note "The checks after each download haven't run yet" "They start with the postimport service; nix run .#install sets it up"
+    return 0
+  fi
+  age=$(( $(date +%s) - $(jq -r '.updated // 0' "$status") ))
+  # A round can take a while (rewriting a large file), hence the margin
+  [ "$age" -gt 3600 ] && note "The checks after each download last ran $((age / 60)) minutes ago" "nix run .#logs postimport shows why"
+  local looking kept recent
+  looking=$(jq -r '.looking[]? | "\(.title) (\(.reason))"' "$status" | paste -sd ';' - | sed 's/;/; /g')
+  kept=$(jq -r '.kept[]? | "\(.title) (\(.reason))"' "$status" | paste -sd ';' - | sed 's/;/; /g')
+  [ -n "$looking" ] && note "Downloads rejected, another release is being looked for: $looking" \
+    "Nothing to do; you get a notification if nothing better turns up within 6 hours"
+  [ -n "$kept" ] && note "Kept although no better release was found: $kept" \
+    "Sonarr/Radarr → the title → Interactive Search, to pick one by hand"
+  recent=$(jq -r '[.recent[]? | select(.time > (now - 86400))] | length' "$status")
+  good "Checks after each download: running ($recent fixes in the last day)"
 }
 
 doctor_disk() {

@@ -116,6 +116,15 @@ min_free_gb = 10
 enabled = true
 stalled_strikes = 6   # 6 checks x 5 minutes = about 30 minutes stalled
 
+# After each download is imported, its file is checked and fixed
+[library]
+check_downloads = true    # replace downloads that won't play, are far too short (samples,
+                          # fakes) or are dubbed anime (with quality.anime_block_dubs)
+max_replacements = 3      # other releases tried before keeping the file and telling you
+stereo_audio = true       # add a stereo track browsers play directly when the audio is only
+                          # Dolby/DTS, so nothing has to be converted while you watch
+ocr_subtitles = true      # read Blu-ray picture subtitles into text .srt files
+
 # ─── Indexers (Prowlarr) ───────────────────────────────────────
 
 [[indexers]]

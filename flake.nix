@@ -160,6 +160,15 @@
             exec ${pkgs.bash}/bin/bash ${./scripts/dashstatus.sh}
           '';
 
+          # Checks and fixes every imported file: replaces broken or dubbed
+          # downloads, adds stereo audio, reads picture subtitles into text
+          # (scripts/postimport.py explains it). Jellyfin's ffmpeg has
+          # Apple's AAC encoder; pgsrip does the OCR (with Tesseract).
+          postimportStart = pkgs.writeShellScript "postimport" ''
+            export PATH=${pkgs.jellyfin-ffmpeg}/bin:${pkgs.pgsrip}/bin:/usr/bin:/bin:/usr/sbin
+            exec ${pkgs.python3}/bin/python3 ${./scripts/postimport.py} "$@"
+          '';
+
           # Placeholders filled in by setup.sh when it writes the launchd agents:
           # @MEDIA@ (~/media), @CONFIG@ (~/media/config), @STATE@ (~/media/.state),
           # @ADMIN_BIND@, @DISK_WARN_GB@, @DISK_MIN_GB@
@@ -259,6 +268,13 @@
                 NETWATCH_STATE = "@STATE@/netwatch";
               };
             };
+            postimport = {
+              args = [ "${postimportStart}" ];
+              env = {
+                POSTIMPORT_CONFIG = "@CONFIG@";
+                POSTIMPORT_STATE = "@STATE@/postimport";
+              };
+            };
             diskwatch = {
               args = [ "${diskwatchStart}" ];
               env = {
@@ -326,6 +342,7 @@
         {
           inherit
             cli
+            postimportStart
             manifest
             seerr
             sabnzbd
@@ -372,7 +389,12 @@
         backup = app pkgs [ "--backup" ];
         restore = app pkgs [ "--restore" ];
         update = app pkgs [ "--update" ];
-        # Failure-path tests (no services needed)
+        # --check FILE / --fix FILE: the post-import checks and fixes by hand
+        postimport = {
+          type = "app";
+          program = toString (mkStack pkgs).postimportStart;
+        };
+        # Failure-path and post-import tests (no services needed)
         unit = {
           type = "app";
           program = nixpkgs.lib.getExe (
@@ -389,8 +411,13 @@
                 jq
                 python3
                 sqlite
+                jellyfin-ffmpeg
               ];
-              text = "exec bash ${self}/tests/recovery.sh";
+              text = ''
+                bash ${self}/tests/recovery.sh
+                echo "Post-import tests"
+                cd ${self}/tests && python3 -m unittest -q test_postimport
+              '';
             }
           );
         };

@@ -244,14 +244,16 @@ jellyfin_wait_plugin() {  # id-function
 # (playback stopping at a fixed minute). Off: such devices get the video
 # converted by the hardware encoder with a keyframe every 3 s. Devices that
 # play the file directly (Safari, most TV apps) aren't affected.
+# Downloading to devices (to watch offline, e.g. on a flight) stays allowed.
 set_jellyfin_remux() {  # user-id
   local policy want
   want=$(cfg_bool .playback.allow_remux false)
   policy=$(api GET "$JELLYFIN_URL/Users/$1" -H "$(jf_auth "$JELLYFIN_TOKEN")" | jq -c '.Policy' 2>/dev/null) || return 0
   [ -n "$policy" ] && [ "$policy" != null ] || return 0
-  [ "$(jq -r '.EnablePlaybackRemuxing' <<< "$policy")" = "$want" ] && return 0
+  [ "$(jq -r '.EnablePlaybackRemuxing' <<< "$policy")" = "$want" ] && \
+    [ "$(jq -r '.EnableContentDownloading' <<< "$policy")" = true ] && return 0
   api POST "$JELLYFIN_URL/Users/$1/Policy" -H "$(jf_auth "$JELLYFIN_TOKEN")" \
-    -d "$(jq -c --argjson w "$want" '.EnablePlaybackRemuxing = $w' <<< "$policy")" >/dev/null && \
-    ok "Playback: remuxing $([ "$want" = true ] && echo allowed || echo "off (devices that can't play a file directly get it converted)")" || \
-    warn "Could not change the Jellyfin user's remuxing setting"
+    -d "$(jq -c --argjson w "$want" '.EnablePlaybackRemuxing = $w | .EnableContentDownloading = true' <<< "$policy")" >/dev/null && \
+    ok "Playback: remuxing $([ "$want" = true ] && echo allowed || echo "off (devices that can't play a file directly get it converted)"); downloads to devices allowed" || \
+    warn "Could not change the Jellyfin user's playback settings"
 }

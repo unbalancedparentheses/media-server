@@ -143,6 +143,7 @@ run_setup() {
   timed configure_intro_skipper
   timed configure_unpackerr
   timed configure_cleanuparr
+  timed configure_postimport
   timed write_api_proxy
 }
 

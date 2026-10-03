@@ -46,7 +46,7 @@ init_service_registry() {
 
 # launchd agents, one per service (names match flake.nix `services`).
 # One per line: setup.sh sets IFS to newline/tab, so spaces don't split.
-SERVICE_NAMES=$'jellyfin\nsonarr\nradarr\nprowlarr\nbazarr\nqbittorrent\nsabnzbd\nunpackerr\ncleanuparr\nseerr\nbyparr\nnginx\ndiskwatch\nnetwatch\ndashstatus'
+SERVICE_NAMES=$'jellyfin\nsonarr\nradarr\nprowlarr\nbazarr\nqbittorrent\nsabnzbd\nunpackerr\ncleanuparr\nseerr\nbyparr\nnginx\ndiskwatch\nnetwatch\ndashstatus\npostimport'
 LABEL_PREFIX="${MEDIA_LABEL_PREFIX:-org.media-server}"
 svc_label() { printf '%s.%s' "$LABEL_PREFIX" "$1"; }
 svc_plist() { printf '%s/Library/LaunchAgents/%s.plist' "$HOME" "$(svc_label "$1")"; }

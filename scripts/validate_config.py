@@ -113,6 +113,12 @@ SCHEMA = {
     },
     "disk": {"warn_free_gb": integer(lo=0), "min_free_gb": integer(lo=0)},
     "cleanuparr": {"enabled": boolean, "stalled_strikes": integer(lo=3)},
+    "library": {
+        "check_downloads": boolean,
+        "stereo_audio": boolean,
+        "ocr_subtitles": boolean,
+        "max_replacements": integer(lo=0, hi=20),
+    },
 }
 INDEXER = {
     "name": string(),

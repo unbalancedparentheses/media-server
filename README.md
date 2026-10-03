@@ -88,12 +88,15 @@ To find your Mac's address, run `ipconfig getifaddr en0` or look in System Setti
   - Sonarr and Radarr search for the best release that passes the filters, and keep watching for anything not found yet.
   - A download that stalls for about 30 minutes, or never starts, is removed and replaced with another release (Cleanuparr).
   - Imported files are renamed (`Show - S01E01 - Title`, `Movie (Year)`) and added to Jellyfin.
+  - Each new file is checked. One that won't play, is far too short (a sample or a fake) or is a dub of Japanese anime is deleted and its release blocklisted, and another is fetched. You're notified only if nothing better turns up.
+  - Files are made to play directly in browsers: a stereo track is added when the audio is only Dolby/DTS, and Blu-ray picture subtitles are read into text. Files already in your library get the same, a few at a time.
   - Bazarr fetches subtitles; new episodes of monitored shows are grabbed as they air.
 - **Seeing progress:** the dashboard shows downloads in progress. Seerr shows each request's status. For details, open Sonarr (`:8989`) or Radarr (`:7878`) → Activity.
-- **Something is wrong with a file** (wrong language, bad quality): in Sonarr or Radarr, open the title, use the interactive search (the person icon), and pick another release. Unwanted downloads can be removed with "Blocklist release" so they're never picked again.
+- **Something is wrong with a file** that the checks didn't catch (bad quality, wrong edition): in Sonarr or Radarr, open the title, use the interactive search (the person icon), and pick another release. Unwanted downloads can be removed with "Blocklist release" so they're never picked again.
 - **Deleting something:** in Sonarr (shows) or Radarr (movies), open the title → Delete, with "Delete files" ticked. Jellyfin and Seerr follow. Deleting only in Jellyfin would leave Sonarr/Radarr to download it again.
 - **Running out of space:** you get a macOS notification when the disk drops below 50 GB free. Sonarr and Radarr stop importing below 10 GB free; downloads already in progress can still use more, so free space before it gets that far. Delete things in Sonarr or Radarr, with "Delete files" ticked.
-- **Offline (on a flight):** everything plays from the Mac itself without internet. Open **`http://localhost:8096/web/`**, Jellyfin's own player (verified offline: login, libraries, artwork, playback, subtitles). Moonfin's web app is patched so it doesn't need the internet either (setup serves the renderer and player files it would download), but use the Jellyfin player if it doesn't load. Requests, new downloads, subtitle searches and Seerr need a connection. Phones and TVs need to reach the Mac over a network, so on a plane watch on the Mac. Going offline doesn't cost you downloads: netwatch pauses Cleanuparr while there's no connection, and when you're back it re-tests the indexers and subtitle providers so downloads resume on their own.
+- **Offline (on a flight):** everything plays from the Mac itself without internet. Open **`http://localhost:8096/web/`**, Jellyfin's own player (verified offline: login, libraries, artwork, playback, subtitles). Moonfin's web app is patched so it doesn't need the internet either (setup serves the renderer and player files it would download), but use the Jellyfin player if it doesn't load. Requests, new downloads, subtitle searches and Seerr need a connection. Going offline doesn't cost you downloads: netwatch pauses Cleanuparr while there's no connection, and when you're back it re-tests the indexers and subtitle providers so downloads resume on their own.
+- **On a phone or tablet, offline:** download before you leave. In the Moonfin app (iPhone, iPad, Android), open a movie or episode → Download; choose a smaller quality to save space (the Mac converts it while downloading, so do it at home on Wi-Fi). [Infuse](https://firecore.com/infuse) (Apple devices) and [Findroid](https://github.com/jarnedemeulemeester/Findroid) (Android) can download from Jellyfin too. Downloads are allowed for every user.
 - **Away from home:** install [Tailscale](https://tailscale.com) on the Mac and your devices. Setup then publishes Moonfin, Seerr and the dashboard over HTTPS on your private tailnet (for example `https://<mac-name>.<tailnet>.ts.net:8096`). Invite family to the tailnet to share.
 
 ## Changing settings
@@ -140,11 +143,11 @@ nix run .#test                # about 120 checks that the setup is correct
 nix run .#logs -- sonarr      # follow one service's log (also ~/media/logs)
 ```
 
-`doctor` is read-only. It reports what it observes (indexers switched off after failures, downloads that haven't moved in a day, what Sonarr/Radarr's health checks say, titles still without subtitles, anime made in Japanese whose files have no Japanese audio, subtitles only available as pictures, disk space, work an interrupted operation left unfinished) and suggests what to do; it never changes anything.
+`doctor` is read-only. It reports what it observes (indexers switched off after failures, downloads that haven't moved in a day, what Sonarr/Radarr's health checks say, titles still without subtitles, anime made in Japanese whose files have no Japanese audio, subtitles only available as pictures, downloads rejected by the checks after import, disk space, work an interrupted operation left unfinished) and suggests what to do; it never changes anything.
 
 - **A request never downloads.** Public torrents are sometimes dead or thinly shared. Check Sonarr/Radarr → Activity: Cleanuparr replaces stalled downloads automatically, and Wanted → Missing lists titles still being searched for. Old or obscure titles may simply have no release that passes the filters. Usenet (paid) helps a lot here.
 - **No subtitles.** The free providers don't have everything. Adding a free [OpenSubtitles.com](https://www.opensubtitles.com) account (in Bazarr, then in `config.toml`) covers most gaps. Also check that the file isn't already carrying subtitles in the player's subtitle menu.
-- **Playback in Brave/Chrome stops at the same minute.** With `allow_remux = false` (the default) browsers get the video converted with regular keyframes; if you turned it on, turn it off again. Safari plays most files directly, without any conversion.
+- **Playback in Brave/Chrome stops at the same minute.** With `allow_remux = false` (the default) browsers get the video converted with regular keyframes; if you turned it on, turn it off again. Once a file has its stereo track (`[library] stereo_audio`), browsers usually play it directly, with no conversion at all; the dashboard's Now Playing says which. Safari plays most files directly.
 - **Can't reach it from another device.** Use the Mac's address, not `localhost`. Check the macOS firewall allowed Jellyfin and Seerr (System Settings → Network → Firewall → Options), and that the Mac isn't asleep.
 - **Setup stopped with an error.** It says what failed and where to look. Fix it and run `nix run .#install` again; it picks up where things stand.
 - **The dashboard doesn't load on port 80.** Something else uses the port: set `[network] dashboard_port` to another one, such as 8088.
@@ -184,6 +187,8 @@ You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr �
                                              │
                                       download completes
                                              │
+                          postimport (checks the file, fixes audio/subtitles)
+                                             │
                                       Bazarr (subtitles)
                                              │
                                   Jellyfin ──> Moonfin (watch it)
@@ -193,7 +198,8 @@ You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr �
 2. **Sonarr** (TV, anime) or **Radarr** (movies) searches indexers through **Prowlarr**, skipping junk releases.
 3. The best match goes to **qBittorrent**, or **SABnzbd** for Usenet. If a torrent stalls, **Cleanuparr** removes it and the release is blocklisted, so Sonarr/Radarr try another.
 4. The file is renamed and added to your **Jellyfin** library.
-5. **Bazarr** fetches subtitles.
+5. **postimport** checks the file (replacing it if it's broken, a fake or a dub) and makes it play directly everywhere.
+6. **Bazarr** fetches subtitles.
 
 ### Services
 
@@ -212,6 +218,7 @@ You ──> Moonfin / Seerr (request) ──> Sonarr / Radarr ──> Prowlarr �
 | **[Cleanuparr](https://github.com/Cleanuparr/Cleanuparr)** | 11011 | Removes stalled, metadata-stuck and failed-import downloads; Sonarr/Radarr blocklist them and search again |
 | **[nginx](https://nginx.org)** | 80 | The dashboard (see below) |
 | **dashstatus** | — | Gathers the dashboard's live data every 15 s into one file the page reads; the API keys stay on the server |
+| **postimport** | — | Checks each imported file and fixes it so it plays directly (see `[library]`): rejects ones that won't play, are far too short or are dubbed anime (Sonarr/Radarr blocklist the release and fetch another); adds a stereo AAC track (Apple's encoder) when the audio is only Dolby/DTS/TrueHD; reads Blu-ray picture subtitles into a `.srt` with OCR ([pgsrip](https://github.com/ratoaq2/pgsrip), Tesseract). Rewrites go to a new file that's checked before replacing the old one. Low priority, so it doesn't slow anything. A file still seeding is only rewritten when there's plenty of space, since the torrent keeps its own copy until it's done. Log: `~/media/logs/postimport.log` |
 | **diskwatch** | — | Warns (macOS notification) when the media disk runs low |
 | **netwatch** | — | Checks the connection every minute (offline after 3 failed checks in a row) and keeps things in line each time, so a step that fails is retried: offline, Cleanuparr's queue cleaner is paused (it would otherwise remove every download as stalled); online, it's whatever `cleanuparr.enabled` says. Coming back also re-tests the indexers (Prowlarr backs off for up to a day after failures) and clears Bazarr's provider throttling. Nothing changes before its first successful check. Log: `~/media/logs/netwatch.log` |
 
@@ -307,6 +314,17 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 |---|---|---|
 | `enabled` | `true` | Check the queue every 5 minutes; remove public torrents that stalled, never got metadata (3 checks) or failed to import (3 times), blocklist them and search again |
 | `stalled_strikes` | `6` | Checks without progress before a torrent counts as stalled (6 × 5 minutes ≈ 30 minutes; at least 3) |
+
+**`[library]`: checks after each download**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `check_downloads` | `true` | Reject a new file that won't play, is under half the expected length (a sample or a fake), or is anime made in Japanese without Japanese audio (with `quality.anime_block_dubs`). Sonarr/Radarr blocklist the release and fetch another |
+| `max_replacements` | `3` | Releases rejected for the same episode or movie before the file is kept anyway (you get a notification) |
+| `stereo_audio` | `true` | Add a stereo AAC track, first, when the audio is only in formats browsers can't play (Dolby Digital/Atmos, DTS, TrueHD); the original tracks stay |
+| `ocr_subtitles` | `true` | Read picture subtitles (Blu-ray PGS) into a text `.srt` next to the file, for the `subtitles.languages` that have no text subtitles yet (only the first with `want = "first"`) |
+
+By hand: `nix run .#postimport -- --check FILE` says what it would do; `--fix FILE` does it now.
 
 **`[[indexers]]`: where to search**
 
