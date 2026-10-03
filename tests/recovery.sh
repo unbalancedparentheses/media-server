@@ -55,39 +55,6 @@ expect_eq() { [ "$1" = "$2" ] || fail "expected '$2', got '$1' ($3)"; }
 
 # ─── Interrupted password changes ────────────────────────────────
 
-# Sonarr's login change fails, then applies but doesn't work, then works:
-# the record only advances at the end
-test_arr_login_advances_only_when_verified() {
-  JELLYFIN_USER=admin JELLYFIN_PASS=new
-  creds_load
-  creds_set sonarr admin old
-  api() {
-    case "$1 $2" in
-      "GET "*/config/host) echo '{"id":1,"username":"admin","authenticationMethod":"forms"}' ;;
-      "PUT "*/config/host/1) [ -f "$FAKE/put_ok" ] ;;
-      *) return 22 ;;
-    esac
-  }
-  # The login form: redirect to the app only once the fake says it works
-  curl() {
-    if [ -f "$FAKE/login_ok" ]; then echo "http://localhost:8989/"; else echo "http://localhost:8989/login?loginFailed=true"; fi
-  }
-
-  set_arr_login Sonarr http://localhost:8989 key v3 sonarr >/dev/null
-  expect_eq "$(creds_get sonarr password)" old "PUT failed"
-
-  touch "$FAKE/put_ok"
-  set_arr_login Sonarr http://localhost:8989 key v3 sonarr >/dev/null
-  expect_eq "$(creds_get sonarr password)" old "applied, but the new login doesn't work"
-
-  touch "$FAKE/login_ok"
-  set_arr_login Sonarr http://localhost:8989 key v3 sonarr >/dev/null
-  expect_eq "$(creds_get sonarr password)" new "applied and verified"
-  # And it survives a reload from disk
-  creds_load
-  expect_eq "$(creds_get sonarr password)" new "after reload"
-}
-
 # The older credentials file (one shared login) upgrades per service,
 # without guessing Cleanuparr's password
 test_credentials_upgrade_from_shared_record() {
@@ -216,57 +183,6 @@ test_clean_slate_stops_when_radarr_is_down() {
   grep -q "Couldn't reach Radarr" <<< "$out" || fail "unexpected message: $out"
 }
 
-# ─── Interrupted anime migration ─────────────────────────────────
-
-# A series is added, but copying its monitoring fails: the migration isn't
-# marked complete, and the next run finishes that series (not skips it)
-test_migration_finishes_interrupted_series() {
-  SONARR_KEY=s SONARR_ANIME_PROFILE=HD-1080p
-  mkdir -p "$CONFIG_DIR/sonarr-anime"
-  command -v sqlite3 >/dev/null || fail "sqlite3 is needed"
-  sqlite3 "$CONFIG_DIR/sonarr-anime/sonarr.db" "CREATE TABLE Series (Id, TvdbId, Path, Monitored, Seasons); INSERT INTO Series VALUES (7, 111, '/a/Show', 1, '[]');"
-  echo '[]' > "$FAKE/series"
-  api() {
-    case "$1 $2" in
-      "GET "*/api/v3/series) cat "$FAKE/series" ;;
-      "GET "*/qualityprofile) echo '[{"id":4,"name":"Anime"}]' ;;
-      "GET "*/series/lookup*) echo '[{"title":"Show","tvdbId":111}]' ;;
-      "POST "*/api/v3/series) echo '[{"id":50,"tvdbId":111}]' > "$FAKE/series"; echo '{"id":50}' ;;
-      "POST "*/command) ;;
-      *) return 22 ;;
-    esac
-  }
-  # Copying monitoring fails the first time, works the second
-  migrate_monitoring() { [ -f "$FAKE/monitoring_ok" ] && echo "$3" > "$FAKE/finished"; }
-
-  migrate_anime_sonarr >/dev/null
-  [ ! -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "marked complete after a failure"
-  expect_eq "$(jq -r '.added["111"]' "$STATE_DIR/sonarr-anime-migration.json")" 50 "series recorded as added"
-
-  touch "$FAKE/monitoring_ok"
-  migrate_anime_sonarr >/dev/null
-  expect_eq "$(cat "$FAKE/finished" 2>/dev/null)" 50 "monitoring copied for the series added earlier"
-  [ -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "not marked complete after finishing"
-}
-
-# A series that was already in Sonarr before the migration is left alone
-test_migration_leaves_existing_series_alone() {
-  SONARR_KEY=s SONARR_ANIME_PROFILE=HD-1080p
-  mkdir -p "$CONFIG_DIR/sonarr-anime"
-  sqlite3 "$CONFIG_DIR/sonarr-anime/sonarr.db" "CREATE TABLE Series (Id, TvdbId, Path, Monitored, Seasons); INSERT INTO Series VALUES (7, 111, '/a/Show', 1, '[]');"
-  api() {
-    case "$1 $2" in
-      "GET "*/api/v3/series) echo '[{"id":9,"tvdbId":111}]' ;;
-      "GET "*/qualityprofile) echo '[{"id":4,"name":"Anime"}]' ;;
-      *) return 22 ;;
-    esac
-  }
-  migrate_monitoring() { touch "$FAKE/touched"; }
-  migrate_anime_sonarr >/dev/null
-  [ ! -f "$FAKE/touched" ] || fail "changed a series that was already in Sonarr"
-  [ -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "not marked complete"
-}
-
 # ─── Tailscale ───────────────────────────────────────────────────
 
 # A route published for an old dashboard port is still removed
@@ -352,47 +268,7 @@ test_corrupt_paused_indexer_record_kept() {
   [ -f "$(e2e_paused_file)" ] || fail "corrupted record deleted"
 }
 
-# Interrupted between Sonarr adding the series and the progress being
-# saved: the next run finishes it instead of taking it for yours
-test_migration_adopts_series_added_before_crash() {
-  SONARR_KEY=s SONARR_ANIME_PROFILE=HD-1080p
-  mkdir -p "$CONFIG_DIR/sonarr-anime"
-  sqlite3 "$CONFIG_DIR/sonarr-anime/sonarr.db" "CREATE TABLE Series (Id, TvdbId, Path, Monitored, Seasons); INSERT INTO Series VALUES (7, 111, '/a/Show', 1, '[]');"
-  echo '{"adding":["111"],"added":{},"done":[]}' > "$STATE_DIR/sonarr-anime-migration.json"
-  api() {
-    case "$1 $2" in
-      "GET "*/api/v3/series) echo '[{"id":77,"tvdbId":111}]' ;;
-      "GET "*/qualityprofile) echo '[{"id":4,"name":"Anime"}]' ;;
-      "POST "*/api/v3/series) touch "$FAKE/added_again" ;;
-      *) return 22 ;;
-    esac
-  }
-  migrate_monitoring() { echo "$3" > "$FAKE/finished"; }
-  migrate_anime_sonarr >/dev/null
-  expect_eq "$(cat "$FAKE/finished" 2>/dev/null)" 77 "monitoring copied for the series Sonarr already added"
-  [ ! -f "$FAKE/added_again" ] || fail "added the series a second time"
-  [ -f "$STATE_DIR/sonarr-anime-migrated" ] || fail "not marked complete"
-}
-
 # ─── Smaller recovery cases ──────────────────────────────────────
-
-# Renaming the existing library: recorded only once Sonarr accepted it
-test_rename_retried_after_interruption() {
-  CONFIG_JSON='{}'
-  api() {
-    case "$1 $2" in
-      "GET "*/config/naming) echo '{"renameEpisodes":true}' ;;
-      "GET "*/api/v3/series) echo '[{"id":1}]' ;;
-      "POST "*/command) [ -f "$FAKE/command_ok" ] && touch "$FAKE/renamed" ;;
-    esac
-  }
-  set_renaming Sonarr http://s k series >/dev/null 2>&1
-  [ ! -f "$STATE_DIR/renamed-sonarr" ] || fail "recorded as renamed although the request failed"
-  touch "$FAKE/command_ok"
-  set_renaming Sonarr http://s k series >/dev/null 2>&1
-  [ -f "$FAKE/renamed" ] || fail "rename not retried"
-  [ -f "$STATE_DIR/renamed-sonarr" ] || fail "not recorded after renaming"
-}
 
 # e2e: pausing an indexer fails, so the test doesn't run with automatic
 # search still on, and what it paused is restored
@@ -457,24 +333,6 @@ test_config_typo_rejected_with_suggestion() {
   sed 's/"changeme"/"real-password"/' "$ROOT/config.toml.example" > "$CONFIG_FILE"
   env MEDIA_DIR="$MEDIA_DIR" MEDIA_SERVICES_JSON="$FAKE/services.json" bash "$ROOT/setup.sh" --check-config >/dev/null 2>&1 || \
     fail "the example config (with real passwords) was rejected"
-}
-
-# ─── Failed reads never become "empty" ───────────────────────────
-
-# Sonarr's download clients can't be read: no second qBittorrent client
-test_unreadable_download_clients_not_readded() {
-  QBIT_USER=u QBIT_PASS=p SABNZBD_KEY="" JELLYFIN_API_KEY=""
-  api() {
-    case "$1 $2" in
-      "GET "*/rootfolder) echo '[]' ;;
-      "GET "*/downloadclient) return 22 ;;
-      "POST "*/downloadclient) touch "$FAKE/client_added" ;;
-    esac
-  }
-  api_retry() { "$@"; }
-  set_arr_login() { :; }
-  configure_arr sonarr http://s k /tv tvCategory >/dev/null 2>&1
-  [ ! -f "$FAKE/client_added" ] || fail "added qBittorrent without knowing it was already there"
 }
 
 echo "Failure-path tests"

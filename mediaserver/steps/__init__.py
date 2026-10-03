@@ -21,6 +21,8 @@ STEPS = {
     "seerr": "seerr",
     "prowlarr": "prowlarr",
     "jellyfin": "jellyfin",
+    "arrs": "arrs",
+    "junk-filters": "arrs:run_junk_filters",
     "qbittorrent": "downloads:qbittorrent",
     "sabnzbd": "downloads:sabnzbd",
     "usenet-providers": "downloads:usenet_providers",

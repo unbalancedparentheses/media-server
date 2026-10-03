@@ -130,8 +130,8 @@ run_setup() {
   timed py step jellyfin
   load_jellyfin_key
   timed py step sabnzbd
-  timed configure_arrs
-  timed configure_junk_filters
+  timed py step arrs
+  timed py step junk-filters
   timed py step prowlarr
   timed py step usenet-providers
   timed py step bazarr

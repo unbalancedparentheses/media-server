@@ -19,7 +19,7 @@ from unittest import mock
 from mediaserver import api, arr, creds, jellyfin, launchd, logins
 from mediaserver import common as c
 from mediaserver.config import Config, Keys, Paths
-from mediaserver.steps import bazarr, cleanuparr, downloads, introskipper, moonbase, postimport_settings, prowlarr, seerr, unpackerr
+from mediaserver.steps import arrs, bazarr, cleanuparr, downloads, introskipper, moonbase, postimport_settings, prowlarr, seerr, unpackerr
 from mediaserver.steps import jellyfin as jellyfin_step
 from mediaserver.ui import SetupError
 
@@ -462,3 +462,116 @@ class JellyfinStep(unittest.TestCase):
         policy = jellyfin_step.policy_config({"EnablePlaybackRemuxing": True}, False)
         self.assertEqual((policy["EnablePlaybackRemuxing"], policy["EnableContentDownloading"]), (False, True))
         self.assertEqual(jellyfin_step.encoding_config({}, True)["HardwareAccelerationType"], "videotoolbox")
+
+
+class FakeApp:
+    """A Sonarr/Radarr whose answers come from a function (method, path, body)"""
+
+    def __init__(self, label, answer):
+        self.label, self.url, self.key, self.version, self.answer = label, "http://x", "k", "v3", answer
+        self.calls = []
+
+    def call(self, method, path, body=None):
+        self.calls.append((method, path.split("?")[0]))
+        return self.answer(method, path, body)
+
+
+class Arrs(unittest.TestCase):
+    def setUp(self):
+        self.cfg = scratch({"quality": {"sonarr_anime_profile": "HD-1080p"}})
+        self.addCleanup(shutil.rmtree, self.cfg.paths.media)
+
+    def old_sonarr(self):
+        d = self.cfg.paths.config / "sonarr-anime"
+        d.mkdir(parents=True)
+        with sqlite3.connect(d / "sonarr.db") as db:
+            db.execute("CREATE TABLE Series (Id, TvdbId, Path, Monitored, Seasons)")
+            db.execute("INSERT INTO Series VALUES (7, 111, '/a/Show', 1, '[]')")
+
+    def test_migration_finishes_interrupted_series(self):
+        """A series is added but copying its monitoring fails: not marked
+        complete, and the next run finishes that series (not skips it)"""
+        self.old_sonarr()
+        series: list = []
+
+        def answer(method, path, body):
+            if method == "GET" and path == "series":
+                return series
+            if path.startswith("qualityprofile"):
+                return [{"id": 4, "name": "Anime"}]
+            if path.startswith("series/lookup"):
+                return [{"title": "Show", "tvdbId": 111}]
+            if method == "POST" and path == "series":
+                series.append({"id": 50, "tvdbId": 111})
+                return {"id": 50}
+            return None
+        app = FakeApp("Sonarr", answer)
+        state = self.cfg.paths.state
+        with mock.patch.object(arrs, "migrate_monitoring", return_value=False):
+            run(arrs.migrate_anime_sonarr, self.cfg, app)
+        self.assertFalse((state / "sonarr-anime-migrated").exists())
+        self.assertEqual(c.read_json(state / "sonarr-anime-migration.json")["added"]["111"], 50)
+        with mock.patch.object(arrs, "migrate_monitoring", return_value=True) as monitoring:
+            run(arrs.migrate_anime_sonarr, self.cfg, app)
+        self.assertEqual(monitoring.call_args[0][3], 50)
+        self.assertTrue((state / "sonarr-anime-migrated").exists())
+        self.assertEqual(sum(1 for m, p in app.calls if m == "POST" and p == "series"), 1)
+
+    def test_migration_leaves_existing_series_alone(self):
+        self.old_sonarr()
+        app = FakeApp("Sonarr", lambda m, p, b: [{"id": 9, "tvdbId": 111}] if p == "series" else [{"id": 4, "name": "Anime"}])
+        with mock.patch.object(arrs, "migrate_monitoring") as monitoring:
+            run(arrs.migrate_anime_sonarr, self.cfg, app)
+        monitoring.assert_not_called()
+        self.assertTrue((self.cfg.paths.state / "sonarr-anime-migrated").exists())
+
+    def test_migration_adopts_series_added_before_crash(self):
+        """Interrupted between Sonarr adding it and the progress being saved:
+        finished, not taken for one you already had, not added again"""
+        self.old_sonarr()
+        c.write_json(self.cfg.paths.state / "sonarr-anime-migration.json", {"adding": ["111"], "added": {}, "done": []})
+        app = FakeApp("Sonarr", lambda m, p, b: [{"id": 77, "tvdbId": 111}] if p == "series" else [{"id": 4, "name": "Anime"}])
+        with mock.patch.object(arrs, "migrate_monitoring", return_value=True) as monitoring:
+            run(arrs.migrate_anime_sonarr, self.cfg, app)
+        self.assertEqual(monitoring.call_args[0][3], 77)
+        self.assertNotIn(("POST", "series"), app.calls)
+
+    def test_rename_retried_after_interruption(self):
+        """Renaming the existing library is recorded only once Sonarr accepted it"""
+        accepted = {"now": False}
+
+        def answer(method, path, body):
+            if path == "config/naming":
+                return {"renameEpisodes": True}
+            if path == "series":
+                return [{"id": 1}]
+            if method == "POST" and not accepted["now"]:
+                raise api.ApiError("failed")
+        app = FakeApp("Sonarr", answer)
+        marker = self.cfg.paths.state / "renamed-sonarr"
+        run(arrs.set_renaming, self.cfg, app, "series")
+        self.assertFalse(marker.exists())
+        accepted["now"] = True
+        run(arrs.set_renaming, self.cfg, app, "series")
+        self.assertTrue(marker.exists())
+
+    def test_unreadable_download_clients_not_readded(self):
+        def answer(method, path, body):
+            if path == "rootfolder":
+                return []
+            if path == "downloadclient" and method == "GET":
+                raise api.ApiError("down")
+            return {}
+        app = FakeApp("Sonarr", answer)
+        with mock.patch.object(arrs, "set_login"):
+            run(arrs.configure_app, self.cfg, app, ["/tv"], "tvCategory", "sonarr")
+        self.assertNotIn(("POST", "downloadclient"), app.calls)
+
+    def test_profile_scores_by_scope(self):
+        formats = [{"id": 1, "score": -10000, "scope": "all"}, {"id": 2, "score": -10000, "scope": "anime"},
+                   {"id": 3, "score": 50, "scope": "standard"}]
+        tv = arrs.scored_profile({"name": "HD-1080p", "minFormatScore": -5, "formatItems": [{"format": 1, "score": 0}]}, formats)
+        self.assertEqual(tv["minFormatScore"], 0)
+        self.assertEqual({i["format"]: i["score"] for i in tv["formatItems"]}, {1: -10000, 2: 0, 3: 50})
+        anime = arrs.scored_profile({"name": "Anime", "formatItems": []}, formats)
+        self.assertEqual({i["format"]: i["score"] for i in anime["formatItems"]}, {1: -10000, 2: -10000, 3: 0})

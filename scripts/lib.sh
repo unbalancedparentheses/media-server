@@ -266,37 +266,6 @@ creds_set() {
   (umask 077 && jq . <<< "$record" > "$tmp") && mv -f "$tmp" "$f"
 }
 
-# *arr/Prowlarr form login: 302 to the app on success, back to /login?…loginFailed on failure
-arr_login_works() {  # url user pass
-  local loc
-  loc=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 -X POST "$1/login" \
-    --data-urlencode "username=$2" --data-urlencode "password=$3" 2>/dev/null) || return 1
-  [ -n "$loc" ] && [[ "$loc" != *loginFailed* ]]
-}
-
-# *arr/Prowlarr web login: the API key allows setting it without the old
-# password. Applied when the record or the app's settings differ, then
-# checked by logging in; only a working login is recorded.
-set_arr_login() {
-  local label="$1" url="$2" key="$3" api_ver="${4:-v3}" svc="$5" H="X-Api-Key: $3" host id
-  host=$(api GET "$url/api/$api_ver/config/host" -H "$H") || { warn "$label: could not read its login settings"; return 0; }
-  if creds_match "$svc" "$JELLYFIN_USER" "$JELLYFIN_PASS" && \
-     jq -e --arg u "$JELLYFIN_USER" '.username == $u and .authenticationMethod == "forms"' <<< "$host" >/dev/null; then
-    ok "$label login: $JELLYFIN_USER"
-    return 0
-  fi
-  id=$(jq -r '.id' <<< "$host")
-  api PUT "$url/api/$api_ver/config/host/$id" -H "$H" -d "$(jq -c --arg user "$JELLYFIN_USER" --arg pass "$JELLYFIN_PASS" \
-    '.authenticationMethod = "forms" | .authenticationRequired = "enabled" | .username = $user | .password = $pass | .passwordConfirmation = $pass' <<< "$host")" >/dev/null || \
-    { warn "$label: could not set its login (retried next run)"; return 0; }
-  if arr_login_works "$url" "$JELLYFIN_USER" "$JELLYFIN_PASS"; then
-    creds_set "$svc" "$JELLYFIN_USER" "$JELLYFIN_PASS"
-    ok "$label login set: $JELLYFIN_USER"
-  else
-    warn "$label: the new login doesn't work yet (retried next run)"
-  fi
-}
-
 # Jellyfin 12 only accepts the Authorization header (no X-Emby-Token)
 jf_auth() { printf 'Authorization: MediaBrowser Token="%s"' "$1"; }
 
@@ -362,18 +331,6 @@ get_api_key() {
   [ -f "$f" ] && sed -n 's/.*<ApiKey>\(.*\)<\/ApiKey>.*/\1/p' "$f" 2>/dev/null || echo ""
 }
 
-
-
-# Set named fields on an existing *arr/Prowlarr resource (a download client,
-# an application...) so changed passwords, API keys and URLs reach it.
-# Secrets read back masked, so the update is sent every run.
-sync_resource_fields() {  # label resource-url id fields-json api-key
-  local label="$1" base="$2" id="$3" fields="$4" H="X-Api-Key: $5" cur
-  cur=$(api GET "$base/$id" -H "$H") || { warn "$label: could not read its settings"; return 0; }
-  api PUT "$base/$id?forceSave=true" -H "$H" \
-    -d "$(jq -c --argjson f "$fields" '.fields |= map(if $f[.name] != null then .value = $f[.name] else . end)' <<< "$cur")" >/dev/null || \
-    warn "$label: could not update its settings"
-}
 
 
 # Write a state record atomically (temp file in the same folder, then
