@@ -328,3 +328,20 @@ class Progress(Scratch):
         code, errors = pi.run_ffmpeg(["ffmpeg", "-i", str(self.dir / "missing.mkv"), str(self.dir / "o.mkv")], 20, seen.append)
         self.assertNotEqual(code, 0)
         self.assertIn("missing.mkv", errors)
+
+
+@unittest.skipUnless(HAS_FFMPEG, "needs ffmpeg")
+class RealCues(Scratch):
+    def test_cues_read_from_the_file(self):
+        from tests.test_postimport import srt
+        subs = self.dir / "in.srt"
+        subs.write_text(srt(cues=40, until=50))
+        video = self.dir / "Film.mkv"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=5:duration=60", "-i", str(subs),
+                        "-map", "0", "-map", "1", "-c:v", "mpeg4", "-c:s", "srt", str(video)], check=True)
+        cues = pi.stream_cues(video, 1)
+        assert cues is not None
+        count, last = cues
+        self.assertEqual(count, 40)
+        self.assertAlmostEqual(last, 48.75, delta=1)
+        self.assertIsNone(pi.stream_cues(self.dir / "missing.mkv", 1))

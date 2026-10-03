@@ -438,50 +438,59 @@ class DefaultTracks(unittest.TestCase):
         self.assertEqual(flags, [("-disposition:a:0", "0"), ("-disposition:a:1", "default"),
                                  ("-disposition:s:0", "0"), ("-disposition:s:1", "default")])
 
+    def cues(self, by_index):
+        """stream_cues answering from {track index: (packets, last time)}"""
+        return mock.patch.object(pi, "stream_cues", lambda path, index: by_index.get(index))
+
     def test_picture_track_removed_when_there_as_text(self):
         """Moonfin prefers picture subtitles over text ones whatever the
         flags; with the text version there, the picture one goes"""
         info = media(self.flagged(sub(5, "hdmv_pgs_subtitle", "eng")), sub(6, "hdmv_pgs_subtitle", "spa"),
                      sub(7, "hdmv_pgs_subtitle", "eng", forced=True))
-        self.assertEqual(pi.redundant_pictures(info, self.video), [])
-        # A file named like English subtitles isn't proof: an empty one
-        # doesn't let the picture track go
-        (self.dir / "Film.en.srt").touch()
-        self.assertEqual(pi.redundant_pictures(info, self.video), [])
-        (self.dir / "Film.en.srt").write_text(srt(cues=400, until=3500))
-        dropped = pi.redundant_pictures(info, self.video)
+        pictures = {5: (800, 3500.0), 6: (800, 3500.0), 7: (20, 3000.0)}   # PGS: 400 subtitles shown and cleared
+        with self.cues(pictures):
+            self.assertEqual(pi.redundant_pictures(info, self.video), [])
+            # A file named like English subtitles isn't proof: an empty one
+            # doesn't let the picture track go
+            (self.dir / "Film.en.srt").touch()
+            self.assertEqual(pi.redundant_pictures(info, self.video), [])
+            (self.dir / "Film.en.srt").write_text(srt(cues=400, until=3500))
+            dropped = pi.redundant_pictures(info, self.video)
         self.assertEqual([st["index"] for st in dropped], [5])  # Spanish has no text; forced signs stay
         kept = pi.without(info, dropped)
         cmd = pi.defaults_command(self.video, "out", info, pi.default_tracks(kept, self.video, "", ["en"]), dropped)
         self.assertIn("-0:5", cmd)
         self.assertEqual([st["index"] for st in pi.streams(kept, "subtitle")], [6, 7])
 
-    def test_only_complete_text_lets_a_picture_track_go(self):
+    def test_text_must_match_the_picture_track(self):
         info = media(sub(5, "hdmv_pgs_subtitle", "eng"))   # an hour long
         cases = [
-            (srt(cues=400, until=1200), "srt", False),    # stops a third of the way in
-            (srt(cues=10, until=3500), "srt", False),     # a handful of lines
-            (srt(cues=400, until=3500), "srt", True),
-            (ass(cues=400, until=3500), "ass", True),
-            ("not subtitles at all", "srt", False),
-            (srt(cues=400, until=3500), "sub", False),    # a format that can't be checked
+            (srt(cues=400, until=1200), "srt", (800, 3500.0), False),   # stops a third of the way in
+            (srt(cues=150, until=3500), "srt", (800, 3500.0), False),   # far fewer lines than the pictures
+            (srt(cues=400, until=3500), "srt", (800, 3500.0), True),
+            (ass(cues=400, until=3500), "ass", (800, 3500.0), True),
+            (srt(cues=400, until=3500), "srt", None, False),            # the picture track can't be read
+            ("not subtitles at all", "srt", (800, 3500.0), False),
+            (srt(cues=400, until=3500), "sub", (800, 3500.0), False),   # a format that can't be checked
         ]
-        for text, ext, drops in cases:
+        for text, ext, picture, drops in cases:
             for f in self.dir.glob("Film.en.*"):
                 f.unlink()
             (self.dir / f"Film.en.{ext}").write_text(text)
-            self.assertEqual(bool(pi.redundant_pictures(info, self.video)), drops, (ext, text[:60]))
+            with self.cues({5: picture}):
+                self.assertEqual(bool(pi.redundant_pictures(info, self.video)), drops, (ext, picture, text[:40]))
 
-    def test_embedded_text_must_be_the_whole_dialogue(self):
-        pictures = sub(5, "hdmv_pgs_subtitle", "eng")
-        full = sub(6, "subrip", "eng")
-        signs = sub(6, "subrip", "eng", title="Signs & Songs")
-        few = sub(6, "subrip", "eng")
-        few["tags"]["NUMBER_OF_FRAMES-eng"] = "12"
-        many = sub(6, "subrip", "eng")
-        many["tags"]["NUMBER_OF_FRAMES-eng"] = "900"
-        for text, drops in ((full, True), (signs, False), (few, False), (many, True)):
-            self.assertEqual(bool(pi.redundant_pictures(media(pictures, text), self.video)), drops, text["tags"])
+    def test_embedded_text_is_measured_not_trusted(self):
+        """An unlabelled text track with part of the dialogue (no metadata
+        saying so) doesn't let the full picture track go"""
+        info = media(sub(5, "hdmv_pgs_subtitle", "eng"), sub(6, "subrip", "eng"))
+        signs = media(sub(5, "hdmv_pgs_subtitle", "eng"), sub(6, "subrip", "eng", title="Signs & Songs"))
+        for case, cues, drops in ((info, {5: (800, 3500.0), 6: (400, 3490.0)}, True),
+                                  (info, {5: (800, 3500.0), 6: (60, 3400.0)}, False),    # partial, unlabelled
+                                  (info, {5: (800, 3500.0)}, False),                    # text unreadable
+                                  (signs, {5: (800, 3500.0), 6: (400, 3490.0)}, False)):  # labelled partial
+            with self.cues(cues):
+                self.assertEqual(bool(pi.redundant_pictures(case, self.video)), drops, cues)
 
     def test_files_checked_before_are_looked_at_again(self):
         st = self.video.stat()

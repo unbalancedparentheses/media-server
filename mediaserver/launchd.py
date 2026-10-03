@@ -123,8 +123,11 @@ def agent(name: str, svc: dict, subst: dict, config_dir: Path, log_dir: Path, tz
 
 
 def write_agents(services: dict, subst: dict, config_dir: Path, log_dir: Path, tz: str,
-                 agents_dir: Path | None = None) -> list[str]:
-    """Write every agent's plist; the names whose plist changed"""
+                 agents_dir: Path | None = None, before_change=None) -> list[str]:
+    """Write every agent's plist; the names whose plist changed.
+    before_change(name) runs before a plist is replaced, so a caller can
+    record the restart it needs first (an interruption between replacing
+    the file and recording it would leave the service running the old one)."""
     import plistlib
     agents_dir = agents_dir or Path.home() / "Library/LaunchAgents"
     agents_dir.mkdir(parents=True, exist_ok=True)
@@ -136,7 +139,11 @@ def write_agents(services: dict, subst: dict, config_dir: Path, log_dir: Path, t
         path = agents_dir / f"{label(name)}.plist"
         new = plistlib.dumps(plist_data)
         if not path.exists() or path.read_bytes() != new:
-            path.write_bytes(new)
+            if before_change:
+                before_change(name)
+            tmp = path.with_name(f".{path.name}.tmp")
+            tmp.write_bytes(new)
+            os.replace(tmp, path)
             changed.append(name)
     return changed
 

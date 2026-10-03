@@ -486,48 +486,72 @@ def enough_cues(cues: int, last: float, seconds: float) -> bool:
     return cues >= max(20, seconds / 60 * 2) and last >= 0.7 * seconds
 
 
-def sidecar_is_full(f: Path, seconds: float) -> bool:
-    """A subtitle file with the whole dialogue (by its cues and timings), not
-    just a name that says so; formats that can't be read this way don't count"""
+def sidecar_cues(f: Path) -> tuple[int, float] | None:
+    """(cues, last cue's start in seconds) in a subtitle file; None for a
+    format that can't be read this way"""
     kind = {".srt": "srt", ".vtt": "vtt", ".ass": "ass", ".ssa": "ass"}.get(f.suffix.lower())
     if not kind:
-        return False
+        return None
     try:
         text = f.read_text(errors="replace")[:20_000_000]
     except OSError:
-        return False
+        return None
     times = [(int(h or 0) * 3600 + int(m) * 60 + int(sec)) for h, m, sec in CUE_TIME[kind].findall(text)]
-    return enough_cues(len(times), max(times, default=0), seconds)
+    return len(times), float(max(times, default=0))
 
 
-def embedded_is_full(st, seconds: float) -> bool:
-    """A text track that isn't labelled signs/songs, and has enough cues
-    where the file says how many (mkvmerge's statistics tags)"""
-    if partial_subtitles(st) or is_forced(st):
-        return False
-    frames = next((v for k, v in tags(st).items() if k.upper().startswith("NUMBER_OF_FRAMES")), None)
-    if frames is None or not str(frames).isdigit():
-        return True
-    return int(frames) >= max(20, seconds / 60 * 2) if seconds else int(frames) >= 100
+def stream_cues(path, index: int) -> tuple[int, float] | None:
+    """(packets, last packet's time) of one subtitle track, read from the
+    file itself (metadata can be missing or wrong); None if it can't be read"""
+    try:
+        r = subprocess.run(background(["ffprobe", "-v", "error", "-select_streams", str(index), "-show_entries",
+                                       "packet=pts_time", "-of", "csv=p=0", str(path)]),
+                           capture_output=True, text=True, timeout=3600, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    times = []
+    for line in r.stdout.split():
+        try:
+            times.append(float(line.strip(",")))
+        except ValueError:
+            continue
+    return len(times), max(times, default=0.0)
 
 
-def full_text_languages(info, path) -> set:
-    """Languages with a complete text version, checked, for deciding what
-    picture subtitles can go: in the file, or a file next to it"""
-    seconds = duration(info)
-    found = {lang for f, lang in sidecars(path) if sidecar_is_full(f, seconds)}
-    found |= {stream_language(st) for st in streams(info, "subtitle")
-              if st.get("codec_name") in TEXT_SUBTITLES and embedded_is_full(st, seconds)}
-    found.discard("")
-    return found
+def covers(text: tuple[int, float], picture: tuple[int, float], codec: str, seconds: float) -> bool:
+    """The text version has the picture track's dialogue: about as many cues
+    (a PGS track has two packets per subtitle, one showing and one clearing
+    it), lasting as long, and a whole film's worth"""
+    events = picture[0] // 2 if codec == "hdmv_pgs_subtitle" else picture[0]
+    return (picture[0] > 0 and text[0] >= 0.8 * events and text[1] >= picture[1] - 120
+            and enough_cues(text[0], text[1], seconds))
 
 
 def redundant_pictures(info, path) -> list:
-    """Picture subtitle tracks in a language that's also there, complete, as
-    text (in the file or next to it, checked); forced ones (signs) are kept"""
-    text = full_text_languages(info, path)
-    return [st for st in streams(info, "subtitle") if st.get("codec_name") in PICTURE_SUBTITLES
-            and stream_language(st) in text and not is_forced(st)]
+    """Picture subtitle tracks whose dialogue is also there as text (in the
+    file, or a file next to it), forced ones (signs) aside. Measured, not
+    assumed: the text's cues against the picture track's own, read from the
+    files; anything that can't be read or doesn't match keeps the track."""
+    seconds = duration(info)
+    texts: dict[str, list] = {}
+    for f, lang in sidecars(path):
+        if (cues := sidecar_cues(f)) is not None:
+            texts.setdefault(lang, []).append(cues)
+    for st in streams(info, "subtitle"):
+        if st.get("codec_name") in TEXT_SUBTITLES and not partial_subtitles(st) and not is_forced(st):
+            lang = stream_language(st)
+            if lang and (cues := stream_cues(path, st["index"])) is not None:
+                texts.setdefault(lang, []).append(cues)
+    dropped = []
+    for st in streams(info, "subtitle"):
+        if st.get("codec_name") not in PICTURE_SUBTITLES or is_forced(st) or not texts.get(stream_language(st)):
+            continue
+        picture = stream_cues(path, st["index"])
+        if picture and any(covers(t, picture, st["codec_name"], seconds) for t in texts[stream_language(st)]):
+            dropped.append(st)
+    return dropped
 
 
 def without(info, dropped: list) -> dict:

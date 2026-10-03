@@ -221,6 +221,23 @@ class Agents(Base):
         self.assertIn("nginx (restarted with new settings)", out)
         self.assertFalse(host.changed_file(self.cfg).exists())
 
+    def test_interrupted_while_writing_agents(self):
+        """Stopped right after replacing nginx's agent, before the rest"""
+        quiet(host.services, self.cfg)
+        self.with_config(admin_bind="127.0.0.1")
+        real_replace = os.replace
+
+        def replace(src, dst):
+            real_replace(src, dst)
+            if str(dst).endswith(".nginx.plist"):
+                raise KeyboardInterrupt
+        with mock.patch.object(launchd.os, "replace", replace), self.assertRaises(KeyboardInterrupt):
+            quiet(host.services, self.cfg)
+        self.assertEqual(host.changed_file(self.cfg).read_text().split(), ["nginx"])
+        self.calls.clear()
+        _, out = quiet(host.services, self.cfg)
+        self.assertIn("nginx (restarted with new settings)", out)
+
     def test_retired_services_removed(self):
         self.agents.mkdir(parents=True)
         for name in ("sonarr-anime", "sonarr"):

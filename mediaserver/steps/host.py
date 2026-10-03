@@ -188,11 +188,12 @@ def services(cfg: Config) -> None:
     p = cfg.paths
     subst = {"@MEDIA@": str(p.media), "@CONFIG@": str(p.config), "@STATE@": str(p.state), "@ADMIN_BIND@": admin_bind(cfg),
              "@DISK_WARN_GB@": str(cfg.disk_warn_gb), "@DISK_MIN_GB@": str(cfg.disk_min_gb)}
-    # Recorded before anything restarts: an install interrupted from here on
-    # (a service that won't stop, Ctrl-C) leaves agents that no longer look
-    # changed, and the next run must still restart them
-    for name in launchd.write_agents(m["services"], subst, p.config, p.logs, cfg.timezone):
-        mark_changed(cfg, name)
+    # Each restart is recorded before its agent is replaced: an install
+    # interrupted from there on (while writing, a service that won't stop,
+    # Ctrl-C) leaves agents that no longer look changed, and the next run
+    # must still restart them. Cleared only after they all restarted.
+    launchd.write_agents(m["services"], subst, p.config, p.logs, cfg.timezone,
+                         before_change=lambda name: mark_changed(cfg, name))
     # Also restart services whose config file changed (e.g. a new admin_bind)
     changed = set(c.read_text(changed_file(cfg)).split())
     launchd.start_all(p.config, changed)
