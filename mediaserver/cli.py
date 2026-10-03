@@ -273,7 +273,7 @@ def lan_ip() -> str:
 
 def summary(cfg: Config, hostname: str, took: float, times: list[tuple[float, str]]) -> None:
     ip = lan_ip()
-    slowest = ", ".join(f"{name} {int(t)}s" for t, name in sorted(times, reverse=True)[:3])
+    slowest = ", ".join(f"{name} {t:.0f}s" if t >= 10 else f"{name} {t:.1f}s" for t, name in sorted(times, reverse=True)[:3])
     lines = ["", "  Setup Complete!", "", "  On this Mac:",
              "    Watch (Moonfin): http://localhost:8096/Moonfin/Web/",
              "    Request:         http://localhost:5055",
