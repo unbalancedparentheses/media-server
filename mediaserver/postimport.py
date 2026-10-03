@@ -687,8 +687,13 @@ def ocr(path, lang, stream):
             log(f"reading the {lang} picture subtitles of {path.name} gave nothing usable")
             return "failed"
         tmp_dest = dest.with_name(f".{dest.name}.tmp")
-        tmp_dest.write_text(text)
-        os.replace(tmp_dest, dest)
+        try:
+            tmp_dest.write_text(text)
+            os.replace(tmp_dest, dest)
+        except OSError as e:   # e.g. the disk is full: no half-written file left
+            tmp_dest.unlink(missing_ok=True)
+            log(f"couldn't save the {lang} subtitles of {path.name}: {e.strerror}")
+            return "failed"
     return "written"
 
 
@@ -749,6 +754,16 @@ class Arr:
             ("animation" in genres or "anime" in genres)
         return f"{movie['title']} ({movie.get('year', '')})", movie.get("runtime") or 0, japanese, \
             f"radarr:{record['movieId']}"
+
+    def failed_releases(self, record) -> int:
+        """How many releases of this episode/film Sonarr/Radarr record as
+        failed: each replacement marks one, and their history doesn't reset
+        with ours. Failures for other reasons count too, which only stops
+        replacing sooner. Raises when the history can't be read."""
+        if self.kind == "series":
+            rows = self.call("GET", f"history/series?seriesId={record['seriesId']}&eventType=4") or []
+            return sum(1 for r in rows if r.get("episodeId") == record.get("episodeId"))
+        return len(self.call("GET", f"history/movie?movieId={record['movieId']}&eventType=4") or [])
 
     def reject(self, record):
         """Delete the imported file and mark its release as failed: Sonarr/
@@ -941,7 +956,9 @@ class Worker:
                 entry["next"] = suspect["since"] + CONFIRM_AFTER
                 return False
             if problem:
-                tries = (rejection or {}).get("count", 0)
+                # Ours or Sonarr/Radarr's count, whichever is higher: a lost or
+                # damaged state file must never reset the replacement limit
+                tries = max((rejection or {}).get("count", 0), app.failed_releases(record))
                 if tries >= self.settings["max_replacements"]:
                     self.state["rejections"][key] = dict(rejection or {}, title=title, status="kept", reason=problem, time=int(time.time()))
                     self.remember(title, f"kept although {problem}: {tries} other releases weren't better")
@@ -1114,6 +1131,27 @@ def save(state):
     c.write_json(STATE / "state.json", state)
 
 
+def load_state() -> dict:
+    """The worker's record; empty when there's none. An unreadable one is
+    set aside (not silently replaced) and reported; starting fresh is safe
+    because the replacement limit also counts Sonarr/Radarr's history."""
+    f = STATE / "state.json"
+    if not f.exists():
+        return {}
+    data = read_json(f)
+    if isinstance(data, dict):
+        return data
+    aside = f.with_name(f"state.json.unreadable-{int(time.time())}")
+    try:
+        os.replace(f, aside)
+    except OSError:
+        pass
+    log(f"{f} was unreadable; set aside as {aside.name}, starting with a fresh record")
+    notify("Media server: post-import record was damaged",
+           f"It was set aside ({aside.name}); checks continue. Replacement limits still hold (they also use Sonarr/Radarr's history).")
+    return {}
+
+
 def load_settings():
     return {**DEFAULTS, **read_json(STATE / "settings.json", {})}
 
@@ -1140,7 +1178,7 @@ def by_hand(mode, path):
     if info is None:
         print("can't read the file")
         return 1
-    state = read_json(STATE / "state.json", {})
+    state = load_state()
     Worker([], settings, state).fix(path, info, display_name(path))
     save(state)
     return 0
@@ -1159,7 +1197,7 @@ def main():
             waiting = True
         else:
             waiting = False
-            worker = Worker(apps, load_settings(), read_json(STATE / "state.json", {}))
+            worker = Worker(apps, load_settings(), load_state())
             try:
                 worker.new_imports()
                 worker.check_rejections()

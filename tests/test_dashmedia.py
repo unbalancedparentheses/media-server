@@ -198,6 +198,7 @@ class Recommended(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.rating_calls = []
+        self.down = False
         self.ratings = {"movie/1/ratingscombined": {"rt": {"criticsScore": 92, "audienceScore": 88}, "imdb": {"criticsScore": 8.1}},
                         "movie/2/ratingscombined": {"rt": {"criticsScore": 40}},                 # rotten: left out
                         "movie/3/ratingscombined": {"imdb": {"criticsScore": 7.9}},               # IMDb only
@@ -210,17 +211,24 @@ class Recommended(unittest.TestCase):
             if self.down:
                 raise OSError("down")
             return self.ratings.get(path, {})
-        movie = lambda i, title, pop, vote=7.0, **kw: {"id": i, "title": title, "popularity": pop, "voteAverage": vote,  # noqa: E731
-                                                       "posterPath": f"/{i}.jpg", "releaseDate": "2026-09-01", **kw}
-        if path.startswith("discover/movies") and "page=1" in path:
-            return {"results": [movie(1, "Great", 90, mediaInfo={"status": 5, "jellyfinMediaId": "abc"}), movie(2, "Rotten", 80),
-                                movie(3, "Good", 70), movie(4, "Unrated", 60, vote=8.3),
-                                movie(5, "Trailer", 99, video=True), {"id": 6, "title": "No poster", "popularity": 50}]}
-        if path.startswith("discover/tv") and "page=1" in path:
-            return {"results": [{"id": 10, "name": "Show", "popularity": 85, "voteAverage": 7.5, "posterPath": "/10.jpg",
-                                 "firstAirDate": "2026-08-01", "mediaInfo": {"status": 3}}]}
-        if path.startswith("discover/trending"):
-            return {"results": [{"id": 99, "mediaType": "person", "name": "Someone"}]}
+
+        def item(i, title, pop, vote=7.0, votes=500, kind="movie", **kw):
+            date = kw.pop("date", "2026-09-01")
+            return {"id": i, ("title" if kind == "movie" else "name"): title, "popularity": pop, "voteAverage": vote,
+                    "voteCount": votes, "posterPath": f"/{i}.jpg", ("releaseDate" if kind == "movie" else "firstAirDate"): date, **kw}
+        if path.startswith("discover/movies") and "page=1" in path and "genre=16" not in path:
+            return {"results": [item(1, "Great", 90, mediaInfo={"status": 5, "jellyfinMediaId": "abc"}), item(2, "Rotten", 80),
+                                item(3, "Good", 70), item(4, "Unrated", 60, vote=8.3),
+                                item(5, "Trailer", 99, video=True), {"id": 6, "title": "No poster", "popularity": 50}]}
+        if path.startswith("discover/tv") and "page=1" in path and "genre=16" not in path:
+            return {"results": [item(10, "Show", 85, 7.5, kind="tv", mediaInfo={"status": 4})]}
+        if path.startswith("discover/tv") and "genre=16" in path and "page=1" in path:
+            return {"results": [item(20, "Anime Show", 40, 8.6, votes=40, kind="tv", genreIds=[16, 10765], originalLanguage="ja"),
+                                item(21, "Barely Voted", 39, 9.5, votes=5, kind="tv", genreIds=[16], originalLanguage="ja")]}
+        if path.startswith("discover/trending") and "page=1" in path:
+            return {"results": [{"id": 99, "mediaType": "person", "name": "Someone"},
+                                item(30, "Few Votes", 95, 9.1, votes=12, mediaType="movie"),
+                                item(31, "Not Out Yet", 95, 9.0, mediaType="movie", date="2099-01-01")]}
         return {"results": []}
 
     def run_it(self, down=False):
@@ -228,19 +236,26 @@ class Recommended(unittest.TestCase):
         with mock.patch.object(dm, "seerr", self.fake_seerr):
             return dm.recommended()
 
-    def test_good_ones_scored_and_marked(self):
-        picks = self.run_it()
+    def test_three_rows_scored_and_marked(self):
+        rows = self.run_it()
         # Great: Rotten Tomatoes 92 and IMDb 8.1 average to 86.5
-        self.assertEqual([(p["title"], p["score"]) for p in picks], [("Show", 100), ("Great", 86), ("Unrated", 83), ("Good", 79)])
-        great = next(p for p in picks if p["title"] == "Great")
+        self.assertEqual([(p["title"], p["score"]) for p in rows["movies"]], [("Great", 86), ("Unrated", 83), ("Good", 79)])
+        self.assertEqual([(p["title"], p["score"], p["status"]) for p in rows["series"]], [("Show", 100, 4)])
+        # Anime: TMDB's score with fewer votes counts; too few still doesn't
+        self.assertEqual([p["title"] for p in rows["anime"]], ["Anime Show"])
+        great = rows["movies"][0]
         self.assertEqual((great["rt"], great["rt_audience"], great["imdb"], great["status"], great["watch"]), (92, 88, 8.1, 5, "abc"))
-        self.assertEqual(next(p for p in picks if p["title"] == "Show")["status"], 3)
+        everything = [p["title"] for r in rows.values() for p in r]
+        self.assertNotIn("Few Votes", everything)      # a high TMDB score from 12 votes
+        self.assertNotIn("Not Out Yet", everything)    # trending but not released
 
     def test_critics_and_viewers_averaged(self):
         self.assertEqual(dm.score({"rt": 93, "imdb": 5.7}, 7.0), 75.0)
         self.assertEqual(dm.score({"rt": 80}, 9.0), 80.0)
         self.assertEqual(dm.score({"imdb": 7.9}, None), 79.0)
-        self.assertEqual(dm.score({}, 8.3), 83.0)
+        self.assertEqual(dm.score({}, 8.3, 500), 83.0)
+        self.assertIsNone(dm.score({}, 8.3, 50))
+        self.assertEqual(dm.score({}, 8.3, 50, min_votes=20), 83.0)
         self.assertIsNone(dm.score({}, None))
 
     def test_ratings_asked_once_a_day_and_kept_when_seerr_is_down(self):
@@ -248,10 +263,14 @@ class Recommended(unittest.TestCase):
         first = len(self.rating_calls)
         self.run_it()
         self.assertEqual(len(self.rating_calls), first)   # from the cache
-        # A day later Seerr doesn't answer: the old ratings are still used
+        # A day later Seerr doesn't answer: the old ratings are still used...
         cache = dm.c.read_json(self.state / "dashstatus/ratings.json")
         for v in cache.values():
             v["at"] -= 2 * 86400 - 10
         dm.c.write_json(self.state / "dashstatus/ratings.json", cache)
-        picks = self.run_it(down=True)
-        self.assertEqual([p["title"] for p in picks], ["Show", "Great", "Unrated", "Good"])
+        rows = self.run_it(down=True)
+        self.assertEqual([p["title"] for p in rows["movies"]], ["Great", "Unrated", "Good"])
+        # ...and it isn't asked again for a while after failing
+        asked = len(self.rating_calls)
+        self.run_it(down=True)
+        self.assertEqual(len(self.rating_calls), asked)

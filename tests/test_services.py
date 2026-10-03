@@ -99,12 +99,13 @@ class DashboardTests(Library):
     def test_media_data(self):
         dashmedia.configure(self.cfg.paths.config, self.cfg.paths.state)
         seerr = self.stack.seerr
-        seerr.discover["movies"] = [{"id": 77, "title": "New Film", "popularity": 50, "voteAverage": 7.1,
-                                     "posterPath": "/n.jpg", "releaseDate": "2026-09-01"}]
+        from datetime import date, timedelta
+        seerr.discover["movies"] = [{"id": 77, "title": "New Film", "popularity": 50, "voteAverage": 7.1, "voteCount": 300,
+                                     "posterPath": "/n.jpg", "releaseDate": (date.today() - timedelta(days=20)).isoformat()}]
         seerr.ratings[("movie", 77)] = {"rt": {"criticsScore": 95}, "imdb": {"criticsScore": 8.0}}
         data = dashmedia.collect()
         self.assertEqual(data["media_failed"], [])
-        self.assertEqual([(r["title"], r["rt"], r["imdb"]) for r in data["recommended"]], [("New Film", 95, 8.0)])
+        self.assertEqual([(r["title"], r["rt"], r["imdb"]) for r in data["recommended"]["movies"]], [("New Film", 95, 8.0)])
         reqs = {r["title"]: r for r in data["requests_live"]}
         self.assertEqual(reqs["Ready Film"]["state"], "available")
         self.assertEqual(reqs["Downloading Film"]["text"], "downloading · 60%")

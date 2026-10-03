@@ -105,6 +105,8 @@
   .step-line{width:7px;height:1px;background:var(--border-hover);margin:0 0.2rem}
   .step-now{font-size:0.68rem;color:var(--text2);margin-top:0.3rem}
   .fix-bar{max-width:16rem;margin-top:0.3rem}
+  .worth-label{font-size:0.72rem;color:var(--text2);margin:0.9rem 0 0.5rem}
+  .worth-label:first-child{margin-top:0}
   .fix-bar i{transition:width 1s linear}
   .step-now b{color:var(--blue);font-weight:500}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.45}}
@@ -228,8 +230,8 @@
     </div>
 
     <div class="section hidden" id="worth-sec">
-      <div class="section-title">Worth watching <span class="more" style="cursor:default">new and trending, by Rotten Tomatoes and IMDb</span></div>
-      <div class="row" id="worth"></div>
+      <div class="section-title">Worth watching <span class="more" style="cursor:default">out in the last 4 months or trending · by Rotten Tomatoes and IMDb (TMDB when neither has it)</span></div>
+      <div id="worth"></div>
     </div>
 
     <div class="section">
@@ -322,13 +324,15 @@
     function worthCard(r){
       var src='https://image.tmdb.org/t/p/w185'+r.poster;
       var scores=[r.rt!=null?'🍅 '+r.rt+'%':'',r.imdb!=null?'IMDb '+r.imdb:'',r.rt==null&&r.imdb==null&&r.tmdb_vote?'TMDB '+r.tmdb_vote.toFixed(1):''].filter(Boolean).join(' · ');
+      // Seerr: 5 all there, 4 some episodes, 2/3 requested or on its way
       var here=r.status===5||r.status===4,asked=r.status===2||r.status===3;
       var href=here&&r.watch?watchUrl(r.watch):seerrBase+'/'+r.type+'/'+r.tmdb;
-      var badge=here?'<span class="p-badge">In library</span>':asked?'<span class="p-badge">Requested</span>':'';
-      var sub=(r.type==='tv'?'Series':'Movie')+(r.year?' · '+r.year:'');
+      var badge=r.status===5?'<span class="p-badge">In library</span>':r.status===4?'<span class="p-badge">Some episodes</span>'
+        :asked?'<span class="p-badge">Requested</span>':'';
+      var sub=(r.type==='tv'?'Series':'Film')+(r.year?' · '+r.year:'');
       return'<a class="poster" href="'+href+'" title="'+esc(r.title+' · '+scores+(here?'':' · '+(asked?'requested':'click to request in Seerr')))+'"><div class="p-img">'
         +'<img loading="lazy" src="'+esc(src)+'" alt="" onerror="this.remove()"><div class="p-none" style="z-index:-1">'+esc(r.title)+'</div>'
-        +badge+'<div class="p-play">'+(here?'▶':'+')+'</div></div><div class="p-title">'+esc(r.title)+'</div><div class="p-sub">'+esc(scores||sub)+'</div></a>';
+        +badge+'<div class="p-play">'+(here?'▶':'+')+'</div></div><div class="p-title">'+esc(r.title)+'</div><div class="p-sub">'+esc(scores)+'</div><div class="p-sub">'+esc(sub)+'</div></a>';
     }
 
     // ── Attention (dismissed alerts come back when they change, or after a day) ──
@@ -447,9 +451,13 @@
         document.getElementById('latest').innerHTML=s.latest.map(function(c){return posterCard(c,{badge:c.new>1?c.new+' new':''});}).join('');
       }
 
-      if(s.recommended){
-        show('worth-sec',s.recommended.length>0);
-        document.getElementById('worth').innerHTML=s.recommended.map(worthCard).join('');
+      // Three rows: anime, series, films (an empty one isn't shown)
+      if(s.recommended&&!Array.isArray(s.recommended)){
+        var rows=[['anime','Anime'],['series','Series'],['movies','Films']].filter(function(x){return(s.recommended[x[0]]||[]).length;});
+        show('worth-sec',rows.length>0);
+        document.getElementById('worth').innerHTML=rows.map(function(x){
+          return'<div class="worth-label">'+x[1]+'</div><div class="row">'+s.recommended[x[0]].map(worthCard).join('')+'</div>';
+        }).join('');
       }
 
       // Requests and what's on its way, each with where it is in the pipeline

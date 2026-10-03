@@ -41,10 +41,16 @@ def write_atomic(path, text: str, mode: int | None = None) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
-    tmp.write_text(text)
-    if mode is not None:
-        os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    try:
+        tmp.write_text(text)
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        # A full disk (or an interruption) leaves the old file, not a stray
+        # half-written one next to it
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def write_json(path, data: Any, mode: int | None = None, compact: bool = False) -> None:

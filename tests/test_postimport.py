@@ -155,6 +155,13 @@ class FakeArr:
     def __init__(self, known_release=True, has_file=False):
         self.known_release, self.file = known_release, has_file
         self.rejected, self.rescanned = [], []
+        self.history_down = False
+
+    def failed_releases(self, record):
+        """Like Radarr's history: each rejection marked a release failed"""
+        if self.history_down:
+            raise OSError("Radarr isn't answering")
+        return len(self.rejected) if self.known_release else 0
 
     def item(self, record):
         return "Film (2020)", 100, False, f"radarr:{record['movieId']}"
@@ -220,6 +227,26 @@ class Imports(unittest.TestCase):
         self.assertEqual(app.rejected, [1, 2])
         self.assertEqual(w.state["rejections"]["radarr:7"]["status"], "kept")
         self.assertEqual(len(self.notes), 1)
+
+    def test_lost_record_doesnt_reset_the_limit(self):
+        """Our record is gone (damaged, set aside): Radarr's history still
+        shows two failed releases, so the third bad one is kept"""
+        app = FakeArr()
+        app.rejected = [1, 2]
+        w = self.worker(max_replacements=2)   # a fresh, empty record
+        with mock.patch.object(pi, "problem_with", return_value="the video is damaged"):
+            self.check(w, app, self.record(3))
+        self.assertEqual(app.rejected, [1, 2])   # nothing more deleted
+        self.assertEqual(w.state["rejections"]["radarr:7"]["status"], "kept")
+
+    def test_unreadable_history_deletes_nothing(self):
+        app, w = FakeArr(), self.worker()
+        app.history_down = True
+        with mock.patch.object(pi, "problem_with", return_value="the video is damaged"):
+            with self.assertRaises(OSError):   # the import queue retries it later
+                self.check(w, app, self.record())
+        self.assertEqual(app.rejected, [])
+        self.assertTrue(self.video.exists())
 
     def test_hand_imported_file_is_left_alone(self):
         app, w = FakeArr(known_release=False), self.worker()

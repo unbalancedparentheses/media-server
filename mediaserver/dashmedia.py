@@ -419,12 +419,18 @@ def upcoming():
 
 
 # ─── Worth watching ──────────────────────────────────────────────
-# New and trending films and series, scored by Rotten Tomatoes critics and
-# IMDb viewers (averaged when both are known), else TMDB: all through Seerr, which already looks these up (IMDb and
+# Films and series released in the last four months and this week's trending
+# ones (already out), ranked by Rotten Tomatoes critics and IMDb viewers
+# (averaged when both are known), else TMDB's users with enough votes: all through Seerr, which already looks these up (IMDb and
 # Rotten Tomatoes have no public API; Letterboxd's is partners only).
 RECENT_DAYS = 120
 GOOD_SCORE = 75          # out of 100
 RATINGS_KEEP = 86400     # a title's ratings are asked for once a day
+RATINGS_RETRY = 6 * 3600  # and after a failed lookup, not again for 6 hours
+# TMDB's own score only counts with this many votes; anime gets far fewer
+# votes (and Rotten Tomatoes and IMDb rarely have it)
+TMDB_MIN_VOTES = {"movies": 100, "series": 100, "anime": 20}
+ROWS = ("anime", "series", "movies")
 
 
 def ratings(kind: str, tmdb: int, cache: dict) -> dict:
@@ -434,12 +440,16 @@ def ratings(kind: str, tmdb: int, cache: dict) -> dict:
     hit = cache.get(key)
     if hit and now - hit.get("at", 0) < RATINGS_KEEP:
         return hit["r"]
+    if hit and now - hit.get("failed", 0) < RATINGS_RETRY:
+        return hit["r"]
     try:
         raw = seerr(f"movie/{tmdb}/ratingscombined" if kind == "movie" else f"tv/{tmdb}/ratings") or {}
     except c.HTTP_ERRORS:
         raw = None
-    if raw is None:   # not answering: use what's cached, even if old
-        return hit["r"] if hit else {}
+    if raw is None:
+        # Not answering: what's cached, even if old, and no new try for a while
+        cache[key] = {**(hit or {"at": 0, "r": {}}), "failed": now}
+        return cache[key]["r"]
     rt = raw.get("rt") if kind == "movie" else raw
     imdb = raw.get("imdb") if kind == "movie" else None
     r = {k: v for k, v in (("rt", (rt or {}).get("criticsScore")), ("rt_audience", (rt or {}).get("audienceScore")),
@@ -448,50 +458,74 @@ def ratings(kind: str, tmdb: int, cache: dict) -> dict:
     return r
 
 
-def score(r: dict, tmdb_vote: float | None) -> float | None:
-    """Out of 100: the average of Rotten Tomatoes' critics and IMDb's
-    viewers where both are known (critics alone overrate some), either one
-    alone, else TMDB's users"""
+def score(r: dict, tmdb_vote: float | None, tmdb_votes: int = 0, min_votes: int = 100) -> float | None:
+    """A ranking out of 100 (our choice, not a measure the sources share):
+    the average of Rotten Tomatoes' critics % and IMDb's viewer score x10
+    where both are known (critics alone overrate some), either one alone,
+    else TMDB's users when enough of them voted. The page shows the
+    original scores, not this."""
     known = [float(r["rt"])] if r.get("rt") is not None else []
     known += [float(r["imdb"]) * 10] if r.get("imdb") is not None else []
     if known:
         return sum(known) / len(known)
-    return float(tmdb_vote) * 10 if tmdb_vote else None
+    return float(tmdb_vote) * 10 if tmdb_vote and tmdb_votes >= min_votes else None
 
 
-def recommended(limit: int = 14) -> list:
-    since = (datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)).strftime("%Y-%m-%d")
+def row_of(kind: str, r: dict) -> str:
+    """anime (Japanese animation, films or series), series or movies"""
+    if 16 in (r.get("genreIds") or []) and r.get("originalLanguage") == "ja":
+        return "anime"
+    return "movies" if kind == "movie" else "series"
+
+
+def recommended(per_row: int = 12) -> dict:
+    """{"anime": [...], "series": [...], "movies": [...]}, best first"""
+    today = datetime.now(timezone.utc)
+    since, until = (today - timedelta(days=RECENT_DAYS)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+    movies = f"primaryReleaseDateGte={since}&primaryReleaseDateLte={until}&sortBy=popularity.desc"
+    shows = f"firstAirDateGte={since}&firstAirDateLte={until}&sortBy=popularity.desc"
+    # Released in the last four months, up to today (not upcoming ones),
+    # anime asked for on its own (it's rarely among the most popular), and
+    # this week's trending (which includes ongoing series)
+    sources = [("movie", f"discover/movies?page={p}&{movies}&voteCountGte=50") for p in (1, 2)]
+    sources += [("tv", f"discover/tv?page={p}&{shows}&voteCountGte=30") for p in (1, 2)]
+    sources += [("tv", f"discover/tv?page={p}&{shows}&genre=16&language=ja&voteCountGte=10") for p in (1, 2)]
+    sources += [("movie", f"discover/movies?page=1&{movies}&genre=16&language=ja&voteCountGte=10")]
+    sources += [(None, f"discover/trending?page={p}") for p in (1, 2)]
     candidates: dict = {}
-    sources = [("movie", f"discover/movies?page={p}&primaryReleaseDateGte={since}&sortBy=popularity.desc&voteCountGte=50")
-               for p in (1, 2)]
-    sources += [("tv", f"discover/tv?page={p}&firstAirDateGte={since}&sortBy=popularity.desc&voteCountGte=30") for p in (1, 2)]
-    sources += [(None, "discover/trending?page=1")]
     for kind, path in sources:
         for r in (seerr(path) or {}).get("results") or []:
             k = kind or r.get("mediaType")
-            if k not in ("movie", "tv") or r.get("video") or not r.get("posterPath"):
+            released = r.get("releaseDate") or r.get("firstAirDate") or ""
+            if k not in ("movie", "tv") or r.get("video") or not r.get("posterPath") or not released or released > until:
                 continue
             candidates.setdefault((k, r["id"]), r)
     cache_file = STATE / "dashstatus/ratings.json"
     cache = c.read_json(cache_file, {}) or {}
-    picks = []
-    # The most popular first, so the ratings asked for are the ones that matter
-    for (kind, tmdb), r in sorted(candidates.items(), key=lambda kv: -(kv[1].get("popularity") or 0))[:40]:
-        rating = ratings(kind, tmdb, cache)
-        value = score(rating, r.get("voteAverage"))
-        if value is None or value < GOOD_SCORE:
-            continue
-        media = r.get("mediaInfo") or {}
-        picks.append({"title": r.get("title") or r.get("name"), "type": kind, "tmdb": tmdb,
-                      "year": (r.get("releaseDate") or r.get("firstAirDate") or "")[:4], "poster": r.get("posterPath"),
-                      "score": round(value), **rating, "tmdb_vote": r.get("voteAverage"),
-                      # Seerr's status: 5 available, 4 partly, 2/3 requested or on its way
-                      "status": media.get("status"), "watch": media.get("jellyfinMediaId")})
+    rows: dict = {name: [] for name in ROWS}
+    by_row: dict = {name: [] for name in ROWS}
+    for (kind, tmdb), r in candidates.items():
+        by_row[row_of(kind, r)].append((kind, tmdb, r))
+    for name in ROWS:
+        # The most popular of each row first, so the ratings asked for are
+        # the ones that matter, and every row gets its share
+        for kind, tmdb, r in sorted(by_row[name], key=lambda x: -(x[2].get("popularity") or 0))[:20]:
+            rating = ratings(kind, tmdb, cache)
+            value = score(rating, r.get("voteAverage"), r.get("voteCount") or 0, TMDB_MIN_VOTES[name])
+            if value is None or value < GOOD_SCORE:
+                continue
+            media = r.get("mediaInfo") or {}
+            rows[name].append({"title": r.get("title") or r.get("name"), "type": kind, "tmdb": tmdb,
+                               "year": (r.get("releaseDate") or r.get("firstAirDate") or "")[:4], "poster": r.get("posterPath"),
+                               "score": round(value), **rating, "tmdb_vote": r.get("voteAverage"),
+                               # Seerr's status: 5 available, 4 partly, 2/3 requested or on its way
+                               "status": media.get("status"), "watch": media.get("jellyfinMediaId")})
+        rows[name].sort(key=lambda x: (-x["score"], x["title"] or ""))
+        rows[name] = rows[name][:per_row]
     # Forget ratings not asked for in a week
-    cache = {k: v for k, v in cache.items() if time.time() - v.get("at", 0) < 7 * 86400}
+    cache = {k: v for k, v in cache.items() if time.time() - max(v.get("at", 0), v.get("failed", 0)) < 7 * 86400}
     c.write_json(cache_file, cache, compact=True)
-    picks.sort(key=lambda x: (-x["score"], x["title"] or ""))
-    return picks[:limit]
+    return rows
 
 
 def grouped_fixes(recent: list) -> list:

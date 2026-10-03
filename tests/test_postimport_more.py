@@ -345,3 +345,58 @@ class RealCues(Scratch):
         self.assertEqual(count, 40)
         self.assertAlmostEqual(last, 48.75, delta=1)
         self.assertIsNone(pi.stream_cues(self.dir / "missing.mkv", 1))
+
+
+class DamagedRecord(Scratch):
+    def test_set_aside_and_reported_not_silently_replaced(self):
+        f = self.dir / ".state/state.json"
+        f.write_text("{damaged")
+        with mock.patch.object(pi, "notify") as notify:
+            self.assertEqual(pi.load_state(), {})
+        notify.assert_called_once()
+        aside = list((self.dir / ".state").glob("state.json.unreadable-*"))
+        self.assertEqual(len(aside), 1)
+        self.assertEqual(aside[0].read_text(), "{damaged")
+        self.assertFalse(f.exists())
+        f.write_text('{"seen": {}}')
+        self.assertEqual(pi.load_state(), {"seen": {}})
+
+
+class FullDisk(Scratch):
+    """A write that runs out of space leaves the old file, nothing half-written"""
+
+    def full(self, path_self, text, *args, **kw):
+        with open(path_self, "w") as f:
+            f.write(text[: len(text) // 2])
+        raise OSError(28, "No space left on device")
+
+    def test_records_keep_their_old_version(self):
+        from mediaserver import common as c
+        target = self.dir / "record.json"
+        target.write_text('{"old": true}')
+        with mock.patch.object(Path, "write_text", lambda path, text, *a, **kw: self.full(path, text)), \
+                self.assertRaises(OSError):
+            c.write_json(target, {"new": True})
+        self.assertEqual(target.read_text(), '{"old": true}')
+        self.assertEqual([p.name for p in self.dir.iterdir() if p.name.startswith(".record")], [])
+
+    def test_ocr_subtitles_not_left_half_written(self):
+        video = self.dir / "Film.mkv"
+        video.write_bytes(b"x")
+        cues = "".join(f"{i}\n00:00:0{i % 9},000 --> 00:00:0{i % 9},500\nline\n\n" for i in range(20))
+
+        def run(cmd, **kw):
+            if "pgsrip" in cmd:
+                Path(cmd[-1]).with_suffix(".srt").write_text(cues)
+            else:
+                Path(cmd[-1]).write_bytes(b"PG")
+            return mock.Mock(returncode=0, stderr="")
+        real_write = Path.write_text
+
+        def write_text(path_self, text, *a, **kw):
+            if path_self.name.startswith(".Film"):
+                return self.full(path_self, text)
+            return real_write(path_self, text, *a, **kw)
+        with mock.patch.object(pi.subprocess, "run", run), mock.patch.object(Path, "write_text", write_text):
+            self.assertEqual(pi.ocr(video, "en", {"index": 2}), "failed")
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir() if "srt" in p.name), [])
