@@ -228,6 +228,9 @@
                 HOST = "127.0.0.1";
                 PORT = "8191";
                 BYPARR_STATE = "@STATE@/byparr";
+                # Its Firefox runs with no window at all; the default opens
+                # real windows, which made macOS switch Spaces and move windows
+                INVPW_TRUE_HEADLESS = "1";
               };
             };
             cleanuparr = {

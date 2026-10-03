@@ -103,6 +103,7 @@ SCHEMA = {
         "subtitle_language": string(),
         "audio_language": string(nonempty=False),
         "hardware_acceleration": boolean,
+        "allow_remux": boolean,
     },
     "requests": {"auto_approve": boolean},
     "network": {

@@ -154,9 +154,11 @@ set_jellyfin_playback() {
     # With a preferred audio language, pick by language, not the default flag
     | .PlayDefaultAudioTrack = ($audio == "")' <<< "$conf")
   if [ "$want" = "$conf" ]; then
+    set_jellyfin_remux "$uid"
     ok "Playback: subtitles $(jq -r .SubtitleMode <<< "$want") ($(jq -r .SubtitleLanguagePreference <<< "$want")), audio $(jq -r '.AudioLanguagePreference // "default track"' <<< "$want")"
     return 0
   fi
+  set_jellyfin_remux "$uid"
   # /Users/Configuration?userId= on Jellyfin 10.9+, /Users/<id>/Configuration before
   if api POST "$JELLYFIN_URL/Users/Configuration?userId=$uid" -H "$(jf_auth "$JELLYFIN_TOKEN")" -d "$want" >/dev/null || \
      api POST "$JELLYFIN_URL/Users/$uid/Configuration" -H "$(jf_auth "$JELLYFIN_TOKEN")" -d "$want" >/dev/null; then
@@ -233,4 +235,23 @@ jellyfin_wait_plugin() {  # id-function
     [ $((SECONDS - start)) -ge 60 ] && return 1
     sleep 2
   done
+}
+
+# [playback] allow_remux (default false): when a device can't play a file
+# directly, Jellyfin either copies the video into a stream ("remux") or
+# converts it. Copying keeps the file's own keyframes, which in Blu-ray
+# encodes can be 10 s apart, and browsers' players can stall on that
+# (playback stopping at a fixed minute). Off: such devices get the video
+# converted by the hardware encoder with a keyframe every 3 s. Devices that
+# play the file directly (Safari, most TV apps) aren't affected.
+set_jellyfin_remux() {  # user-id
+  local policy want
+  want=$(cfg_bool .playback.allow_remux false)
+  policy=$(api GET "$JELLYFIN_URL/Users/$1" -H "$(jf_auth "$JELLYFIN_TOKEN")" | jq -c '.Policy' 2>/dev/null) || return 0
+  [ -n "$policy" ] && [ "$policy" != null ] || return 0
+  [ "$(jq -r '.EnablePlaybackRemuxing' <<< "$policy")" = "$want" ] && return 0
+  api POST "$JELLYFIN_URL/Users/$1/Policy" -H "$(jf_auth "$JELLYFIN_TOKEN")" \
+    -d "$(jq -c --argjson w "$want" '.EnablePlaybackRemuxing = $w' <<< "$policy")" >/dev/null && \
+    ok "Playback: remuxing $([ "$want" = true ] && echo allowed || echo "off (devices that can't play a file directly get it converted)")" || \
+    warn "Could not change the Jellyfin user's remuxing setting"
 }

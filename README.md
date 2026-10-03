@@ -144,6 +144,7 @@ nix run .#logs -- sonarr      # follow one service's log (also ~/media/logs)
 
 - **A request never downloads.** Public torrents are sometimes dead or thinly shared. Check Sonarr/Radarr → Activity: Cleanuparr replaces stalled downloads automatically, and Wanted → Missing lists titles still being searched for. Old or obscure titles may simply have no release that passes the filters. Usenet (paid) helps a lot here.
 - **No subtitles.** The free providers don't have everything. Adding a free [OpenSubtitles.com](https://www.opensubtitles.com) account (in Bazarr, then in `config.toml`) covers most gaps. Also check that the file isn't already carrying subtitles in the player's subtitle menu.
+- **Playback in Brave/Chrome stops at the same minute.** With `allow_remux = false` (the default) browsers get the video converted with regular keyframes; if you turned it on, turn it off again. Safari plays most files directly, without any conversion.
 - **Can't reach it from another device.** Use the Mac's address, not `localhost`. Check the macOS firewall allowed Jellyfin and Seerr (System Settings → Network → Firewall → Options), and that the Mac isn't asleep.
 - **Setup stopped with an error.** It says what failed and where to look. Fix it and run `nix run .#install` again; it picks up where things stand.
 - **The dashboard doesn't load on port 80.** Something else uses the port: set `[network] dashboard_port` to another one, such as 8088.
@@ -272,6 +273,7 @@ Always on: BR-DISK images, known-bad groups, upscales, extras-only, 3D, and rele
 | `subtitle_mode` | `"Always"` | `"Always"`, `"Smart"` (only when the audio isn't your language), `"OnlyForced"`, `"Default"` or `"None"` |
 | `subtitle_language` | `"eng"` | Preferred subtitle language (Jellyfin falls back to another when a file has none in it) |
 | `audio_language` | `"jpn"` | Audio track to use when a file has it (dual-audio anime plays in Japanese); other files play their default track. `""` = always the default track. |
+| `allow_remux` | `false` | When a device can't play a file directly, convert the video (hardware, a keyframe every 3 s) instead of copying it into a stream. Copied Blu-ray video can have keyframes 10 s apart, and browser players stall on it (playback stopping at the same minute). Devices that play the file directly (Safari, most TV apps) aren't affected. |
 | `hardware_acceleration` | `true` | Convert video with Apple's VideoToolbox (H.264, HEVC, VP9, AV1 including 10-bit; HDR tone mapping) when a device can't play a file directly |
 
 Setup re-applies these on every install. Intro Skipper is always on for the TV and Anime libraries.
@@ -331,7 +333,7 @@ Public torrents are often thinly shared; Usenet is faster and more reliable, but
 - **Logins:** every admin UI requires a login. `nix run .#test` logs in to each with the `config.toml` password, except qBittorrent, which skips its login for this Mac: its stored password hash is checked instead.
 - **Dashboard:** it needs no login and shows downloads, calendars, requests and recently added items (read-only) to anyone who can reach it. The API keys stay in nginx, which only allows the read-only endpoints the widgets use, and only `GET`. With `admin_bind = "127.0.0.1"`, admin cards say "Only on the Mac" when the dashboard is opened from another device.
 - **qBittorrent:** it skips its login only for requests from this Mac, which is how setup, the *arr apps and the dashboard reach it.
-- **Byparr:** it has no login, so it only listens on `127.0.0.1`.
+- **Byparr:** it has no login, so it only listens on `127.0.0.1`. Its Firefox runs truly headless (no window), so solving Cloudflare challenges doesn't switch Spaces or move your windows.
 - **Plugins:** Moonbase and Intro Skipper are pinned to a version, from their manifests at a fixed commit (Jellyfin verifies each download's checksum).
 - **Sleep and login:** the services are launchd *user* agents, so they run while you're logged in (a locked screen is fine) and start again at login.
 
