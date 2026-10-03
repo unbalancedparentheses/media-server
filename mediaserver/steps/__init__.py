@@ -29,6 +29,12 @@ STEPS = {
     "sabnzbd-login": "downloads:sabnzbd_login",
     # Before qBittorrent's first start (host setup)
     "seed-qbittorrent": "downloads:seed_qbittorrent",
+    "directories": "host:directories",
+    "service-configs": "host:service_configs",
+    "services": "host:services",
+    "wait": "host:wait",
+    "api-keys": "host:api_keys",
+    "api-proxy": "host:api_proxy",
 }
 
 

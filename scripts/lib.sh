@@ -14,26 +14,6 @@ on_error() {
 trap 'on_error "${BASH_SOURCE[0]:-setup.sh}" "$LINENO" "$BASH_COMMAND" "$?"' ERR
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
-require_cmd() { has_cmd "$1" || err "$1 is required"; }
-log_dry_run() { printf "\033[1;33m   [DRY-RUN]\033[0m %s\n" "$*"; }
-run_cmd() {
-  if [ "$DRY_RUN" = "true" ]; then
-    log_dry_run "$*"
-    return 0
-  fi
-  "$@"
-}
-as_root() {
-  if [ "$(id -u)" -eq 0 ]; then
-    "$@"
-  elif has_cmd sudo; then
-    sudo "$@"
-  else
-    err "Need root privileges to run: $*"
-  fi
-}
-# Show only the start of a secret in output
-mask() { printf '%s…' "${1:0:6}"; }
 generate_secret() { openssl rand -base64 24 | tr -d '/+=' | cut -c1-24; }
 detect_tailscale_cli() {
   if has_cmd tailscale; then
@@ -44,8 +24,6 @@ detect_tailscale_cli() {
     echo ""
   fi
 }
-
-urlencode() { printf '%s' "$1" | jq -sRr @uri; }
 
 detect_timeout_cmd() {
   if has_cmd timeout; then
@@ -64,26 +42,6 @@ run_timeout() {
     "$TIMEOUT_CMD" "$seconds" "$@"
   else
     "$@"
-  fi
-}
-
-extract_cookie() {
-  local cookie_name="$1"
-  awk -v name="$cookie_name" 'BEGIN{FS="\t"} ($0 !~ /^#/ || $0 ~ /^#HttpOnly_/) && $6 == name { print $7 }'
-}
-
-# qBittorrent's session cookie as "name=value": SID up to 4.x, QBT_SID_<port>
-# since 5.0. Reads a curl cookie jar (-c -) on stdin.
-extract_qbit_cookie() {
-  awk 'BEGIN{FS="\t"} ($0 !~ /^#/ || $0 ~ /^#HttpOnly_/) && ($6 == "SID" || $6 ~ /^QBT_SID_/) { print $6 "=" $7 }'
-}
-
-sed_inplace() {
-  local expr="$1" file="$2"
-  if sed --version >/dev/null 2>&1; then
-    sed -i -e "$expr" "$file"
-  else
-    sed -i '' -e "$expr" "$file"
   fi
 }
 
@@ -217,96 +175,10 @@ prompt_credentials() {
   ok "Credentials saved to config.toml"
 }
 
-# ─── Credentials applied to each service ─────────────────────────
-# ~/media/.state/credentials.json (0600, like config.toml) records, per
-# service, the login it last verified working. A service's entry only
-# advances after its new login was checked, so an interrupted or failed
-# change is retried on the next run, and services that need the current
-# password to set a new one (Jellyfin) still have it.
-creds_file() { printf '%s/credentials.json' "$STATE_DIR"; }
-
-# The record lives in the file only (no copy in memory): Python steps
-# (mediaserver/creds.py) read and write the same file during an install.
-# creds_load upgrades the older format (one shared jellyfin/qbittorrent
-# entry): the shared login is assumed for the services it covered, except
-# Cleanuparr, whose password setup may not have applied.
-creds_read() {
-  local f
-  f=$(creds_file)
-  [ -f "$f" ] || { echo '{"version":2,"services":{}}'; return 0; }
-  jq -c '
-    if .version == 2 then .
-    else {version: 2, services: (
-      (if .jellyfin then
-        reduce ("jellyfin", "sonarr", "radarr", "prowlarr", "bazarr", "sabnzbd") as $s ({}; .[$s] = $jf)
-       else {} end) as $shared
-      | $shared + (if .qbittorrent then {qbittorrent: .qbittorrent} else {} end))}
-    end' --argjson jf "$(jq -c '.jellyfin // null' "$f" 2>/dev/null || echo null)" "$f" 2>/dev/null || {
-    warn "$(creds_file) is unreadable; every service's login will be re-applied" >&2
-    echo '{"version":2,"services":{}}'
-  }
-}
-creds_load() { creds_read >/dev/null; }
-
-# creds_get <service> <username|password>; empty if not recorded
-creds_get() { creds_read | jq -r --arg s "$1" --arg f "$2" '.services[$s][$f] // ""'; }
-
-# True if <service>'s recorded login is <user>/<pass>
-creds_match() {
-  [ "$(creds_get "$1" username)" = "$2" ] && [ "$(creds_get "$1" password)" = "$3" ]
-}
-
-# Record <service>'s verified login and write the file atomically
-creds_set() {
-  local f tmp record
-  f=$(creds_file)
-  record=$(creds_read | jq -c --arg s "$1" --arg u "$2" --arg p "$3" '.services[$s] = {username: $u, password: $p}')
-  mkdir -p "$STATE_DIR"
-  tmp="$f.tmp.$$"
-  (umask 077 && jq . <<< "$record" > "$tmp") && mv -f "$tmp" "$f"
-}
-
-# Jellyfin 12 only accepts the Authorization header (no X-Emby-Token)
-jf_auth() { printf 'Authorization: MediaBrowser Token="%s"' "$1"; }
-
 # Every curl is bounded: a service that accepts a connection and never
 # answers can't hang setup. A later --max-time on the command line wins
 # (curl keeps the last value), e.g. for large downloads.
 curl() { command curl --connect-timeout 5 --max-time "${CURL_MAX_TIME:-60}" "$@"; }
-
-# HTTP status of a request ("000" if there was no answer), for telling
-# "not found" (404) apart from an unreachable service
-api_status() {
-  local method="$1" url="$2"; shift 2
-  curl -s -o /dev/null -w '%{http_code}' -X "$method" "$url" "$@" 2>/dev/null || true
-}
-
-api() {
-  local method="$1" url="$2"; shift 2
-  curl -sf --connect-timeout 5 --max-time "${API_MAX_TIME:-60}" -X "$method" "$url" -H "Content-Type: application/json" "$@" 2>/dev/null
-}
-
-# wait_for <name> <url>; gives up after $WAIT_MAX seconds (default 120)
-wait_for() {
-  local name="$1" url="$2" max="${WAIT_MAX:-120}" start=$SECONDS code
-  printf "   Waiting for %-15s" "$name..."
-  while true; do
-    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 10 "$url" 2>/dev/null || echo "000")
-    { [ "${code:0:1}" = "2" ] || [ "${code:0:1}" = "3" ]; } && break
-    [ $((SECONDS - start)) -ge "$max" ] && echo " timeout!" && return 1
-    sleep 1
-  done
-  echo " up"
-}
-
-api_retry() {
-  local retries=3 delay=2 i
-  for i in $(seq 1 "$retries"); do
-    if "$@" ; then return 0; fi
-    [ "$i" -lt "$retries" ] && sleep "$delay"
-  done
-  return 1
-}
 
 cfg() { echo "$CONFIG_JSON" | jq -r "$1"; }
 # cfg_bool <path> <default>: "true"/"false"; only a missing value gets the
@@ -319,17 +191,8 @@ validate_config_semantics() {
   py validate-config || exit 1
 }
 
-# Setup's Jellyfin API key, written by the jellyfin step (mediaserver),
-# for the steps still in bash
-load_jellyfin_key() { JELLYFIN_API_KEY=$(cat "$STATE_DIR/dashstatus/jellyfin-key" 2>/dev/null || true); }
-
 # The parts already in Python (mediaserver/): python3 -m mediaserver <command>
 py() { PYTHONPATH="$SCRIPT_DIR" MEDIA_DIR="$MEDIA_DIR" PYTHONDONTWRITEBYTECODE=1 python3 -m mediaserver "$@"; }
-
-get_api_key() {
-  local f="$CONFIG_DIR/$1/config.xml"
-  [ -f "$f" ] && sed -n 's/.*<ApiKey>\(.*\)<\/ApiKey>.*/\1/p' "$f" 2>/dev/null || echo ""
-}
 
 
 

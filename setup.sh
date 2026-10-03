@@ -44,8 +44,6 @@ MAX_BACKUPS=10
 . "$SCRIPT_DIR/scripts/service_registry.sh"
 # shellcheck source=scripts/launchd.sh
 . "$SCRIPT_DIR/scripts/launchd.sh"
-# shellcheck source=scripts/setup-services.sh
-. "$SCRIPT_DIR/scripts/setup-services.sh"
 # shellcheck source=scripts/maintenance.sh
 . "$SCRIPT_DIR/scripts/maintenance.sh"
 for step in "$SCRIPT_DIR"/scripts/steps/*.sh; do
@@ -115,18 +113,15 @@ run_setup() {
   timed check_platform
   timed ensure_config
   timed configure_tailscale
-  timed create_directories
-  timed write_service_configs
-  timed start_stack
-  timed read_setup_config
-  timed creds_load
-  timed wait_for_services
-  timed load_api_keys
+  timed py step directories
+  timed py step service-configs
+  timed py step services
+  timed py step wait
+  timed py step api-keys
   # Radarr indexers an interrupted e2e test left paused
   py e2e --resume-indexers || true
   timed py step qbittorrent
   timed py step jellyfin
-  load_jellyfin_key
   timed py step sabnzbd
   timed py step arrs
   timed py step junk-filters
@@ -140,7 +135,7 @@ run_setup() {
   timed py step unpackerr
   timed py step cleanuparr
   timed py step postimport
-  timed write_api_proxy
+  timed py step api-proxy
 }
 
 # The first install that succeeds opens the dashboard; later runs are
@@ -243,8 +238,6 @@ if [ "$MODE" = "test" ] || [ "$MODE" = "status" ] || [ "$MODE" = "e2e" ] || [ "$
   CONFIG_JSON=$(load_config_json "$CONFIG_FILE")
   validate_config_semantics
   load_runtime_settings
-  read_setup_config
-  read_api_keys
   if [ "$MODE" = "status" ]; then do_status; exit 0; fi
   if [ "$MODE" = "doctor" ]; then DOCTOR_EXIT=0; py doctor || DOCTOR_EXIT=$?; exit "$DOCTOR_EXIT"; fi
   if [ "$MODE" = "e2e" ]; then

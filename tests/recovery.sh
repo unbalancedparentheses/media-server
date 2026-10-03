@@ -53,19 +53,6 @@ sandbox() {
 fail() { echo "$*"; exit 1; }
 expect_eq() { [ "$1" = "$2" ] || fail "expected '$2', got '$1' ($3)"; }
 
-# ─── Interrupted password changes ────────────────────────────────
-
-# The older credentials file (one shared login) upgrades per service,
-# without guessing Cleanuparr's password
-test_credentials_upgrade_from_shared_record() {
-  jq -n '{jellyfin: {username: "admin", password: "pw"}, qbittorrent: {username: "q", password: "qp"}}' > "$STATE_DIR/credentials.json"
-  creds_load
-  expect_eq "$(creds_get sonarr password)" pw "sonarr"
-  expect_eq "$(creds_get bazarr username)" admin "bazarr"
-  expect_eq "$(creds_get qbittorrent password)" qp "qbittorrent"
-  expect_eq "$(creds_get cleanuparr password)" "" "cleanuparr"
-}
-
 # ─── Restoring backups ───────────────────────────────────────────
 
 make_state_records() {

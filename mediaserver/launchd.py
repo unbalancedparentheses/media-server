@@ -92,3 +92,67 @@ def restart(config_dir: Path, name: str) -> bool:
     if not loaded(name) or not stop(config_dir, name):
         return False
     return bootstrap(name)
+
+
+# ─── Agents ──────────────────────────────────────────────────────
+
+def agent(name: str, svc: dict, subst: dict, config_dir: Path, log_dir: Path, tz: str) -> dict:
+    """One service's plist; its command line comes from the Nix manifest,
+    with @CONFIG@, @STATE@, … filled in"""
+    def fill(s: str) -> str:
+        for k, v in subst.items():
+            s = s.replace(k, v)
+        return s
+    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", **({"TZ": tz} if tz else {})}
+    env.update({k: fill(v) for k, v in svc.get("env", {}).items()})
+    log = str(log_dir / f"{name}.log")
+    return {
+        "Label": label(name),
+        "ProgramArguments": [fill(a) for a in svc["args"]],
+        "EnvironmentVariables": env,
+        "WorkingDirectory": str(config_dir / name),
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        # Don't restart a crash-looping service more than every 10s
+        "ThrottleInterval": 10,
+        # Jellyfin and the *arr apps can take a while to shut down cleanly
+        "ExitTimeOut": 30,
+        "StandardOutPath": log,
+        "StandardErrorPath": log,
+    }
+
+
+def write_agents(services: dict, subst: dict, config_dir: Path, log_dir: Path, tz: str,
+                 agents_dir: Path | None = None) -> list[str]:
+    """Write every agent's plist; the names whose plist changed"""
+    import plistlib
+    agents_dir = agents_dir or Path.home() / "Library/LaunchAgents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    changed = []
+    for name, svc in services.items():
+        plist_data = agent(name, svc, subst, config_dir, log_dir, tz)
+        Path(plist_data["WorkingDirectory"]).mkdir(parents=True, exist_ok=True)
+        path = agents_dir / f"{label(name)}.plist"
+        new = plistlib.dumps(plist_data)
+        if not path.exists() or path.read_bytes() != new:
+            path.write_bytes(new)
+            changed.append(name)
+    return changed
+
+
+def start_all(config_dir: Path, changed: set[str]) -> None:
+    """Load agents that aren't running; reload the ones whose plist or
+    config file changed"""
+    from mediaserver.ui import err, ok
+    for name in SERVICE_NAMES:
+        if not loaded(name):
+            bootstrap(name)
+            ok(f"{name} (started)")
+        elif name in changed:
+            if not stop(config_dir, name):
+                raise err(f"Could not stop {name} to apply its new settings")
+            bootstrap(name)
+            ok(f"{name} (restarted with new settings)")
+        else:
+            ok(f"{name} (running)")
