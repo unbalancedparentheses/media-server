@@ -104,6 +104,8 @@
   .step.st-problem{color:var(--red);font-weight:600}.step.st-problem i{border-color:var(--red);color:var(--red)}
   .step-line{width:7px;height:1px;background:var(--border-hover);margin:0 0.2rem}
   .step-now{font-size:0.68rem;color:var(--text2);margin-top:0.3rem}
+  .fix-bar{max-width:16rem;margin-top:0.3rem}
+  .fix-bar i{transition:width 1s linear}
   .step-now b{color:var(--blue);font-weight:500}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.45}}
   .panel{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden}
@@ -354,6 +356,20 @@
     // checking & fixing → subtitles → ready; the current step says more
     var STAGE_NAMES={requested:'Requested',searching:'Search',downloading:'Download',importing:'Import',checking:'Check & fix',subtitles:'Subtitles',ready:'Ready'};
     function finished(stages){return stages.length&&stages.every(function(st){return st.state==='done';});}
+    // The media part is refreshed every few minutes, the file being fixed
+    // every round: put its live progress on the title it belongs to
+    function live(r,fx){
+      var stages=r.stages||[];
+      if(!fx||!r.folder||(fx.path||'').indexOf(r.folder.replace(/\/$/,'')+'/')!==0)return stages;
+      // Its file is there and being fixed: everything before is done, even
+      // if the slower media part hasn't caught up yet
+      var before=true;
+      return stages.map(function(st){
+        if(st.name==='checking'){before=false;return Object.assign({},st,{state:'active',detail:fx.text,progress:fx.progress});}
+        if(before)return st.name==='requested'?st:Object.assign({},st,{state:'done',detail:''});
+        return st.name==='ready'?Object.assign({},st,{state:'todo'}):st;
+      });
+    }
     function stepper(stages){
       if(!stages.length)return'';
       if(finished(stages))return'<div class="steps"><span class="step st-done"><i>✓</i>Ready to watch</span></div>';
@@ -363,7 +379,9 @@
         return'<span class="step st-'+st.state+'" title="'+esc(STAGE_NAMES[st.name]+(st.detail?': '+st.detail:''))+'"><i>'+mark+'</i>'+STAGE_NAMES[st.name]+'</span>';
       }).join('<span class="step-line"></span>')+'</div>';
       var details=now.filter(function(st){return st.detail;}).map(function(st){return'<b>'+STAGE_NAMES[st.name]+':</b> '+esc(st.detail);});
-      return html+(details.length?'<div class="step-now">'+details.join(' · ')+'</div>':'');
+      var pct=now.filter(function(st){return st.progress!=null;})[0];
+      var bar=pct?'<div class="bar fix-bar"><i style="width:'+Math.min(100,pct.progress)+'%"></i></div>':'';
+      return html+(details.length?'<div class="step-now">'+details.join(' · ')+'</div>':'')+bar;
     }
     function tile(label,value,sub,href,cls,bar){
       var b=bar==null?'':'<div class="bar '+(bar.cls||'')+'"><i style="width:'+Math.min(100,bar.v)+'%"></i></div>';
@@ -414,7 +432,7 @@
           var fix=r.state!=='available'&&adminUrl(r.admin);
           var sub=(r.type==='tv'?'Series':'Movie')+(r.by?' · requested by '+esc(r.by):r.date?'':' · on its way')+(r.date?' · '+ago(r.date):'');
           return'<div class="item link req">'+thumb+'<div class="i-info"><a href="'+href+'"><div class="i-title">'+esc(r.title)+(r.year?' ('+r.year+')':'')+'</div>'
-            +'<div class="i-sub">'+sub+'</div></a>'+stepper(r.stages||[])+'</div>'
+            +'<div class="i-sub">'+sub+'</div></a>'+stepper(live(r,s.fixing))+'</div>'
             +'<div class="i-right">'+(r.state==='available'?'<a class="i-link" href="'+href+'">Watch →</a>':fix?'<a class="i-link" href="'+fix+'">Open in '+(r.type==='tv'?'Sonarr':'Radarr')+' →</a>':'')+'</div></div>';
         }).join(''):'<div class="empty">No requests yet · <a class="i-link" href="'+seerrBase+'">request something</a></div>';
       }
@@ -435,6 +453,12 @@
       var hl=s.health;
       if(hl){
         var rows='',week=(hl.fixed||[]);
+        // Being fixed right now: what, how far, how long left
+        if(s.fixing){
+          var n=s.fixing,nb=n.progress!=null?'<div class="bar fix-bar"><i style="width:'+Math.min(100,n.progress)+'%"></i></div>':'';
+          rows+='<div class="h-row"><span class="h-ico" style="color:var(--blue)">⚙</span><div class="i-info"><div>'+esc(n.title)+'</div><div class="i-sub">'+esc(n.text.charAt(0).toUpperCase()+n.text.slice(1))
+            +(n.since?' · started '+ago(new Date(n.since*1000)):'')+'</div>'+nb+'</div></div>';
+        }
         (hl.kept||[]).forEach(function(k){rows+='<div class="h-row"><span class="h-ico t-warn">!</span><div class="i-info"><div>'+esc(k.title)+'</div><div class="i-sub">Kept although '+esc(k.reason)+'; no better release turned up</div></div></div>';});
         (hl.looking||[]).forEach(function(k){rows+='<div class="h-row"><span class="h-ico" style="color:var(--blue)">↻</span><div class="i-info"><div>'+esc(k.title)+'</div><div class="i-sub">Rejected: '+esc(k.reason)+' · looking for a better release since '+ago(new Date(k.since*1000))+'</div></div></div>';});
         (hl.dubs||[]).forEach(function(d){

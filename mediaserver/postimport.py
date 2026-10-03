@@ -335,18 +335,41 @@ def room_for(path, settings):
     return spare > settings["min_free_gb"] * gb
 
 
-def rewrite(path, info, command, expected, what):
+def run_ffmpeg(cmd: list, total: float, progress=None) -> tuple[int, str]:
+    """Run ffmpeg, calling progress(fraction done) as it goes (from its
+    -progress output, at most every 2s); (exit status, end of its errors)"""
+    if progress is None or not total:
+        result = subprocess.run(background(cmd), capture_output=True, text=True, check=False)
+        return result.returncode, result.stderr
+    cmd = [cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]]
+    with tempfile.TemporaryFile("w+") as errors:
+        proc = subprocess.Popen(background(cmd), stdout=subprocess.PIPE, stderr=errors, text=True)
+        last = 0.0
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            # out_time_us (and out_time_ms, despite its name) are microseconds
+            key, _, value = line.strip().partition("=")
+            if key == "out_time_us" and value.isdigit() and time.time() - last >= 2:
+                last = time.time()
+                progress(min(int(value) / 1e6 / total, 1.0))
+        code = proc.wait()
+        errors.seek(0)
+        return code, errors.read()
+
+
+def rewrite(path, info, command, expected, what, progress=None):
     """Run ffmpeg <command> (a function of the output path) into a new file
     next to the original, check it (track counts as <expected>, same
-    duration) and only then move it over the original; True when done"""
+    duration) and only then move it over the original; True when done.
+    progress(fraction) is called while ffmpeg runs."""
     path = Path(path)
     st = path.stat()
     before = (st.st_ino, st.st_size, st.st_mtime)
     out = path.with_name(f".{path.name}.postimport")
     try:
-        result = subprocess.run(background(command(out)), capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            log(f"couldn't {what} in {path.name}: {result.stderr.strip()[-300:]}")
+        code, errors = run_ffmpeg(command(out), duration(info), progress)
+        if code != 0:
+            log(f"couldn't {what} in {path.name}: {errors.strip()[-300:]}")
             return False
         new = probe(out)
         if new is None or track_counts(new) != expected or abs(duration(new) - duration(info)) > 2:
@@ -362,11 +385,12 @@ def rewrite(path, info, command, expected, what):
         out.unlink(missing_ok=True)
 
 
-def add_stereo(path, info, source):
+def add_stereo(path, info, source, progress=None):
     """Rewrite the file with a stereo AAC track; True when done"""
     expected = dict(track_counts(info), audio=track_counts(info)["audio"] + 1)
     encoder = aac_encoder()
-    return rewrite(path, info, lambda out: stereo_command(path, out, info, source, encoder), expected, "add stereo audio")
+    return rewrite(path, info, lambda out: stereo_command(path, out, info, source, encoder), expected, "add stereo audio",
+                   progress)
 
 
 def text_languages(info, path) -> set:
@@ -485,11 +509,11 @@ def defaults_command(path, out, info, plan: dict, dropped: list | None = None):
     return cmd + ["-f", fmt, str(out)]
 
 
-def set_defaults(path, info, plan: dict, dropped: list | None = None) -> bool:
+def set_defaults(path, info, plan: dict, dropped: list | None = None, progress=None) -> bool:
     dropped = dropped or []
     expected = dict(track_counts(info), subtitle=track_counts(info)["subtitle"] - len(dropped))
     return rewrite(path, info, lambda out: defaults_command(path, out, info, plan, dropped), expected,
-                   "set the default tracks")
+                   "set the default tracks", progress)
 
 
 # ─── Subtitles ───────────────────────────────────────────────────
@@ -713,6 +737,19 @@ class Worker:
         except OSError:
             pass
 
+    def progress(self, fraction: float) -> None:
+        """How far the current rewrite is, and the time left at this pace"""
+        if not self.current:
+            return
+        elapsed = time.time() - self.current["since"]
+        self.current["progress"] = int(fraction * 100)
+        # Too early to tell for the first few percent
+        self.current["eta"] = int(elapsed / fraction * (1 - fraction)) if fraction >= 0.03 else None
+        try:
+            c.write_json(STATE / "status.json", self.status())
+        except OSError:
+            pass
+
     def remember(self, title, what):
         self.state["recent"] = ([{"time": int(time.time()), "title": title, "what": what}]
                                 + self.state["recent"])[:30]
@@ -742,7 +779,7 @@ class Worker:
                 done = False
             elif source is not None:
                 self.working(path, title, "adding stereo audio")
-                if add_stereo(path, info, source):
+                if add_stereo(path, info, source, self.progress):
                     changed = True
                     self.remember(title, f"added stereo audio (from {source.get('codec_name')}) so browsers play it directly")
                     info = probe(path) or info
@@ -767,7 +804,7 @@ class Worker:
                 done = False
             elif plan or dropped:
                 self.working(path, title, "setting the default audio and subtitles")
-                if set_defaults(path, info, plan, dropped):
+                if set_defaults(path, info, plan, dropped, self.progress):
                     changed = True
                     if dropped:
                         langs = ", ".join(sorted({stream_language(st) or "?" for st in dropped}))

@@ -296,3 +296,35 @@ class MainLoop(Scratch):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Progress(Scratch):
+    def test_worker_reports_percentage_and_time_left(self):
+        worker = pi.Worker([], dict(pi.DEFAULTS), {})
+        with mock.patch.object(pi.time, "time", return_value=1000.0):
+            worker.working(self.dir / "Film.mkv", "Film", "adding stereo audio")
+        with mock.patch.object(pi.time, "time", return_value=1060.0):
+            worker.progress(0.25)   # a minute for a quarter: three more
+        self.assertEqual((worker.current["progress"], worker.current["eta"]), (25, 180))
+        status = pi.read_json(self.dir / ".state/status.json")
+        self.assertEqual(status["current"]["progress"], 25)
+        worker.progress(0.01)   # too early to tell
+        self.assertIsNone(worker.current["eta"])
+        worker.working(self.dir / "Film.mkv", "Film", None)
+        worker.progress(0.5)    # nothing running: nothing to report
+        self.assertIsNone(worker.current)
+
+    @unittest.skipUnless(HAS_FFMPEG, "needs ffmpeg")
+    def test_real_rewrite_reports_progress(self):
+        video = self.dir / "Film.mkv"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=24:duration=20",
+                        "-f", "lavfi", "-i", "sine=duration=20", "-ac", "6", "-c:v", "mpeg4", "-c:a", "ac3", str(video)], check=True)
+        info = pi.probe(video)
+        seen = []
+        self.assertTrue(pi.add_stereo(video, info, pi.needs_stereo(info, ""), seen.append))
+        self.assertTrue(seen, "no progress reported")
+        self.assertTrue(all(0 <= f <= 1 for f in seen))
+        # And a failure still reports ffmpeg's error
+        code, errors = pi.run_ffmpeg(["ffmpeg", "-i", str(self.dir / "missing.mkv"), str(self.dir / "o.mkv")], 20, seen.append)
+        self.assertNotEqual(code, 0)
+        self.assertIn("missing.mkv", errors)

@@ -4,6 +4,7 @@ release date a movie is waiting for, and grouping new episodes.
 Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from mediaserver import dashmedia as dm
@@ -118,3 +119,42 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(dm.checking_for(current, [], "/m/Other (2020)", "Radarr", 1), "")
         queued = [{"app": "Radarr", "movieId": 1, "suspect": "the video is damaged"}]
         self.assertEqual(dm.checking_for({}, queued, "/m/x", "Radarr", 1), "checking again: the video is damaged")
+
+
+class Fixing(unittest.TestCase):
+    def setUp(self):
+        import tempfile, shutil
+        self.state = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.state)
+        (self.state / "postimport").mkdir()
+
+    def status(self, current, age=0):
+        import json, time
+        (self.state / "postimport/status.json").write_text(json.dumps({"updated": time.time() - age, "current": current}))
+
+    def test_text(self):
+        self.assertEqual(dm.fixing_text({"what": "adding stereo audio"}), "adding stereo audio")
+        self.assertEqual(dm.fixing_text({"what": "adding stereo audio", "progress": 42, "eta": 185}),
+                         "adding stereo audio · 42% · about 3 min left")
+        self.assertEqual(dm.fixing_text({"what": "x", "progress": 97, "eta": 20}), "x · 97% · less than a minute left")
+        self.assertEqual(dm.fixing_text({"what": "x", "progress": 2, "eta": None}), "x · 2%")
+
+    def test_now_and_stale(self):
+        self.assertIsNone(dm.fixing_now(self.state))
+        current = {"path": "/m/Film (2020)/Film.mkv", "title": "Film", "what": "adding stereo audio", "progress": 40, "eta": 60, "since": 1}
+        self.status(current)
+        now = dm.fixing_now(self.state)
+        assert now is not None
+        self.assertEqual(now["text"], "adding stereo audio · 40% · about 1 min left")
+        self.status(current, age=3600)   # postimport stopped reporting
+        self.assertIsNone(dm.fixing_now(self.state))
+
+    def test_progress_on_the_titles_stage(self):
+        current = {"path": "/m/Film (2020)/Film.mkv", "what": "adding stereo audio", "progress": 40}
+        stages = dm.movie_pipeline({"id": 1, "hasFile": True, "path": "/m/Film (2020)"}, None, {}, current, [], {}, "2026-01-01")
+        checking = next(st for st in stages if st["name"] == "checking")
+        self.assertEqual((checking["state"], checking["progress"]), ("active", 40))
+        self.assertIn("40%", checking["detail"])
+        # Another title's folder isn't touched (a prefix isn't enough)
+        other = dm.movie_pipeline({"id": 2, "hasFile": True, "path": "/m/Film"}, None, {}, current, [], {}, "2026-01-01")
+        self.assertNotIn("progress", next(st for st in other if st["name"] == "checking"))

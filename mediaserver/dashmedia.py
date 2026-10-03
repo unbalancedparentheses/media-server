@@ -206,9 +206,45 @@ def postimport_activity(state: Path) -> tuple[dict, list]:
     return status.get("current") or {}, status.get("queued") or []
 
 
+def fixing_text(current: dict) -> str:
+    """What's being done, how far, how long left: "adding stereo audio · 42% · about 3 min left"."""
+    text = current.get("what") or "fixing the file"
+    if current.get("progress") is not None:
+        text += f" · {current['progress']}%"
+        if current.get("eta") is not None:
+            minutes = round(current["eta"] / 60)
+            text += " · less than a minute left" if minutes < 1 else f" · about {minutes} min left"
+    return text
+
+
+def fixing_now(state: Path) -> dict | None:
+    """What postimport is rewriting right now, with how far it is; read
+    every dashboard round (the rest of the media part is slower), so the
+    progress moves. None when idle or when postimport stopped reporting."""
+    status = c.read_json(state / "postimport/status.json", {}) or {}
+    current = status.get("current")
+    if not current or time.time() - status.get("updated", 0) > 600:
+        return None
+    return {"title": current.get("title", ""), "path": current.get("path", ""), "progress": current.get("progress"),
+            "eta": current.get("eta"), "since": current.get("since"), "text": fixing_text(current)}
+
+
+def working_on(current: dict, folder: str) -> bool:
+    return bool(current and folder and str(current.get("path", "")).startswith(folder.rstrip("/") + "/"))
+
+
+def with_progress(stages: list, current: dict, folder: str) -> list:
+    """The percentage on the check & fix stage while its file is rewritten"""
+    if working_on(current, folder) and current.get("progress") is not None:
+        for st in stages:
+            if st["name"] == "checking" and st["state"] == "active":
+                st["progress"] = current["progress"]
+    return stages
+
+
 def checking_for(current: dict, queued: list, folder: str, app: str, item_id: Any) -> str:
-    if current and folder and str(current.get("path", "")).startswith(folder.rstrip("/") + "/"):
-        return current.get("what", "fixing the file")
+    if working_on(current, folder):
+        return fixing_text(current)
     key = "movieId" if app == "Radarr" else "seriesId"
     for q in queued:
         if q.get("app") == app and q.get(key) == item_id:
@@ -273,10 +309,12 @@ def requests():
             m = movies.get(media.get("tmdbId")) or {}
             shown.add(("movie", m.get("id")))
             item["stages"] = movie_pipeline(m, requested, queue_m, current, queued, subs_m, today)
+            item["folder"] = m.get("path", "")
         else:
             show = series.get(media.get("tvdbId")) or {}
             shown.add(("tv", show.get("id")))
             item["stages"] = series_pipeline(show, requested, queue_s, current, queued, subs_s)
+            item["folder"] = show.get("path", "")
         out.append(item)
     # Also on its way without a request: what Sonarr/Radarr are downloading
     # (e.g. new episodes of a series you follow)
@@ -291,7 +329,7 @@ def requests():
             where, detail = queue_progress(queue[item_id])
             out.insert(0, {"title": x.get("title"), "year": str(x.get("year") or ""), "type": kind, "tmdb": x.get("tmdbId"),
                            "poster_url": poster_url(x), "by": "", "date": None, "state": "downloading" if where != "stuck" else "stuck",
-                           "text": detail, "stages": stages,
+                           "text": detail, "stages": stages, "folder": x.get("path", ""),
                            "admin": f"{'radarr:/movie' if kind == 'movie' else 'sonarr:/series'}/{x.get('titleSlug')}"})
     return out
 
@@ -301,18 +339,18 @@ def movie_pipeline(movie: dict, requested, queue_m: dict, current: dict, queued:
     if movie and not movie.get("hasFile") and not movie.get("isAvailable"):
         nxt = next_release(movie, today)
         upcoming = f"not out yet · {nxt[1]} {short_day(nxt[0])}" if nxt else "not out yet"
-    return pipeline(requested, bool(movie.get("hasFile")), "", queue_m.get(movie.get("id"), []), upcoming,
-                    checking_for(current, queued, movie.get("path", ""), "Radarr", movie.get("id")),
-                    subs.get(movie.get("id"), 0))
+    return with_progress(pipeline(requested, bool(movie.get("hasFile")), "", queue_m.get(movie.get("id"), []), upcoming,
+                                  checking_for(current, queued, movie.get("path", ""), "Radarr", movie.get("id")),
+                                  subs.get(movie.get("id"), 0)), current, movie.get("path", ""))
 
 
 def series_pipeline(show: dict, requested, queue_s: dict, current: dict, queued: list, subs: dict) -> list:
     stats = show.get("statistics") or {}
     have, aired = stats.get("episodeFileCount") or 0, stats.get("episodeCount") or 0
     partial = f"{have} of {aired} episodes" if have and aired and have < aired else ""
-    return pipeline(requested, have > 0, partial, queue_s.get(show.get("id"), []), "",
-                    checking_for(current, queued, show.get("path", ""), "Sonarr", show.get("id")),
-                    subs.get(show.get("id"), 0))
+    return with_progress(pipeline(requested, have > 0, partial, queue_s.get(show.get("id"), []), "",
+                                  checking_for(current, queued, show.get("path", ""), "Sonarr", show.get("id")),
+                                  subs.get(show.get("id"), 0)), current, show.get("path", ""))
 
 
 def downloading(queue):

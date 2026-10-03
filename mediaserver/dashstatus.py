@@ -293,7 +293,8 @@ class Collector:
         system = self.system()
         fast = {"system": system, "usage": self.services_usage(system.get("cpus") or 1, system.get("mem_total") or 0),
                 "playing": self.playing(), "downloads": self.downloads(torrents),
-                "connection": c.read_text(self.state / "netwatch/connection") or "unknown"}
+                "connection": c.read_text(self.state / "netwatch/connection") or "unknown",
+                "fixing": dashmedia.fixing_now(self.state)}
         slow = self.slow or {}
         status = {**fast, **slow, **(self.media_data or {}), "attention": self.attention(fast, slow, torrents),
                   "updated": int(time.time()), "slow_updated": self.slow_at}
