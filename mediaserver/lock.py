@@ -96,6 +96,29 @@ class worker_round:
         os.close(self.fd)
 
 
+class exclusive:
+    """with exclusive(path) as ok: one holder at a time of a lock file,
+    without waiting (ok False: someone else has it)"""
+
+    def __init__(self, path: Path):
+        self.path, self.fd, self.ok = path, -1, False
+
+    def __enter__(self) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.ok = True
+        except BlockingIOError:
+            self.ok = False
+        return self.ok
+
+    def __exit__(self, *exc) -> None:
+        if self.ok:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+        os.close(self.fd)
+
+
 def _acquire_operation(state: Path) -> None:
     state.mkdir(parents=True, exist_ok=True)
     fd = os.open(state / "operation.lock", os.O_RDWR | os.O_CREAT, 0o600)

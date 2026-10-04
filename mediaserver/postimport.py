@@ -1214,9 +1214,12 @@ def by_hand(mode, path):
     if info is None:
         print("can't read the file")
         return 1
-    with lock.worker_round(STATE.parent) as ok:
+    with lock.worker_round(STATE.parent) as ok, lock.exclusive(STATE / "run.lock") as mine:
         if not ok:
             print("an install or other operation is running; try again when it's done")
+            return 1
+        if not mine:
+            print("the post-import service is working on a file right now; try again in a minute")
             return 1
         try:
             state = load_state()
@@ -1239,11 +1242,17 @@ class Rounds:
     def round(self) -> None:
         # The worker lock for the whole round: an install, restore or
         # deletion holds it while it runs, and waits for a round underway
-        with lock.worker_round(STATE.parent) as ok:
+        # Two locks: the workers' (shared: keeps installs out) and
+        # postimport's own (exclusive: the service and --fix never rewrite
+        # files or save the record at the same time)
+        with lock.worker_round(STATE.parent) as ok, lock.exclusive(STATE / "run.lock") as mine:
             if not ok:
                 if not self.waiting:
                     log("an install or other operation is running; waiting")
                 self.waiting = True
+                return
+            if not mine:
+                log("a --fix by hand is running; this round waits for it")
                 return
             self.waiting = False
             try:

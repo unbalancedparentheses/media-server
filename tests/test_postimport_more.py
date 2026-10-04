@@ -309,6 +309,23 @@ class MainLoop(Scratch):
             pi.main()
         work.assert_not_called()
 
+    def test_service_and_fix_by_hand_never_work_at_once(self):
+        """Both are workers (they share the install-excluding lock), but only
+        one of them rewrites files and saves the record at a time"""
+        from mediaserver import lock
+        video = self.dir / "Film.mkv"
+        video.write_bytes(b"x")
+        with lock.exclusive(self.dir / ".state/run.lock"):   # the service's round, underway
+            with mock.patch.object(pi, "probe", return_value=media(audio(1, "aac", "eng"))), \
+                    mock.patch.object(pi.Worker, "fix") as fix, redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(pi.by_hand("--fix", str(video)), 1)
+            fix.assert_not_called()
+            self.assertIn("working on a file right now", out.getvalue())
+            # And the service's round waits for a --fix the same way
+            with mock.patch.object(pi.Worker, "new_imports") as work:
+                pi.Rounds().round()
+            work.assert_not_called()
+
     def test_by_hand_fix_waits_its_turn_too(self):
         self.hold_operation()
         video = self.dir / "Film.mkv"

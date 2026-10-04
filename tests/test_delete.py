@@ -144,6 +144,14 @@ class Delete(Stack):
         self.assertEqual(self.deleted_hashes, [])
         self.assertEqual(result["torrents_kept"], ["Kaiji Complete"])
 
+    def test_a_video_called_sample_still_needs_proof(self):
+        """'Sample' is no exemption: a film titled that, or a sample nobody
+        imported, keeps the torrent"""
+        self.contents["abcdef"].append({"name": "Skyfall.2012.1080p/Sample/skyfall-sample.mkv", "size": 50 * 1024 ** 2})
+        result = self.library.delete("jfmovie", None, False)
+        self.assertEqual(self.deleted_hashes, [])
+        self.assertEqual(len(result["torrents_kept"]), 1)
+
     def test_a_pack_of_films_is_kept_whatever_the_sizes(self):
         self.contents["abcdef"] = [{"name": "Bond/Skyfall.mkv", "size": 30 * 1024 ** 3}, {"name": "Bond/Spectre.mkv", "size": 100 * 1024 ** 2}]
         result = self.library.delete("jfmovie", None, False)

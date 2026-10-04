@@ -204,8 +204,10 @@ class Library:
             if files is None or not save:
                 kept.append(name)   # can't see inside it, or where it is: kept
                 continue
+            # Every video needs proof, samples included (a title or folder
+            # can contain the word): one that wasn't imported keeps it
             videos = [os.path.normpath(os.path.join(save, f.get("name") or "")) for f in files
-                      if (f.get("name") or "").lower().endswith(self.VIDEO) and "sample" not in (f.get("name") or "").lower()]
+                      if (f.get("name") or "").lower().endswith(self.VIDEO)]
             if videos and set(videos) <= ours.get(h, set()):
                 delete.append(h)
             else:
