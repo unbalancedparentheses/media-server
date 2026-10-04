@@ -100,6 +100,15 @@ admin_bind = "0.0.0.0"
 dashboard_port = 80
 tailscale_https = true
 
+# ─── Mac app ───────────────────────────────────────────────────
+# enabled: ~/Applications/Media Server.app opens the dashboard in a window
+#   of its own (Brave/Chrome/Edge app mode, else your default browser).
+# dock: put it in the Dock (once: if you take it out, it stays out).
+
+[app]
+enabled = true
+dock = true
+
 # ─── Disk space ────────────────────────────────────────────────
 # warn_free_gb: show a macOS notification when free space on the media disk
 #   drops below this (checked every 30 minutes, at most one warning per 6h).

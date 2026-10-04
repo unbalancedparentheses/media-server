@@ -42,7 +42,7 @@ LOCKED = ("setup", "update", "restore", "backup", "uninstall", "restart", "e2e")
 # The install, in order: (step, function in mediaserver/steps)
 INSTALL = ["directories", "service-configs", "services", "wait", "api-keys", "resume-indexers", "qbittorrent", "jellyfin",
            "sabnzbd", "arrs", "junk-filters", "prowlarr", "usenet-providers", "bazarr", "sabnzbd-login", "seerr", "moonbase",
-           "intro-skipper", "unpackerr", "cleanuparr", "postimport", "api-proxy"]
+           "intro-skipper", "unpackerr", "cleanuparr", "postimport", "api-proxy", "app"]
 
 
 @dataclass

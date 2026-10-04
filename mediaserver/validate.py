@@ -117,6 +117,7 @@ SCHEMA = {
         "dashboard_port": integer(lo=1, hi=65535),
         "tailscale_https": boolean,
     },
+    "app": {"enabled": boolean, "dock": boolean},
     "disk": {"warn_free_gb": integer(lo=0), "min_free_gb": integer(lo=0)},
     "cleanuparr": {"enabled": boolean, "stalled_strikes": integer(lo=3)},
     "library": {

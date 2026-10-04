@@ -221,6 +221,8 @@ def uninstall(cfg: Config, purge: bool, yes: bool) -> None:
         raise err(f"Could not stop: {' '.join(failed)} (the others were removed). Configs and Tailscale were left alone; "
                   "check 'nix run .#status' and re-run uninstall")
     (p.state / "gcroot").unlink(missing_ok=True)
+    from mediaserver.steps import macapp
+    macapp.remove(cfg)
     routes_removed = tailscale.remove(cfg)
     if not routes_removed:
         warn("Some Tailscale HTTPS routes are still published (see above)")

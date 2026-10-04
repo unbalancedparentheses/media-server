@@ -177,6 +177,11 @@ class FullChecks(Library):
     def test_all_checks_pass(self):
         d = self.dashboard()
         self.stack.prowlarr.statuses = []
+        from mediaserver.steps import macapp
+        app = self.cfg.paths.config / "Media Server.app"
+        with mock.patch.object(macapp, "icns", return_value=None), mock.patch.object(macapp, "LSREGISTER", "/nonexistent"):
+            macapp.build(d.url, app)
+        self.enterContext(mock.patch.object(macapp, "app_path", return_value=app))
         with mock.patch.dict("os.environ", {"MEDIASERVER_URL_DASHBOARD": d.url, "MEDIASERVER_URL_BYPARR": d.url}), \
                 mock.patch.object(launchd, "state", return_value="running (pid 1)"), \
                 mock.patch.object(verify.shutil, "which", return_value=None), mock.patch.object(verify.os, "access", return_value=False), \

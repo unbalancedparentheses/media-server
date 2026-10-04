@@ -69,7 +69,7 @@ You can run `nix run .#install` again at any time: it only changes what differs 
 2. **Request something.** Search for a movie or show in Moonfin (or in Seerr at `http://<mac-ip>:5055`) and press Request. It usually appears in the library within minutes to an hour, depending on how many people are sharing the release.
 3. **Install the apps.** Get **Moonfin** from the App Store, Google Play or Amazon on your TV, phone or tablet, enter `http://<mac-ip>:8096` as the server, and log in. LG and Samsung TVs can sideload Moonfin, or use Litefin.
 4. **Add your family.** In Jellyfin (`http://<mac-ip>:8096` → Dashboard → Users), create a user per person. Moonfin shows them as profiles, each with its own watch history. They can request too, and their requests download right away (`[requests] auto_approve`; set it to `false` to approve them yourself in Seerr). The playback defaults (subtitles on, Japanese audio for anime) are set for your user only; others choose theirs in the player.
-5. **Look around the dashboard** at `http://localhost` on the Mac (only there: it has no login and can delete titles). On one page:
+5. **Look around the dashboard**: open **Media Server** from the Dock (setup puts it there; it's in `~/Applications`), or `http://localhost` on the Mac (only there: it has no login and can delete titles). The app opens the dashboard in a window of its own, without tabs or an address bar (Brave, Chrome or Edge's app mode; with none of them, your default browser). On one page:
    - **Search** (press `/`): your library ("watch") and anything else to request, in one box.
    - **What needs attention**, with what to do, or "Everything is working"; an offline banner when the Mac has no connection.
    - **At a glance**: now playing, transfer speeds, library size, requests, missing items, missing subtitles, indexer health (with the last 24 hours of searches and grabs), CPU and memory, disk, Tailscale.
@@ -130,7 +130,7 @@ Every setting is explained in [`config.toml.example`](config.toml.example) and u
 - **Update:** `nix run .#update` backs up, pulls the latest version of this repo and re-runs setup. Service versions are pinned in `flake.lock`, and Renovate opens a pull request when there are updates, once the [Renovate app](https://github.com/apps/renovate) is installed on the repository.
 - **Back up:** `nix run .#backup` saves all settings, accounts and watch history (not the media itself) to `~/media/backups`, keeping the last 10. The services are stopped for a moment so the databases are consistent. Backups contain passwords, so keep a copy on another disk.
 - **Restore:** `nix run .#restore -- ~/media/backups/<file>.tar.gz`, then `nix run .#install`. The current settings are kept next to it (`*.pre-restore-<time>`).
-- **Uninstall:** `nix run .#uninstall` stops and removes every service. `nix run .#uninstall -- --purge` also deletes settings, logs and state. Your movies, shows, downloads and backups are never deleted. Afterwards, `nix-collect-garbage` frees the disk space used by the apps.
+- **Uninstall:** `nix run .#uninstall` stops and removes every service, and the Media Server app with its Dock tile. `nix run .#uninstall -- --purge` also deletes settings, logs and state. Your movies, shows, downloads and backups are never deleted. Afterwards, `nix-collect-garbage` frees the disk space used by the apps.
 
 ## Troubleshooting
 
@@ -301,6 +301,13 @@ Setup re-applies these on every install. Intro Skipper is always on for the TV a
 | `admin_bind` | `"0.0.0.0"` | Where the admin pages listen: `"0.0.0.0"` (every interface) or `"127.0.0.1"` (this Mac only). Moonfin and Seerr are always reachable; the dashboard only on this Mac. |
 | `dashboard_port` | `80` | The dashboard's port |
 | `tailscale_https` | `true` | If Tailscale is signed in, publish Moonfin and Seerr over HTTPS on your tailnet; `false` takes them down |
+
+**`[app]`**
+
+| Setting | Default | What it does |
+|---|---|---|
+| `enabled` | `true` | `~/Applications/Media Server.app`: the dashboard in a window of its own. Setup writes it (built on this Mac, so it needs no signing); `false` removes it |
+| `dock` | `true` | Put it in the Dock, once: if you take it out, setup leaves it out |
 
 There's no built-in VPN. If you use one, run its Mac app; torrent traffic follows the system connection.
 

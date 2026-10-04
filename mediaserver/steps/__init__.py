@@ -35,6 +35,7 @@ STEPS = {
     "wait": "host:wait",
     "api-keys": "host:api_keys",
     "api-proxy": "host:api_proxy",
+    "app": "macapp",
 }
 
 

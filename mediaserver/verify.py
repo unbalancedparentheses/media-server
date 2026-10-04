@@ -70,7 +70,7 @@ class Verifier:
         for part in (self.health, self.api_keys, self.download_clients, self.root_folders, self.prowlarr,
                      self.jellyfin, self.jellyfin_sync, self.seerr, self.quality_profiles, self.authentication,
                      self.cleanuparr, self.health_checks, self.landing_page, self.access_control,
-                     self.junk_filters, self.disk, self.moonfin, self.services, self.tailscale):
+                     self.junk_filters, self.disk, self.moonfin, self.services, self.mac_app, self.tailscale):
             part()
         t = self.t
         total = t.passed + t.failed
@@ -436,6 +436,17 @@ class Verifier:
             status = c.request(f"{self.urls.dashboard}/status.json").json({}) or {}
         self.t.check("Dashboard media data (requests, coming up, library health)", all(k in status for k in media))
         self.t.check("Moonfin web app (/Moonfin/Web/)", 200 <= index.status < 400)
+
+    def mac_app(self) -> None:
+        info("Mac app...")
+        if self.cfg.get("app.enabled", True) is not True:
+            self.t.skip("Mac app (app.enabled = false)")
+            return
+        from mediaserver.steps import macapp
+        app = macapp.app_path()
+        exe = app / "Contents/MacOS/media-server"
+        opens = exe.is_file() and bool(exe.stat().st_mode & 0o111) and f"URL='{self.urls.dashboard}'" in exe.read_text(errors="replace")
+        self.t.check(f"Mac app opens the dashboard ({app})", opens)
 
     def services(self) -> None:
         info("Services (launchd)...")
