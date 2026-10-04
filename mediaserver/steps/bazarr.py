@@ -97,7 +97,8 @@ def read_yaml(path: Path) -> dict:
 
 def write_yaml(path: Path, data: dict) -> None:
     import yaml
-    c.write_atomic(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    # API keys and provider passwords: private, whatever the umask
+    c.write_atomic(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=True), 0o600)
 
 
 def restart(cfg: Config) -> None:
@@ -112,6 +113,10 @@ def run(cfg: Config) -> None:
         warn("Bazarr config file not found")
         return
     ok(f"Config: {path}")
+    # API keys and provider passwords: private, also when nothing changes
+    # (Bazarr writes it itself too)
+    if path.stat().st_mode & 0o077:
+        path.chmod(0o600)
     url = cfg.urls.bazarr
     languages = [x for x in cfg.get("subtitles.languages", []) or [] if x]
     want_mode = cfg.get("subtitles.want", "first")

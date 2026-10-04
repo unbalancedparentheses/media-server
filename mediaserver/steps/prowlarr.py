@@ -143,7 +143,8 @@ def flaresolverr_tag(p: Prowlarr) -> int | None:
                 ok(f"Created FlareSolverr tag (id: {tag})")
         if tag is None:
             return None
-        proxy = next(iter(p.call("GET", "indexerProxy") or []), None)
+        # Byparr's proxy, not whichever proxy is listed first
+        proxy = next((x for x in p.call("GET", "indexerProxy") or [] if "Byparr" in (x.get("name") or "")), None)
         if proxy and tag not in (proxy.get("tags") or []):
             p.call("PUT", f"indexerProxy/{proxy['id']}", dict(proxy, tags=(proxy.get("tags") or []) + [tag]))
         return tag

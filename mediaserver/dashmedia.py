@@ -421,7 +421,7 @@ def with_playback(stages: list, folder: str, results: list) -> list:
             st["state"] = "problem"
             st["detail"] = "; ".join(f"{r.get('title')}: {r.get('detail')}" for r in failed[:2])
         elif st["state"] == "done":
-            st["detail"] = (st["detail"] + " · " if st["detail"] else "") + "playback verified"
+            st["detail"] = (st["detail"] + " · " if st["detail"] else "") + "stream check passed"
     return stages
 
 

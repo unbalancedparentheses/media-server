@@ -149,18 +149,23 @@ def ensure_libraries(cfg: Config, jf: Jellyfin) -> bool:
 def api_key(jf: Jellyfin) -> str:
     """Setup's own key (named MediaServer), not whichever key happens to be
     listed last; created when missing"""
-    def find() -> str:
+    def find() -> str | None:
+        """The key; "" when there's none; None when the list couldn't be read
+        (not "none": creating one then would make a second)"""
         try:
             return next((k["AccessToken"] for k in (jf.get("Auth/Keys") or {}).get("Items") or [] if k.get("AppName") == KEY_APP), "")
         except ApiError:
-            return ""
+            return None
     key = find()
+    if key is None:
+        warn("Jellyfin: couldn't read its API keys; not creating one (retried next run)")
+        return ""
     if not key:
         try:
             jf.post(f"Auth/Keys?app={KEY_APP}")
         except ApiError:
             pass
-        key = find()
+        key = find() or ""
     return key
 
 

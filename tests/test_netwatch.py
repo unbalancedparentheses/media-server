@@ -44,6 +44,8 @@ class NetwatchTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root)
         self.nw = FakeNetwatch(self.root)
+        # What setup writes from config.toml ([cleanuparr] enabled = true)
+        c.write_atomic(self.root / "state/netwatch/cleanuparr-wanted", "true\n")
 
     def rounds(self, n=1):
         for _ in range(n):

@@ -1,5 +1,7 @@
-"""Playback verified, separate from imported: for a file that was imported
-(and checked by postimport), ask Jellyfin itself.
+"""A stream check, separate from imported: for a file that was imported
+(and checked by postimport), ask Jellyfin itself. It shows Jellyfin can
+open and serve the file, not that every device decodes it smoothly
+(postimport's own decode check and the player's choices cover more).
 
 1. Jellyfin lists it and opens it: its playback information for the file
    (what a player asks for) comes back without an error, with a source.
@@ -52,10 +54,20 @@ class Jellyfin:
         return r.json({}) if r.ok else {"ErrorCode": f"HTTP {r.status}" if r.status else "no answer"}
 
     def first_bytes(self, item: str, source: str) -> int:
-        """HTTP status of the stream's first 256 KB (0 when nothing came)"""
-        r = c.request(f"{self.url}/Videos/{item}/stream?static=true&mediaSourceId={source}", headers=dict(self.auth, Range="bytes=0-262143"),
-                      timeout=60)
-        return 0 if r.status in (200, 206) and not r.body else r.status
+        """HTTP status of the stream's start (0 when nothing came). At most
+        256 KB is read, even from a server that ignores the range and sends
+        the whole film"""
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(f"{self.url}/Videos/{item}/stream?static=true&mediaSourceId={source}",
+                                     headers=dict(self.auth, Range="bytes=0-262143"))
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.status if resp.read(262144) else 0
+        except urllib.error.HTTPError as e:
+            return e.code
+        except (OSError, ValueError):
+            return 0
 
 
 def verify(jf: Jellyfin, path: str) -> dict | None:
@@ -81,7 +93,7 @@ def verify(jf: Jellyfin, path: str) -> dict | None:
     parts = [(video or {}).get("Codec") or "?", "/".join(sorted({a["Codec"] for a in audio}))]
     if text:
         parts.append("subtitles " + ", ".join(text))
-    how = "plays directly" if source.get("SupportsDirectPlay") else "plays (converted for some devices)"
+    how = "streams directly" if source.get("SupportsDirectPlay") else "streams (converted for some devices)"
     return {"status": "verified", "detail": f"{how}: " + " · ".join(parts)}
 
 
@@ -108,7 +120,7 @@ def run(state: dict, state_dir: Path, now: float | None = None) -> None:
             result = {"status": "failed", "detail": "Jellyfin hasn't listed it (is the library scan stuck?)"}
         pending.pop(path)
         results.insert(0, {"path": path, "title": entry.get("title", Path(path).stem), "at": int(now), **result})
-        c.log(f"{entry.get('title', Path(path).stem)}: playback {result['status']}: {result['detail']}")
+        c.log(f"{entry.get('title', Path(path).stem)}: stream check {'passed' if result['status'] == 'verified' else 'failed'}: {result['detail']}")
     del results[KEEP:]
 
 

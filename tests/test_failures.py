@@ -83,10 +83,31 @@ class Broken(Stack):
         self.assertEqual(len(s.jellyfin.keys), 1)
 
 
-def case_test(service, method, pattern):
+    def check_configured(self, service, method, pattern):
+        """The same failure on an install that's already set up: a read that
+        fails mustn't look like "nothing there" and add things again"""
+        self.run_steps()
+        self.configured_once()
+        svc = getattr(self.stack, service)
+        broken = first(svc, method, pattern)(lambda req, *args: (500, {"error": "broken for the test"}))
+        try:
+            self.run_steps()
+        except SetupError:
+            pass
+        self.configured_once()   # nothing doubled while it was broken
+        svc.routes = [r for r in svc.routes if r[2] is not broken]
+        out = self.run_steps()
+        self.assertNotIn("✗", out)
+        self.configured_once()
+
+
+def case_test(service, method, pattern, configured=False):
+    if configured:
+        return lambda self: self.check_configured(service, method, pattern)
     return lambda self: self.check(service, method, pattern)
 
 
 for _service, _method, _pattern in CASES:
     _slug = re.sub(r"\W+", "_", _pattern).strip("_")
     setattr(Broken, f"test_{_service}_{_method.lower()}_{_slug}", case_test(_service, _method, _pattern))
+    setattr(Broken, f"test_configured_{_service}_{_method.lower()}_{_slug}", case_test(_service, _method, _pattern, True))

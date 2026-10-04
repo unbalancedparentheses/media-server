@@ -49,7 +49,7 @@ class Verify(unittest.TestCase):
 
     def test_verified(self):
         self.jf.playback["i1"] = source(str(self.film), VIDEO, AAC, SUBS)
-        self.assertEqual(self.check(), {"status": "verified", "detail": "plays directly: h264 · aac · subtitles eng"})
+        self.assertEqual(self.check(), {"status": "verified", "detail": "streams directly: h264 · aac · subtitles eng"})
 
     def test_failures_say_why(self):
         self.jf.playback["i1"] = {"ErrorCode": "NoCompatibleStream"}
@@ -93,7 +93,7 @@ class Dashboard(unittest.TestCase):
         from mediaserver import dashmedia as dm
         stages = [{"name": "ready", "state": "done", "detail": ""}]
         ok = [{"path": "/m/Film (2020)/Film.mkv", "status": "verified", "title": "Film"}]
-        self.assertEqual(dm.with_playback([dict(s) for s in stages], "/m/Film (2020)", ok)[0]["detail"], "playback verified")
+        self.assertEqual(dm.with_playback([dict(s) for s in stages], "/m/Film (2020)", ok)[0]["detail"], "stream check passed")
         bad = [{"path": "/m/Film (2020)/Film.mkv", "status": "failed", "title": "Film", "detail": "the stream didn't start"}] + ok
         st = dm.with_playback([dict(s) for s in stages], "/m/Film (2020)", bad)[0]
         self.assertEqual((st["state"], st["detail"]), ("problem", "Film: the stream didn't start"))

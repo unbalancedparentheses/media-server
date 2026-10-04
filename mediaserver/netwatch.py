@@ -43,6 +43,7 @@ class Netwatch:
         self.misses = 0
         self.reconnected = False
         self.waiting = False
+        self.unknown_said = False
 
     def probe(self) -> bool:
         simulated = os.environ.get("NETWATCH_SIMULATE_OFFLINE")
@@ -56,9 +57,11 @@ class Netwatch:
                 continue
         return False
 
-    def wanted(self) -> bool:
-        """What the queue cleaner should be while online (config.toml, via setup)"""
-        return c.read_text(self.state_dir / "cleanuparr-wanted") != "false"
+    def wanted(self) -> bool | None:
+        """What the queue cleaner should be while online (config.toml, via
+        setup); None when that can't be read: left as it is, not guessed"""
+        value = c.read_text(self.state_dir / "cleanuparr-wanted", "")
+        return {"true": True, "false": False}.get(value)
 
     def cleaner(self, method: str = "GET", body: dict | None = None) -> dict:
         key = c.cleanuparr_key(self.config)
@@ -141,7 +144,12 @@ class Netwatch:
             if not self.set_cleaner(False):
                 c.log("couldn't pause Cleanuparr's queue cleaner (retrying)")
         elif self.state == "online":
-            if not self.set_cleaner(self.wanted()):
+            wanted = self.wanted()
+            if wanted is None:
+                if not self.unknown_said:
+                    c.log("whether Cleanuparr's queue cleaner should run isn't known (no cleanuparr-wanted); leaving it as it is")
+                self.unknown_said = True
+            elif not self.set_cleaner(wanted):
                 c.log("couldn't set Cleanuparr's queue cleaner (retrying)")
             if self.reconnected:
                 self.reconnected = False

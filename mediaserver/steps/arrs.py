@@ -105,10 +105,14 @@ def configure_app(cfg: Config, app: App, roots: list[str], category_field: str, 
     jellyfin_key = c.read_text(cfg.paths.state / "dashstatus/jellyfin-key")
     if jellyfin_key:
         try:
-            notification = next((n for n in app.call("GET", "notification") or [] if n.get("implementation") == "MediaBrowser"), None)
+            notifications = app.call("GET", "notification") or []
         except ApiError:
-            notification = None
-        if notification:
+            notifications = None
+        notification = next((n for n in notifications or [] if n.get("implementation") == "MediaBrowser"), None)
+        if notifications is None:
+            # Unreadable isn't "none": adding one would make a second
+            warn(f"{service}: couldn't read its connections; the Jellyfin one wasn't checked (retried next run)")
+        elif notification:
             # Setup's own Jellyfin key (older versions could store another app's)
             sync_fields(f"{service} Jellyfin notification", f"{app.url}/api/{app.version}/notification", notification["id"],
                         {"apiKey": jellyfin_key}, app.key)

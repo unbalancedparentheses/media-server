@@ -766,7 +766,7 @@
           rows+='<div class="h-row"><span class="h-ico" style="color:var(--blue)">⚙</span><div class="i-info"><div>'+esc(n.title)+'</div><div class="i-sub">'+esc(n.text.charAt(0).toUpperCase()+n.text.slice(1))
             +(n.since?' · started '+ago(new Date(n.since*1000)):'')+'</div>'+nb+'</div></div>';
         }
-        (hl.playback_failed||[]).forEach(function(f){rows+='<div class="h-row"><span class="h-ico t-bad">✗</span><div class="i-info"><div>'+esc(f.title)+': imported, but playback failed</div><div class="i-sub">'+esc(f.detail)+' · '+ago(new Date(f.time*1000))+'</div></div></div>';});
+        (hl.playback_failed||[]).forEach(function(f){rows+='<div class="h-row"><span class="h-ico t-bad">✗</span><div class="i-info"><div>'+esc(f.title)+': imported, but the stream check failed</div><div class="i-sub">'+esc(f.detail)+' · '+ago(new Date(f.time*1000))+'</div></div></div>';});
         (hl.kept||[]).forEach(function(k){rows+='<div class="h-row"><span class="h-ico t-warn">!</span><div class="i-info"><div>'+esc(k.title)+'</div><div class="i-sub">Kept although '+esc(k.reason)+'; no better release turned up</div></div></div>';});
         (hl.looking||[]).forEach(function(k){rows+='<div class="h-row"><span class="h-ico" style="color:var(--blue)">↻</span><div class="i-info"><div>'+esc(k.title)+'</div><div class="i-sub">Rejected: '+esc(k.reason)+' · looking for a better release since '+ago(new Date(k.since*1000))+'</div></div></div>';});
         (hl.dubs||[]).forEach(function(d){
@@ -778,7 +778,7 @@
         week.forEach(function(f){rows+='<div class="h-row"><span class="h-ico t-good">✓</span><div class="i-info"><div>'+esc(f.title)+(f.episodes>1?' <span style="color:var(--text3)">· '+f.episodes+' episodes</span>':'')+'</div><div class="i-sub">'+esc(f.what)+' · '+ago(new Date(f.time*1000))+'</div></div></div>';});
         show('health-sec',!!rows||hl.checks_running===false);
         if(!hl.checks_running)rows='<div class="h-row"><span class="h-ico t-warn">!</span><div class="i-info"><div>The checks after each download aren\'t running</div><div class="i-sub">nix run .#logs -- postimport shows why</div></div></div>'+rows;
-        var sub=[week.length?plural(week.length,'fix')+' this week':'',hl.playback_verified?plural(hl.playback_verified,'file')+' playback verified':''].filter(Boolean).join(' · ');
+        var sub=[week.length?plural(week.length,'fix')+' this week':'',hl.playback_verified?plural(hl.playback_verified,'file')+' stream-checked':''].filter(Boolean).join(' · ');
         document.getElementById('health-sub').innerHTML=sub?'<span>'+sub+'</span>':'';
         document.getElementById('health').innerHTML=rows;
       }

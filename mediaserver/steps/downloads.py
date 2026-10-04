@@ -189,7 +189,9 @@ class Sabnzbd:
         keyword, the setting a field."""
         fields = ({"mode": "set_config", "section": section, "keyword": server, keyword: value} if server
                   else {"mode": "set_config", "section": section, "keyword": keyword, "value": value})
-        return self.api(fields, tries=3) is not None
+        answer = self.api(fields, tries=3)
+        # An HTTP 200 can still be SABnzbd saying no ({"status": false, "error": …})
+        return isinstance(answer, dict) and answer.get("status") is not False and not answer.get("error")
 
     def servers(self):
         """The servers ([{name, enable}]); None when SABnzbd didn't answer.

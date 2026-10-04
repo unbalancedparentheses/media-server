@@ -147,7 +147,9 @@ def connect_sonarr(s: Seerr, cfg: Config, keys: Keys) -> None:
     try:
         existing = s.call("GET", "settings/sonarr") or []
     except ApiError:
-        existing = []
+        # Unreadable isn't "none": adding it would make a second connection
+        warn("Seerr: couldn't read its Sonarr connections; not changed (retried next run)")
+        return
     if any(x.get("name") == "Sonarr" for x in existing):
         ok("Sonarr already connected")
     else:
@@ -170,7 +172,8 @@ def connect_radarr(s: Seerr, cfg: Config, keys: Keys) -> None:
     try:
         existing = s.call("GET", "settings/radarr") or []
     except ApiError:
-        existing = []
+        warn("Seerr: couldn't read its Radarr connections; not changed (retried next run)")
+        return
     if existing:
         ok("Radarr already connected")
         return
