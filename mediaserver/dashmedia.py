@@ -153,6 +153,33 @@ def tonight(limit: int = 300) -> list:
     return out[:limit]
 
 
+def library_sizes() -> list:
+    """Manage → Library: every film and series with the space it uses
+    (Radarr/Sonarr's sizes), biggest first, and whether it's been watched;
+    the id is Jellyfin's, which the delete dialog takes"""
+    users = jellyfin("Users")
+    uid = users[0]["Id"] if users else ""
+    items = jellyfin(f"Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds&userId={uid}").get("Items", [])
+    films = {m.get("tmdbId"): m for m in radarr("movie")}
+    shows = {s.get("tvdbId"): s for s in sonarr("series")}
+    out = []
+    for i in items:
+        ids = i.get("ProviderIds") or {}
+        if i.get("Type") == "Movie":
+            m = films.get(int(ids["Tmdb"])) if str(ids.get("Tmdb") or "").isdigit() else None
+            size = (m or {}).get("sizeOnDisk") or 0
+            kind = "film"
+        else:
+            sh = shows.get(int(ids["Tvdb"])) if str(ids.get("Tvdb") or "").isdigit() else None
+            size = ((sh or {}).get("statistics") or {}).get("sizeOnDisk") or 0
+            kind = "series"
+        data = i.get("UserData") or {}
+        out.append({"id": i["Id"], "title": i.get("Name"), "year": i.get("ProductionYear"), "kind": kind, "size": size,
+                    "watched": bool(data.get("Played")), "managed": size > 0})
+    out.sort(key=lambda x: -x["size"])
+    return out
+
+
 def latest():
     data = jellyfin("Items?Recursive=true&SortBy=DateCreated&SortOrder=Descending&Limit=80"
                     "&IncludeItemTypes=Movie,Episode&Fields=DateCreated&EnableImageTypes=Primary")
@@ -798,7 +825,7 @@ def health():
     return out
 
 
-MEDIA_PARTS = ("continue", "tonight", "because", "latest", "requests_live", "upcoming", "health", "recommended")
+MEDIA_PARTS = ("continue", "tonight", "because", "latest", "requests_live", "upcoming", "health", "recommended", "library")
 
 
 def carry_over(previous: dict | None, new: dict) -> dict:
@@ -820,7 +847,7 @@ def carry_over(previous: dict | None, new: dict) -> dict:
 def collect() -> dict:
     result, failed = {}, []
     for name, part in (("continue", continue_watching), ("tonight", tonight), ("because", because), ("latest", latest), ("requests_live", requests),
-                       ("upcoming", upcoming), ("health", health), ("recommended", recommended)):
+                       ("upcoming", upcoming), ("health", health), ("recommended", recommended), ("library", library_sizes)):
         try:
             result[name] = part()
         except Exception as e:  # one broken source mustn't blank the others

@@ -419,3 +419,20 @@ class UniqueRequests(unittest.TestCase):
         out = dm.unique_requests(reqs)
         self.assertEqual([(r["id"], r["times"], r["firstAsked"]) for r in out],
                          [(9, 2, "2026-09-28T00:00:00Z"), (8, 1, "2026-10-01T00:00:00Z"), (2, 1, "2026-09-27T00:00:00Z")])
+
+
+class LibrarySizes(unittest.TestCase):
+    def test_everything_with_its_size_biggest_first(self):
+        def jellyfin(path):
+            if path == "Users":
+                return [{"Id": "u1"}]
+            return {"Items": [{"Id": "a", "Type": "Movie", "Name": "Skyfall", "ProductionYear": 2012, "ProviderIds": {"Tmdb": "37724"},
+                               "UserData": {"Played": True}},
+                              {"Id": "b", "Type": "Series", "Name": "Kaiji", "ProviderIds": {"Tvdb": "100"}},
+                              {"Id": "c", "Type": "Movie", "Name": "Home Video", "ProviderIds": {}}]}
+        with mock.patch.object(dm, "jellyfin", jellyfin), \
+                mock.patch.object(dm, "radarr", return_value=[{"tmdbId": 37724, "sizeOnDisk": 29 * 1024 ** 3}]), \
+                mock.patch.object(dm, "sonarr", return_value=[{"tvdbId": 100, "statistics": {"sizeOnDisk": 11 * 1024 ** 3}}]):
+            rows = dm.library_sizes()
+        self.assertEqual([(r["title"], r["kind"], r["size"] // 1024 ** 3, r["watched"], r["managed"]) for r in rows],
+                         [("Skyfall", "film", 29, True, True), ("Kaiji", "series", 11, False, True), ("Home Video", "film", 0, False, False)])

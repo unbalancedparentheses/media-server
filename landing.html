@@ -120,7 +120,7 @@
   .sp-foot{display:flex;align-items:center;justify-content:space-between;gap:0.6rem;margin-top:0.8rem}
   .sp-msg{font-size:0.7rem;color:var(--text2)}
   .poster-wrap{position:relative}
-  .p-more{position:absolute;top:0.4rem;right:0.4rem;width:2rem;height:2rem;border-radius:50%;border:1px solid var(--border-hover);background:#000a;color:var(--text);font-size:1rem;line-height:1;cursor:pointer;opacity:0.55;transition:opacity .15s}
+  .p-more{position:absolute;top:0.4rem;right:0.4rem;width:2rem;height:2rem;border-radius:50%;border:1px solid var(--border-hover);background:#000a;color:var(--text);font-size:0.85rem;line-height:1;cursor:pointer;opacity:0.8;transition:opacity .15s}
   .poster-wrap:hover .p-more,.p-more:focus-visible{opacity:1}
   .p-more:hover{background:var(--red);border-color:var(--red);color:#111}
   @media (hover:none){.p-more{opacity:0.85}}
@@ -132,6 +132,13 @@
   .del-pass{display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;color:var(--text2);margin:0.7rem 0 0.3rem}
   .del-pass input{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0.45rem;font:inherit}
   .btn.danger{background:var(--red);border-color:var(--red);color:#111;font-weight:600}
+  .btn.danger-outline{border-color:#f8717166;color:var(--red);background:transparent;font-size:0.72rem;padding:0.35rem 0.7rem}
+  .btn.danger-outline:hover{background:var(--red);color:#111}
+  .lib-filter{padding:0.6rem 1.2rem 0}
+  .lib-filter input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0.5rem 0.7rem;font:inherit;font-size:0.8rem}
+  .lib-list{max-height:32rem;overflow-y:auto;padding:0.4rem 0}
+  .lib-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:0.55rem 1.2rem;border-top:1px solid #12121a}
+  .sr-act.del{background:none;border:none;color:var(--red);font:inherit;font-size:0.72rem;cursor:pointer;padding:0.2rem 0}
   .btn:disabled{opacity:0.5;cursor:default}
   .tabs{display:flex;gap:0.25rem;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:0.2rem}
   .tabs a{padding:0.45rem 0.85rem;border-radius:8px;color:var(--text2);text-decoration:none;font-size:0.82rem;white-space:nowrap}
@@ -333,6 +340,14 @@
     </div>
 
     <div class="section">
+      <div class="panel" id="library-sec">
+        <div class="p-head"><div class="p-head-title">Library</div><div class="p-head-sub" id="library-sub"></div></div>
+        <div class="lib-filter"><input type="search" id="library-filter" placeholder="Filter by title…" aria-label="Filter the library"></div>
+        <div id="library-list" class="lib-list"><div class="empty">Loading…</div></div>
+      </div>
+    </div>
+
+    <div class="section">
       <div class="panel hidden" id="health-sec">
         <div class="p-head"><div class="p-head-title">Library health</div><div class="p-head-sub" id="health-sub"></div></div>
         <div id="health"></div>
@@ -409,8 +424,8 @@
       var card='<a class="poster" href="'+watchUrl(c.id)+'" title="'+esc(c.title+(c.detail?' · '+c.detail:''))+'"><div class="p-img">'
         +(src?'<img loading="lazy" src="'+src+'" alt="" onerror="this.remove()">':'')+'<div class="p-none"'+(src?' style="z-index:-1"':'')+'>'+esc(c.title)+'</div>'
         +badge+bar+'<div class="p-play">▶</div></div><div class="p-title">'+esc(c.title)+'</div><div class="p-sub">'+esc(c.detail||'')+'</div></a>';
-      // Library posters: ⋯ for deleting it
-      return opts&&opts.manage?'<div class="poster-wrap">'+card+'<button class="p-more" data-item="'+esc(c.id)+'" aria-label="Delete '+esc(c.title)+'…" title="Delete…">⋯</button></div>':card;
+      // Library posters: 🗑 for deleting it
+      return opts&&opts.manage?'<div class="poster-wrap">'+card+'<button class="p-more" data-item="'+esc(c.id)+'" aria-label="Delete '+esc(c.title)+'…" title="Delete…">🗑</button></div>':card;
     }
 
     // A recommendation: its scores, and whether it's here already (watch),
@@ -538,6 +553,24 @@
         }).catch(function(){msg.textContent='Not applied: the dashboard couldn\'t reach it (only from this Mac, your home network or Tailscale)';});
     });
 
+    // ── Manage → Library: everything with its size, biggest first, each
+    // with a Delete button (the same dialog) ──
+    function renderLibrary(){
+      if(!lastStatus||!lastStatus.library)return;
+      var q=(document.getElementById('library-filter').value||'').trim().toLowerCase(),all=lastStatus.library;
+      var rows=all.filter(function(x){return!q||(x.title||'').toLowerCase().indexOf(q)>=0;});
+      var total=all.reduce(function(t,x){return t+(x.size||0);},0);
+      document.getElementById('library-sub').innerHTML='<span>'+plural(all.length,'title')+' · '+gb(total)+'</span>';
+      document.getElementById('library-list').innerHTML=rows.length?rows.map(function(x){
+        return'<div class="lib-row"><div class="i-info"><div>'+esc(x.title)+(x.year?' <span class="tag">'+x.year+'</span>':'')+'</div>'
+          +'<div class="i-sub">'+(x.kind==='series'?'Series':'Film')+' · '+(x.size?gb(x.size):'size unknown')+(x.watched?' · watched':'')+'</div></div>'
+          +(x.managed?'<button class="btn danger-outline" data-delete="'+esc(x.id)+'">Delete</button>':'<span class="tag" title="Not in Radarr/Sonarr">—</span>')+'</div>';
+      }).join(''):'<div class="empty">Nothing matches</div>';
+    }
+    document.getElementById('library-filter').addEventListener('input',renderLibrary);
+    // Any Delete button (Library, search) opens the dialog
+    document.addEventListener('click',function(e){var b=e.target.closest('[data-delete]');if(b){e.preventDefault();sr.style.display='none';openDelete(b.getAttribute('data-delete'));}});
+
     // ── Deleting a title: through Radarr/Sonarr (Jellyfin alone would get
     // it downloaded again), with its torrents; needs the Jellyfin password ──
     var delItem=null,delInfo=null;
@@ -610,6 +643,7 @@
       else{tonightLen=+b.getAttribute('data-len');store('tonightLen',tonightLen);}
       renderTonight();
       renderSpeed(s.speed_limit,false);
+      renderLibrary();
     });
 
     // Why Jellyfin converts, in plain words
@@ -828,7 +862,7 @@
     // (every few minutes), indexers and disk; a part that failed to refresh
     // says so and how old what's shown is; a status file that stopped
     // updating is a warning, not a quiet old timestamp
-    var PART_NAMES={'continue':'continue watching',tonight:'watch tonight',because:'because you watched',latest:'recently added',requests_live:'requests',upcoming:'coming up',health:'library health',recommended:'worth watching'};
+    var PART_NAMES={library:'library','continue':'continue watching',tonight:'watch tonight',because:'because you watched',latest:'recently added',requests_live:'requests',upcoming:'coming up',health:'library health',recommended:'worth watching'};
     function when(t){return t?ago(new Date(t*1000).toISOString()):'never';}
     function freshness(s){
       var age=Date.now()/1000-(s.updated||0),parts=[];
@@ -938,7 +972,7 @@
     function mergeResults(lib,ask){
       var rows=[],byTmdb={};
       lib.forEach(function(i){
-        var row={title:i.Name,year:i.ProductionYear||'',kind:i.Type==='Series'?'series':'film',play:watchUrl(i.Id),request:null};
+        var row={title:i.Name,year:i.ProductionYear||'',kind:i.Type==='Series'?'series':'film',play:watchUrl(i.Id),item:i.Id,request:null};
         var t=(i.ProviderIds||{}).Tmdb;if(t)byTmdb[row.kind+':'+t]=row;
         rows.push(row);
       });
@@ -947,7 +981,7 @@
         var row=byTmdb[kind+':'+x.id];
         if(!row){
           row={title:x.title||x.name,year:(x.releaseDate||x.firstAirDate||'').slice(0,4),kind:kind,
-               play:(st===5||st===4)&&m.jellyfinMediaId?watchUrl(m.jellyfinMediaId):null,request:null};
+               play:(st===5||st===4)&&m.jellyfinMediaId?watchUrl(m.jellyfinMediaId):null,item:m.jellyfinMediaId||null,request:null};
           rows.push(row);
         }
         if(st===4)row.request={label:'Request missing episodes',url:url};
@@ -973,6 +1007,7 @@
         function row(r){
           return'<div class="sr-item"><span>'+esc(r.title)+' <span class="tag">'+esc(r.year)+' · '+r.kind+'</span></span><span class="sr-acts">'
             +(r.play?'<a class="sr-act play" href="'+r.play+'">▶ Play</a>':'')
+            +(r.play&&r.item?'<button class="sr-act del" data-delete="'+esc(r.item)+'">Delete</button>':'')
             +(r.request?'<a class="sr-act'+(r.request.dim?' dim':'')+'" href="'+r.request.url+'">'+esc(r.request.label)+'</a>':'')+'</span></div>';
         }
         var html=(here.length?'<div class="sr-group">In your library</div>'+here.map(row).join(''):'')
