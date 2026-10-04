@@ -20,11 +20,13 @@ from mediaserver.ui import err
 _held: dict[Path, int] = {}   # state dir → the open, locked file
 _workers_held: dict[Path, int] = {}   # state dir → the worker lock an operation holds
 
-# The background workers (postimport) take .state/worker.lock for each
-# round's changes, without waiting: if they can't, an operation has it and
-# they skip the round. An operation takes it after its own lock and holds
-# it to the end, waiting (WORKER_WAIT at most) for a round already underway
-# to finish its file. So the two never change things at the same time.
+# The background workers (postimport, netwatch) share .state/worker.lock
+# while they change things, without waiting: if they can't get it, an
+# operation has it and they skip. An operation takes it exclusively after
+# its own lock and holds it to the end, waiting (WORKER_WAIT at most) for
+# the workers' rounds underway to finish. Workers don't block each other
+# (netwatch pausing Cleanuparr mustn't wait for a long rewrite); an
+# operation and a worker never change things at the same time.
 WORKER_WAIT = 30 * 60
 
 
@@ -82,7 +84,7 @@ class worker_round:
     def __enter__(self) -> bool:
         self.fd = _worker_fd(self.state)
         try:
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(self.fd, fcntl.LOCK_SH | fcntl.LOCK_NB)   # shared among workers
             self.ok = True
         except BlockingIOError:
             self.ok = False

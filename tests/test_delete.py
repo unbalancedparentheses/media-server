@@ -72,7 +72,7 @@ class Delete(Stack):
 
         @first(s.qbittorrent, "GET", "/api/v2/torrents/info")
         def info(req):
-            return [{"hash": req.arg("hashes")}] if req.arg("hashes") in self.contents else []
+            return [{"hash": req.arg("hashes"), "save_path": "/dl"}] if req.arg("hashes") in self.contents else []
 
         @first(s.qbittorrent, "POST", "/api/v2/torrents/delete")
         def qdelete(req):
@@ -133,6 +133,16 @@ class Delete(Stack):
         result = self.library.delete("jfseries", 1, False)
         self.assertEqual(self.deleted_hashes, [])
         self.assertEqual(result["torrents_kept"], ["Kaiji S01"])
+
+    def test_same_file_names_in_different_season_folders(self):
+        """Season 1/01.mkv proves nothing about Season 2/01.mkv: whole paths
+        are compared, so a pack of both seasons is kept"""
+        self.sonarr_history["1"] = [{"downloadId": "PACK", "episodeId": 501, "sourceTitle": "Kaiji Complete"}]
+        self.sonarr_history["3"] = [{"downloadId": "PACK", "episodeId": 501, "data": {"droppedPath": "/dl/Kaiji/Season 1/01.mkv"}}]
+        self.contents["pack"] = [{"name": "Kaiji/Season 1/01.mkv"}, {"name": "Kaiji/Season 2/01.mkv"}]
+        result = self.library.delete("jfseries", 1, False)
+        self.assertEqual(self.deleted_hashes, [])
+        self.assertEqual(result["torrents_kept"], ["Kaiji Complete"])
 
     def test_a_pack_of_films_is_kept_whatever_the_sizes(self):
         self.contents["abcdef"] = [{"name": "Bond/Skyfall.mkv", "size": 30 * 1024 ** 3}, {"name": "Bond/Spectre.mkv", "size": 100 * 1024 ** 2}]

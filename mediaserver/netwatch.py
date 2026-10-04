@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 from mediaserver import common as c
+from mediaserver import lock
 from mediaserver.config import local
 
 PROBES = ("https://www.gstatic.com/generate_204", "https://cloudflare.com/cdn-cgi/trace")
@@ -101,6 +102,13 @@ class Netwatch:
             c.log(f"re-tested {name}'s indexers")
 
         def all_tests() -> None:
+            with lock.worker_round(self.lock.parent) as ok:
+                if not ok:
+                    self.reconnected = True   # an operation started: retried next round
+                    return
+                tests()
+
+        def tests() -> None:
             retest("Prowlarr", local("prowlarr") + "/api/v1/indexer/testall", c.arr_key(self.config, "prowlarr"))
             apps = [threading.Thread(target=retest, args=(name, url, c.arr_key(self.config, app)), daemon=True)
                     for name, url, app in (("Sonarr", local("sonarr") + "/api/v3/indexer/testall", "sonarr"),
@@ -133,13 +141,18 @@ class Netwatch:
         # Came back online: the re-tests run once nothing else is in the way
         if before == "offline" and self.state == "online":
             self.reconnected = True
-        # Setup is changing things: keep watching, don't touch Cleanuparr
-        if c.operation_running(self.lock):
-            if not self.waiting:
-                c.log("an install or other operation is running; leaving Cleanuparr to it")
-            self.waiting = True
-            return
-        self.waiting = False
+        # Changes only while holding the worker lock: an install or other
+        # operation holds it while it runs, and waits for this round
+        with lock.worker_round(self.lock.parent) as ok:
+            if not ok:
+                if not self.waiting:
+                    c.log("an install or other operation is running; leaving Cleanuparr to it")
+                self.waiting = True
+                return
+            self.waiting = False
+            self.changes()
+
+    def changes(self) -> None:
         if self.state == "offline":
             if not self.set_cleaner(False):
                 c.log("couldn't pause Cleanuparr's queue cleaner (retrying)")

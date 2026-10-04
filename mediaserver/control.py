@@ -183,24 +183,28 @@ class Library:
 
         def in_scope(record: dict) -> bool:
             return season is None or episodes_of.get(record.get("episodeId")) == season
-        # File names imported for what's being deleted, per download
+        # The complete paths imported for what's being deleted, per download
+        # (Season 1/01.mkv and Season 2/01.mkv are different files)
         ours: dict = {}
         for r in imports:
             dropped = (r.get("data") or {}).get("droppedPath") or ""
             if r.get("downloadId") and dropped and in_scope(r):
-                ours.setdefault(r["downloadId"].lower(), set()).add(os.path.basename(dropped))
+                ours.setdefault(r["downloadId"].lower(), set()).add(os.path.normpath(dropped))
         names = {}
         for g in grabs:
             if g.get("downloadId") and in_scope(g):
                 names.setdefault(g["downloadId"].lower(), g.get("sourceTitle") or g["downloadId"])
         delete, kept = [], []
         for h, name in names.items():
-            files = self.torrent_files(h)
-            if files is None:
-                if self.torrent_known(h):
-                    kept.append(name)   # can't see inside it: kept
-                continue                # (or qBittorrent no longer has it)
-            videos = [os.path.basename(f.get("name") or "") for f in files
+            info = self.torrent_info(h)
+            if info == {}:
+                continue          # qBittorrent no longer has it
+            files = self.torrent_files(h) if info else None
+            save = (info or {}).get("save_path") or ""
+            if files is None or not save:
+                kept.append(name)   # can't see inside it, or where it is: kept
+                continue
+            videos = [os.path.normpath(os.path.join(save, f.get("name") or "")) for f in files
                       if (f.get("name") or "").lower().endswith(self.VIDEO) and "sample" not in (f.get("name") or "").lower()]
             if videos and set(videos) <= ours.get(h, set()):
                 delete.append(h)
@@ -208,9 +212,14 @@ class Library:
                 kept.append(name)
         return delete, kept
 
-    def torrent_known(self, h: str) -> bool:
+    def torrent_info(self, h: str) -> dict | None:
+        """qBittorrent's entry for a torrent; {} when it doesn't have it;
+        None when it couldn't be asked"""
         r = c.request(f"{local('qbittorrent')}/api/v2/torrents/info?hashes={h}", timeout=20)
-        return bool(r.json([])) if r.ok else True
+        if not r.ok:
+            return None
+        rows = r.json([]) or []
+        return rows[0] if rows else {}
 
     # ─── Deleting, from a saved plan ─────────────────────────────
     # The plan (ids, torrents, what's left to do) is saved before anything

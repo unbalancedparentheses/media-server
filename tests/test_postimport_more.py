@@ -528,8 +528,8 @@ class WorkerLock(unittest.TestCase):
     def test_a_round_underway_makes_an_operation_wait_or_refuse(self):
         from mediaserver import lock
         from mediaserver.ui import SetupError
-        with lock.worker_round(self.state) as ok:
-            self.assertTrue(ok)
+        with lock.worker_round(self.state) as ok, lock.worker_round(self.state) as other:
+            self.assertTrue(ok and other)   # workers (postimport, netwatch) don't block each other
             with self.assertRaises(SetupError), redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
                 lock.acquire(self.state, wait_workers=0)
             self.assertFalse((self.state / "lock").exists())   # and the operation lock was let go

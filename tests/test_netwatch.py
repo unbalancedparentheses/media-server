@@ -95,15 +95,12 @@ class NetwatchTests(unittest.TestCase):
         self.nw.online = False
         self.rounds(3)
         self.assertFalse(self.nw.cleaner_on)
-        owner = subprocess.Popen(["sleep", "30"])
-        self.addCleanup(owner.kill)
-        c.write_atomic(self.root / "state/lock/pid", f"{owner.pid}\n")
+        from mediaserver import lock
+        lock.acquire(self.root / "state", wait_workers=0)   # an install running
         self.nw.online = True
         self.rounds()
         self.assertTrue(self.nw.cleaner_on is False and self.nw.reconnects == 0)
-        owner.kill()
-        owner.wait()
-        shutil.rmtree(self.root / "state/lock")
+        lock.release(self.root / "state")
         self.rounds()
         self.assertTrue(self.nw.cleaner_on)
         self.assertEqual(self.nw.reconnects, 1)
