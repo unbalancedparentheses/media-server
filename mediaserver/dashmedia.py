@@ -331,8 +331,24 @@ def poster_url(item: dict) -> str | None:
     return next((i.get("remoteUrl") for i in item.get("images") or [] if i.get("coverType") == "poster"), None)
 
 
+def unique_requests(reqs: list, limit: int = 10) -> list:
+    """One per title (newest first, as Seerr lists them): asking twice for
+    The Odyssey is one row, dated from the first ask, with how many times"""
+    by_title: dict = {}
+    for r in reqs:
+        media = r.get("media") or {}
+        key = (r.get("type"), media.get("tmdbId") or media.get("id") or r.get("id"))
+        if key in by_title:
+            first = by_title[key]
+            first["times"] = first.get("times", 1) + 1
+            first["firstAsked"] = min(first.get("firstAsked") or first.get("createdAt") or "", r.get("createdAt") or "") or None
+            continue
+        by_title[key] = dict(r, times=1, firstAsked=r.get("createdAt"))
+    return list(by_title.values())[:limit]
+
+
 def requests():
-    reqs = seerr("request?take=10&sort=added").get("results", [])
+    reqs = unique_requests(seerr("request?take=30&sort=added").get("results", []))
     movies = {m.get("tmdbId"): m for m in radarr("movie")}
     series = {s.get("tvdbId"): s for s in sonarr("series")}
     queue_m, queue_s = {}, {}
@@ -354,8 +370,8 @@ def requests():
         item = {"title": details.get("title") or details.get("name") or f"TMDB {media.get('tmdbId')}",
                 "year": (details.get("releaseDate") or details.get("firstAirDate") or "")[:4],
                 "type": kind, "tmdb": media.get("tmdbId"), "poster": details.get("posterPath"),
-                "by": (r.get("requestedBy") or {}).get("displayName", ""), "date": r.get("createdAt"),
-                "watch": media.get("jellyfinMediaId")}
+                "by": (r.get("requestedBy") or {}).get("displayName", ""), "date": r.get("firstAsked") or r.get("createdAt"),
+                "times": r.get("times", 1), "watch": media.get("jellyfinMediaId")}
         requested = {"status": r.get("status"), "by": item["by"]}
         if r.get("status") == 1:
             item.update(state="waiting", text="waiting for approval")

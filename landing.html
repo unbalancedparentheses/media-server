@@ -737,7 +737,7 @@
           var thumb=src?'<img class="thumb" loading="lazy" src="'+esc(src)+'" alt="" onerror="this.style.visibility=\'hidden\'">':'<div class="thumb"></div>';
           var href=r.state==='available'?watchUrl(r.watch):(r.tmdb?seerrBase+'/'+r.type+'/'+r.tmdb:'#');
           var fix=r.state!=='available'&&adminUrl(r.admin);
-          var sub=(r.type==='tv'?'Series':'Movie')+(r.by?' · requested by '+esc(r.by):r.date?'':' · on its way')+(r.date?' · '+ago(r.date):'');
+          var sub=(r.type==='tv'?'Series':'Movie')+(r.by?' · requested by '+esc(r.by):r.date?'':' · on its way')+(r.date?' · '+ago(r.date):'')+(r.times>1?' · asked '+r.times+'×':'');
           return'<div class="item link req">'+thumb+'<div class="i-info"><a href="'+href+'"><div class="i-title">'+esc(r.title)+(r.year?' ('+r.year+')':'')+'</div>'
             +'<div class="i-sub">'+sub+'</div></a>'+stepper(stalled(r,live(r,s.fixing)))+'</div>'
             +'<div class="i-right">'+(r.state==='available'?'<a class="i-link" href="'+href+'">Watch →</a>':fix?'<a class="i-link" href="'+fix+'">Open in '+(r.type==='tv'?'Sonarr':'Radarr')+' →</a>':'')+'</div></div>';

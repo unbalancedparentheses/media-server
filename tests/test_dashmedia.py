@@ -408,3 +408,14 @@ class DubStatus(unittest.TestCase):
                 mock.patch.object(dm, "jellyfin", jellyfin):
             dubs = dm.health()["dubs"]
         self.assertEqual(dubs[0]["status"], "No Japanese or Dual Audio release out yet (looked 2×; again every 12 h)")
+
+
+class UniqueRequests(unittest.TestCase):
+    def test_one_row_per_title_dated_from_the_first_ask(self):
+        reqs = [{"id": 9, "type": "movie", "media": {"tmdbId": 1}, "createdAt": "2026-10-03T22:00:00Z"},
+                {"id": 8, "type": "movie", "media": {"tmdbId": 2}, "createdAt": "2026-10-01T00:00:00Z"},
+                {"id": 3, "type": "movie", "media": {"tmdbId": 1}, "createdAt": "2026-09-28T00:00:00Z"},
+                {"id": 2, "type": "tv", "media": {"tmdbId": 1}, "createdAt": "2026-09-27T00:00:00Z"}]   # a series, same number
+        out = dm.unique_requests(reqs)
+        self.assertEqual([(r["id"], r["times"], r["firstAsked"]) for r in out],
+                         [(9, 2, "2026-09-28T00:00:00Z"), (8, 1, "2026-10-01T00:00:00Z"), (2, 1, "2026-09-27T00:00:00Z")])
