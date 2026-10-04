@@ -157,58 +157,194 @@ class Library:
                 "seasons": [{"number": x["seasonNumber"], "size": (x.get("statistics") or {}).get("sizeOnDisk") or 0}
                             for x in s.get("seasons") or [] if (x.get("statistics") or {}).get("sizeOnDisk")]}
 
-    def downloads(self, title: dict, season: int | None) -> set:
-        """qBittorrent hashes of what was grabbed for it (or for that season)"""
+    # ─── Which torrents can go ───────────────────────────────────
+    # A torrent is deleted (with its data) only when everything in it is
+    # within what's being deleted: a season pack of other seasons too, or a
+    # pack of several films, is kept and named in the result.
+
+    def torrent_files(self, h: str) -> list | None:
+        r = c.request(f"{local('qbittorrent')}/api/v2/torrents/files?hash={h}", timeout=20)
+        files = r.json(None) if r.ok else None
+        return files if isinstance(files, list) else None
+
+    def torrents(self, title: dict, season: int | None) -> tuple[list, list]:
+        """(hashes to delete, names of torrents kept because they hold more)"""
         if title["kind"] == "movie":
             grabs = self.arr("radarr", "GET", f"history/movie?movieId={title['id']}&eventType=1") or []
-            return {g["downloadId"].lower() for g in grabs if g.get("downloadId")}
-        grabs = self.arr("sonarr", "GET", f"history/series?seriesId={title['id']}&eventType=1") or []
-        if season is not None:
-            seasons = {e["id"]: e.get("seasonNumber") for e in self.arr("sonarr", "GET", f"episode?seriesId={title['id']}") or []}
-            grabs = [g for g in grabs if seasons.get(g.get("episodeId")) == season]
-        return {g["downloadId"].lower() for g in grabs if g.get("downloadId")}
+            episodes_of: dict = {}
+        else:
+            grabs = self.arr("sonarr", "GET", f"history/series?seriesId={title['id']}&eventType=1") or []
+            episodes_of = {e["id"]: e.get("seasonNumber") for e in self.arr("sonarr", "GET", f"episode?seriesId={title['id']}") or []}
+        by_hash: dict = {}
+        for g in grabs:
+            if g.get("downloadId"):
+                by_hash.setdefault(g["downloadId"].lower(), []).append(g)
+        delete, kept = [], []
+        for h, entries in by_hash.items():
+            if season is not None:
+                seasons = {episodes_of.get(g.get("episodeId")) for g in entries}
+                if season not in seasons:
+                    continue   # another season's: not ours to touch
+                if seasons != {season}:
+                    kept.append(entries[0].get("sourceTitle") or h)
+                    continue
+            files = self.torrent_files(h)
+            if files is None:
+                if self.torrent_known(h):
+                    kept.append(entries[0].get("sourceTitle") or h)   # can't see inside: kept
+                continue   # (or it's gone already)
+            if not self.only_this(files, title, season):
+                kept.append(entries[0].get("sourceTitle") or h)
+                continue
+            delete.append(h)
+        return delete, kept
+
+    def torrent_known(self, h: str) -> bool:
+        r = c.request(f"{local('qbittorrent')}/api/v2/torrents/info?hashes={h}", timeout=20)
+        return bool(r.json([])) if r.ok else True
+
+    @staticmethod
+    def only_this(files: list, title: dict, season: int | None) -> bool:
+        """Every file in the torrent is within what's being deleted"""
+        import re
+        videos = [f for f in files if re.search(r"\.(mkv|mp4|m4v|avi|ts|wmv)$", f.get("name") or "", re.I)]
+        if title["kind"] == "movie":
+            # A pack of films: more than one big video
+            return len([f for f in videos if (f.get("size") or 0) > 300 * 1024 ** 2]) <= 1
+        if season is None:
+            return True
+        for f in files:
+            name = f.get("name") or ""
+            found = {int(x) for x in re.findall(r"[Ss](\d{1,2})[Ee]\d{1,3}", name)}
+            found |= {int(x) for x in re.findall(r"[Ss]eason[ ._-]?(\d{1,2})", name)}
+            if found and found != {season}:
+                return False
+        return True
+
+    # ─── Deleting, from a saved plan ─────────────────────────────
+    # The plan (ids, torrents, what's left to do) is saved before anything
+    # is deleted, and each step crossed off when done: a failure halfway is
+    # finished by trying again, even once Radarr/Sonarr no longer have it.
+
+    @property
+    def plans_file(self) -> Path:
+        return self.state / "deletions.json"
+
+    def plans(self) -> dict:
+        data = c.read_json(self.plans_file, {})
+        return data if isinstance(data, dict) else {}
+
+    def save_plan(self, item_id: str, plan: dict | None) -> None:
+        plans = self.plans()
+        if plan is None:
+            plans.pop(item_id, None)
+        else:
+            plans[item_id] = plan
+        c.write_json(self.plans_file, plans, mode=0o600)
+
+    def plan(self, item_id: str, season: int | None, exclude: bool) -> dict:
+        title = self.resolve(item_id)
+        hashes, kept = self.torrents(title, season)
+        plan = {"title": title["title"], "kind": title["kind"], "id": title["id"], "tmdb": title.get("tmdb"),
+                "season": season, "exclude": exclude, "hashes": hashes, "kept": kept, "files": [], "bytes": title["size"],
+                "warnings": [], "started": int(__import__("time").time())}
+        if title["kind"] == "movie":
+            plan["steps"] = ["queue", "arr", "torrents", "seerr", "refresh"]
+        elif season is None:
+            plan["steps"] = ["queue", "arr", "torrents", "seerr", "refresh"]
+        else:
+            files = [f for f in self.arr("sonarr", "GET", f"episodefile?seriesId={title['id']}") or [] if f.get("seasonNumber") == season]
+            plan.update(title=f"{title['title']} season {season}", files=[f["id"] for f in files],
+                        bytes=sum(f.get("size") or 0 for f in files), steps=["unmonitor", "files", "torrents", "refresh"])
+        return plan
+
+    def step(self, plan: dict, name: str) -> None:
+        app = "radarr" if plan["kind"] == "movie" else "sonarr"
+        if name == "queue":
+            ids = "movieIds" if plan["kind"] == "movie" else "seriesIds"
+            for q in (self.arr(app, "GET", f"queue?{ids}={plan['id']}") or {}).get("records") or []:
+                self.arr(app, "DELETE", f"queue/{q['id']}?removeFromClient=true&blocklist=false")
+        elif name == "arr":
+            exclude = "true" if plan["exclude"] else "false"
+            path = (f"movie/{plan['id']}?deleteFiles=true&addImportExclusion={exclude}" if plan["kind"] == "movie"
+                    else f"series/{plan['id']}?deleteFiles=true&addImportListExclusion={exclude}")
+            r = c.request(f"{local(app)}/api/v3/{path}", "DELETE", {"X-Api-Key": c.arr_key(self.config, app)}, timeout=60)
+            if not (r.ok or r.status == 404):   # 404: gone already (a resumed plan)
+                raise ApiError(f"{app} didn't delete it (HTTP {r.status or 'no answer'})")
+        elif name == "unmonitor":
+            series = self.arr("sonarr", "GET", f"series/{plan['id']}")
+            series["seasons"] = [dict(x, monitored=False) if x.get("seasonNumber") == plan["season"] else x
+                                 for x in series.get("seasons") or []]
+            self.arr("sonarr", "PUT", f"series/{plan['id']}", series)
+        elif name == "files":
+            for fid in list(plan["files"]):
+                r = c.request(f"{local('sonarr')}/api/v3/episodefile/{fid}", "DELETE", {"X-Api-Key": c.arr_key(self.config, "sonarr")},
+                              timeout=60)
+                if not (r.ok or r.status == 404):
+                    raise ApiError(f"Sonarr didn't delete a file (HTTP {r.status or 'no answer'})")
+                plan["files"].remove(fid)
+        elif name == "torrents" and plan["hashes"]:
+            r = c.request(f"{local('qbittorrent')}/api/v2/torrents/delete", "POST",
+                          form={"hashes": "|".join(sorted(plan["hashes"])), "deleteFiles": "true"}, timeout=20)
+            if not r.ok:
+                raise ApiError("qBittorrent didn't remove its torrents")
+        elif name == "seerr" and plan.get("tmdb"):
+            kind = "movie" if plan["kind"] == "movie" else "tv"
+            seerr = {"X-Api-Key": c.seerr_key(self.config)}
+            media = (c.try_json(f"{local('seerr')}/api/v1/{kind}/{plan['tmdb']}", seerr) or {}).get("mediaInfo") or {}
+            if media.get("id"):
+                r = c.request(f"{local('seerr')}/api/v1/media/{media['id']}", "DELETE", seerr, timeout=20)
+                if not (r.ok or r.status == 404):
+                    raise ApiError("Seerr didn't clear it")
+        elif name == "refresh":
+            c.request(f"{local('jellyfin')}/Library/Refresh", "POST", c.jellyfin_auth(self.state), body=b"", timeout=20)
+
+    def pending(self, item_id: str) -> dict | None:
+        return self.plans().get(item_id)
 
     def delete(self, item_id: str, season: int | None, exclude: bool) -> dict:
-        title = self.resolve(item_id)
-        hashes = self.downloads(title, season)
-        warnings = []
-        if title["kind"] == "movie":
-            for q in (self.arr("radarr", "GET", f"queue?movieIds={title['id']}") or {}).get("records") or []:
-                self.arr("radarr", "DELETE", f"queue/{q['id']}?removeFromClient=true&blocklist=false")
-            self.arr("radarr", "DELETE", f"movie/{title['id']}?deleteFiles=true&addImportExclusion={'true' if exclude else 'false'}")
-            freed = title["size"]
-        elif season is None:
-            for q in (self.arr("sonarr", "GET", f"queue?seriesIds={title['id']}") or {}).get("records") or []:
-                self.arr("sonarr", "DELETE", f"queue/{q['id']}?removeFromClient=true&blocklist=false")
-            self.arr("sonarr", "DELETE", f"series/{title['id']}?deleteFiles=true&addImportListExclusion={'true' if exclude else 'false'}")
-            freed = title["size"]
-        else:
-            # One season: not wanted any more (or it'd be downloaded again),
-            # then its files
-            series = self.arr("sonarr", "GET", f"series/{title['id']}")
-            series["seasons"] = [dict(x, monitored=False) if x.get("seasonNumber") == season else x for x in series.get("seasons") or []]
-            self.arr("sonarr", "PUT", f"series/{title['id']}", series)
-            files = [f for f in self.arr("sonarr", "GET", f"episodefile?seriesId={title['id']}") or [] if f.get("seasonNumber") == season]
-            for f in files:
-                self.arr("sonarr", "DELETE", f"episodefile/{f['id']}")
-            freed = sum(f.get("size") or 0 for f in files)
-            title["title"] = f"{title['title']} season {season}"
-        # The seeding copies
-        if hashes:
-            r = c.request(f"{local('qbittorrent')}/api/v2/torrents/delete", "POST",
-                          form={"hashes": "|".join(sorted(hashes)), "deleteFiles": "true"}, timeout=20)
-            if not r.ok:
-                warnings.append("its torrents couldn't be removed from qBittorrent")
-        # Requestable again (a whole title only)
-        if season is None and title.get("tmdb"):
-            kind = "movie" if title["kind"] == "movie" else "tv"
-            seerr = {"X-Api-Key": c.seerr_key(self.config)}
-            media = (c.try_json(f"{local('seerr')}/api/v1/{kind}/{title['tmdb']}", seerr) or {}).get("mediaInfo") or {}
-            if media.get("id") and not c.request(f"{local('seerr')}/api/v1/media/{media['id']}", "DELETE", seerr, timeout=20).ok:
-                warnings.append("Seerr still lists it as available until its next sync")
-        c.request(f"{local('jellyfin')}/Library/Refresh", "POST", c.jellyfin_auth(self.state), body=b"", timeout=20)
-        c.log(f"deleted from the dashboard: {title['title']} ({freed // 1024 ** 2} MB, {len(hashes)} torrents)")
-        return {"deleted": title["title"], "freed": freed, "torrents": len(hashes), "warnings": warnings}
+        import shutil
+        plan = self.pending(item_id)
+        resumed = plan is not None
+        if plan is None:
+            plan = self.plan(item_id, season, exclude)
+            self.save_plan(item_id, plan)   # before anything is deleted
+        free_before = shutil.disk_usage(self.config.parent).free
+        while plan["steps"]:
+            self.step(plan, plan["steps"][0])   # raises: the plan stays, retrying resumes it
+            plan["steps"].pop(0)
+            self.save_plan(item_id, plan)
+        self.save_plan(item_id, None)
+        measured = shutil.disk_usage(self.config.parent).free - free_before
+        c.log(f"deleted from the dashboard: {plan['title']} (about {plan['bytes'] // 1024 ** 2} MB of files, "
+              f"{len(plan['hashes'])} torrents{', kept ' + str(len(plan['kept'])) if plan['kept'] else ''})")
+        return {"deleted": plan["title"], "resumed": resumed,
+                # Sonarr/Radarr's sizes: an estimate (hardlinks, torrents)
+                "files_removed": plan["bytes"], "disk_freed": max(measured, 0),
+                "torrents": len(plan["hashes"]), "torrents_kept": plan["kept"], "warnings": plan["warnings"]}
+
+
+# Wrong passwords: at most WRONG_ALLOWED in WRONG_WINDOW, counted before
+# Jellyfin is asked, one check at a time (parallel guesses wait their turn)
+WRONG_ALLOWED, WRONG_WINDOW = 5, 600
+_wrong: list[float] = []
+_auth = threading.Lock()
+
+
+def check_password(lib: "Library", password: str) -> tuple[int, dict] | None:
+    """None when it's right; else (status, answer)"""
+    import time
+    with _auth:
+        now = time.time()
+        _wrong[:] = [t for t in _wrong if now - t < WRONG_WINDOW]
+        if len(_wrong) >= WRONG_ALLOWED:
+            wait = int((WRONG_WINDOW - (now - _wrong[0])) // 60) + 1
+            return 429, {"error": f"Too many wrong passwords; try again in {wait} min"}
+        if lib.password_ok(password):
+            return None
+        _wrong.append(now)
+        time.sleep(1)
+        return 403, {"error": "That's not the Jellyfin password"}
 
 
 def parse_delete(body: bytes) -> tuple[str, int | None, bool, str] | str:
@@ -216,6 +352,8 @@ def parse_delete(body: bytes) -> tuple[str, int | None, bool, str] | str:
         data = json.loads(body or b"{}")
     except ValueError:
         return "not JSON"
+    if not isinstance(data, dict):
+        return "the request must be a JSON object"
     item, season, exclude, password = data.get("item"), data.get("season"), data.get("exclude", False), data.get("password")
     if not isinstance(item, str) or not item.isalnum() or len(item) > 64:
         return '"item" must be a library item id'
@@ -268,6 +406,10 @@ def handler(speed: Speed, library: "Library | None" = None):
                 item = self.path.split("=", 1)[1]
                 if not item.isalnum():
                     return self.answer(400, {"error": "not a library item"})
+                unfinished = lib.pending(item)
+                if unfinished:
+                    return self.answer(200, {"kind": unfinished["kind"], "title": unfinished["title"], "size": unfinished["bytes"],
+                                             "seasons": [], "unfinished": unfinished["steps"]})
                 try:
                     return self.answer(200, lib.resolve(item))
                 except LookupError as e:
@@ -297,17 +439,26 @@ def handler(speed: Speed, library: "Library | None" = None):
             if isinstance(parsed, str):
                 return self.answer(400, {"error": parsed})
             item, season, exclude, password = parsed
-            if not lib.password_ok(password):
-                import time
-                time.sleep(1)   # guessing is slow
-                return self.answer(403, {"error": "That's not the Jellyfin password"})
-            try:
-                with LOCK:
+            refused = check_password(lib, password)
+            if refused:
+                return self.answer(*refused)
+            from mediaserver import lock
+            from mediaserver.ui import SetupError
+            with LOCK:
+                # The same lock as installs, restores and the e2e test (the
+                # background workers wait while it's held)
+                try:
+                    lock.acquire(lib.state)
+                except SetupError:
+                    return self.answer(409, {"error": "An install or other operation is running; try again when it's done"})
+                try:
                     result = lib.delete(item, season, exclude)
-            except LookupError as e:
-                return self.answer(404, {"error": f"Can't delete it here: {e}"})
-            except (ApiError, *c.HTTP_ERRORS) as e:
-                return self.answer(502, {"error": f"It couldn't be deleted completely ({e}); check Radarr/Sonarr"})
+                except LookupError as e:
+                    return self.answer(404, {"error": f"Can't delete it here: {e}"})
+                except (ApiError, *c.HTTP_ERRORS) as e:
+                    return self.answer(502, {"error": f"Partly deleted ({e}). Delete it again to finish: what's left was saved"})
+                finally:
+                    lock.release(lib.state)
             self.answer(200, result)
 
         def log_message(self, format, *args):  # noqa: A002 (the base class's name)

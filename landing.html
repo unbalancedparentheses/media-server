@@ -552,9 +552,10 @@
         if(delItem!==item)return;
         if(!res.ok){document.getElementById('del-body').textContent=res.j.error||'Can\'t delete it here';return;}
         delInfo=res.j;
-        document.getElementById('del-title').textContent='Delete '+delInfo.title+'?';
-        var html=delInfo.kind==='movie'?'<p>The film and its files ('+gb(delInfo.size)+').</p>'
-          :'<label class="del-opt"><input type="radio" name="del-what" value="" checked> The whole series ('+gb(delInfo.size)+')</label>'
+        document.getElementById('del-title').textContent=(delInfo.unfinished?'Finish deleting ':'Delete ')+delInfo.title+'?';
+        var html=delInfo.unfinished?'<p>Deleting it didn\'t finish last time; still to do: '+esc(delInfo.unfinished.join(', '))+'.</p>'
+          :delInfo.kind==='movie'?'<p>The film and its files (about '+gb(delInfo.size)+').</p>'
+          :'<label class="del-opt"><input type="radio" name="del-what" value="" checked> The whole series (about '+gb(delInfo.size)+')</label>'
             +delInfo.seasons.map(function(x){return'<label class="del-opt"><input type="radio" name="del-what" value="'+x.number+'"> Only season '+x.number+' ('+gb(x.size)+'; the rest stays)</label>';}).join('');
         document.getElementById('del-body').innerHTML=html;
         document.getElementById('del-go').disabled=false;
@@ -575,8 +576,13 @@
         body:JSON.stringify({item:delItem,season:season,exclude:document.getElementById('del-exclude').checked,password:pass})})
         .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j};});}).then(function(res){
           if(!res.ok){msg.textContent=res.j.error||'Not deleted';document.getElementById('del-go').disabled=false;return;}
-          msg.textContent='Deleted '+res.j.deleted+' · '+gb(res.j.freed)+' freed'+(res.j.warnings.length?' · '+res.j.warnings.join('; '):'');
-          setTimeout(function(){closeDelete();refreshStatus();},1800);
+          // What was removed is an estimate (Sonarr/Radarr's sizes); the
+          // disk's free space is measured (and can lag behind qBittorrent)
+          var j=res.j,parts=['Deleted '+j.deleted,'about '+gb(j.files_removed)+' of files removed'];
+          if(j.disk_freed)parts.push('free space up '+gb(j.disk_freed)+' so far');
+          if(j.torrents_kept&&j.torrents_kept.length)parts.push('kept '+plural(j.torrents_kept.length,'torrent')+' that also hold other things: '+j.torrents_kept.join(', '));
+          msg.textContent=parts.concat(j.warnings||[]).join(' · ');
+          setTimeout(function(){closeDelete();refreshStatus();},j.torrents_kept&&j.torrents_kept.length?6000:2500);
         }).catch(function(){msg.textContent='Not deleted: the dashboard couldn\'t reach it';document.getElementById('del-go').disabled=false;});
     });
 
