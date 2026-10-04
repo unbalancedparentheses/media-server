@@ -695,8 +695,9 @@
         (hl.looking||[]).forEach(function(k){rows+='<div class="h-row"><span class="h-ico" style="color:var(--blue)">↻</span><div class="i-info"><div>'+esc(k.title)+'</div><div class="i-sub">Rejected: '+esc(k.reason)+' · looking for a better release since '+ago(new Date(k.since*1000))+'</div></div></div>';});
         (hl.dubs||[]).forEach(function(d){
           var u=adminUrl(d.admin);
-          rows+='<div class="h-row"><span class="h-ico t-warn">!</span><div class="i-info"><div>'+esc(d.title)+': '+plural(d.episodes,'episode')+' without Japanese audio</div><div class="i-sub">A dub. For Japanese audio, pick a Dual Audio or Japanese release'
-            +(u?' · <a class="i-link" href="'+u+'">Open in Sonarr →</a>':' in Sonarr')+'</div></div></div>';
+          rows+='<div class="h-row"><span class="h-ico t-warn">!</span><div class="i-info"><div>'+esc(d.title)+': '+plural(d.episodes,'episode')+' without Japanese audio</div><div class="i-sub">'
+            +(d.status?esc(d.status):'A dub; replaced automatically once a Japanese or Dual Audio release is out')
+            +(u?' · <a class="i-link" href="'+u+'">Open in Sonarr →</a>':'')+'</div></div></div>';
         });
         week.forEach(function(f){rows+='<div class="h-row"><span class="h-ico t-good">✓</span><div class="i-info"><div>'+esc(f.title)+(f.episodes>1?' <span style="color:var(--text3)">· '+f.episodes+' episodes</span>':'')+'</div><div class="i-sub">'+esc(f.what)+' · '+ago(new Date(f.time*1000))+'</div></div></div>';});
         show('health-sec',!!rows||hl.checks_running===false);

@@ -389,3 +389,22 @@ class Because(unittest.TestCase):
             watched = dm.recently_watched()
         self.assertEqual([(w["title"], w["kind"], w["tmdb"]) for w in watched],
                          [("Skyfall", "movie", 37724), ("Steins;Gate", "tv", 42509), ("Spectre", "movie", 206647)])
+
+
+class DubStatus(unittest.TestCase):
+    def test_health_says_what_the_replacement_is_doing(self):
+        import tempfile, shutil, json
+        state = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, state)
+        (state / "postimport").mkdir()
+        (state / "postimport/stuck.json").write_text(json.dumps({"dubs": {"13:1": {"title": "Kaiji season 1", "status": "waiting", "looks": 2}}}))
+        sonarr = [{"title": "Kaiji", "titleSlug": "kaiji", "seriesType": "anime", "originalLanguage": {"name": "Japanese"}}]
+
+        def jellyfin(path):
+            if path == "Library/VirtualFolders":
+                return [{"Name": "Anime", "ItemId": "a"}]
+            return {"Items": [{"SeriesName": "Kaiji", "MediaStreams": [{"Type": "Audio", "Language": "eng"}]}]}
+        with mock.patch.object(dm, "STATE", state), mock.patch.object(dm, "sonarr", return_value=sonarr), \
+                mock.patch.object(dm, "jellyfin", jellyfin):
+            dubs = dm.health()["dubs"]
+        self.assertEqual(dubs[0]["status"], "No Japanese or Dual Audio release out yet (looked 2×; again every 12 h)")

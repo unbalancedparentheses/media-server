@@ -730,6 +730,16 @@ def health():
                     d = dubs.setdefault(item["SeriesName"], {"title": item["SeriesName"], "episodes": 0,
                                                              "admin": f"sonarr:/series/{japanese[item['SeriesName']]}"})
                     d["episodes"] += 1
+    # What the automatic replacement is doing about each (stuck.py)
+    looks = (c.read_json(STATE / "postimport/stuck.json", {}) or {}).get("dubs") or {}
+    for d in dubs.values():
+        seasons = [e for e in looks.values() if (e.get("title") or "").startswith(d["title"] + " season ")]
+        if any(e.get("status") == "replacing" for e in seasons):
+            d["status"] = "A Japanese release was found: the dub is being replaced"
+        elif any(e.get("status") == "waiting" for e in seasons):
+            d["status"] = f"No Japanese or Dual Audio release out yet (looked {max(e.get('looks', 0) for e in seasons)}×; again every 12 h)"
+        elif seasons and all(e.get("status") == "kept" for e in seasons):
+            d["status"] = "Kept: the replacement limit was reached"
     out["dubs"] = sorted(dubs.values(), key=lambda d: d["title"])
     return out
 

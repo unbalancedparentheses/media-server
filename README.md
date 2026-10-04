@@ -268,7 +268,7 @@ Picture-based subtitles inside files (Blu-ray PGS, DVD VobSub) don't count: brow
 | `sonarr_anime_profile` | `"HD-1080p"` | Base of Sonarr's **Anime** profile, which setup creates for anime: anime requests go to `~/media/anime` with it |
 | `prefer_h265` | `true` | Prefer x265/HEVC releases (+100), so the smaller file wins when several are acceptable |
 | `prefer_english_audio` | `true` | Movies and TV: prefer releases with English audio (+50). A preference, not a block. |
-| `anime_block_dubs` | `true` | Anime: never grab English-dub-only releases (dual audio is fine) |
+| `anime_block_dubs` | `true` | Anime: never grab English-dub-only releases (dual audio is fine), and replace dubs already in the library: only once a look-only search finds a Japanese or Dual Audio release Sonarr would take, with seeders; the dub's download is then marked failed (counted by `max_replacements`) before its files are deleted and the season searched. One season an hour, never files imported by hand |
 | `anime_release_groups` | `true` | Anime: rank releases by the TRaSH Guides tiers, Blu-ray groups above web groups |
 | `fallback_resolution` | `""` | Off unless set (`"720p"` or `"480p"`): a title stuck for a week whose releases are all turned down only for their quality gets a copy of its profile that also allows this resolution; nothing else in the profile changes (Sonarr sets profiles per series, so for a series it's the whole series) |
 | `rename_files` | `true` | Name imports `Show - S01E01 - Title` and `Movie (Year)`, so Jellyfin always gets season and episode numbers. Turning it on renames the existing library once; library files are hard links, so seeding is unaffected. |
