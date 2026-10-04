@@ -119,6 +119,19 @@
   .sp-presets{margin:0;display:grid;grid-template-columns:1fr 1fr;gap:0.4rem}
   .sp-foot{display:flex;align-items:center;justify-content:space-between;gap:0.6rem;margin-top:0.8rem}
   .sp-msg{font-size:0.7rem;color:var(--text2)}
+  .poster-wrap{position:relative}
+  .p-more{position:absolute;top:0.4rem;right:0.4rem;width:2rem;height:2rem;border-radius:50%;border:1px solid var(--border-hover);background:#000a;color:var(--text);font-size:1rem;line-height:1;cursor:pointer;opacity:0;transition:opacity .15s}
+  .poster-wrap:hover .p-more,.p-more:focus-visible{opacity:1}
+  @media (hover:none){.p-more{opacity:0.85}}
+  .modal{position:fixed;inset:0;z-index:100;background:#000a;display:flex;align-items:center;justify-content:center;padding:1rem}
+  .modal.hidden{display:none}
+  .modal-box{width:min(26rem,100%);background:var(--surface);border:1px solid var(--border-hover);border-radius:14px;padding:1.1rem}
+  .del-body{font-size:0.8rem;color:var(--text2);margin:0.6rem 0}
+  .del-opt,.del-check{display:flex;gap:0.5rem;align-items:center;font-size:0.8rem;color:var(--text2);margin:0.35rem 0}
+  .del-pass{display:flex;align-items:center;gap:0.5rem;font-size:0.8rem;color:var(--text2);margin:0.7rem 0 0.3rem}
+  .del-pass input{flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0.45rem;font:inherit}
+  .btn.danger{background:var(--red);border-color:var(--red);color:#111;font-weight:600}
+  .btn:disabled{opacity:0.5;cursor:default}
   .tabs{display:flex;gap:0.25rem;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:0.2rem}
   .tabs a{padding:0.45rem 0.85rem;border-radius:8px;color:var(--text2);text-decoration:none;font-size:0.82rem;white-space:nowrap}
   .tabs a.on{background:var(--surface2);color:var(--text)}
@@ -335,6 +348,17 @@
     <div class="updated" id="updated"></div>
   </div>
 
+  <div class="modal hidden" id="del-modal" role="dialog" aria-modal="true" aria-labelledby="del-title">
+    <div class="modal-box">
+      <div class="sp-title" id="del-title">Delete</div>
+      <div class="del-body" id="del-body">Looking it up…</div>
+      <label class="del-check"><input type="checkbox" id="del-exclude"> Don't download it again (keeps it from being added back by lists)</label>
+      <label class="del-pass">Jellyfin password <input type="password" id="del-pass" autocomplete="current-password"></label>
+      <div class="sp-hint">This deletes the files for good, with their seeding copy in qBittorrent.</div>
+      <div class="sp-foot"><span class="sp-msg" id="del-msg"></span><span><button class="btn" id="del-cancel">Cancel</button> <button class="btn danger" id="del-go">Delete</button></span></div>
+    </div>
+  </div>
+
   <script src="/settings.js"></script>
   <script>
     var h=location.hostname,secure=location.protocol==='https:';
@@ -381,9 +405,11 @@
     function posterCard(c,opts){
       var src=img(c.image,c.tag),bar=c.progress?'<div class="p-bar"><i style="width:'+c.progress+'%"></i></div>':'';
       var badge=opts&&opts.badge?'<span class="p-badge">'+opts.badge+'</span>':'';
-      return'<a class="poster" href="'+watchUrl(c.id)+'" title="'+esc(c.title+(c.detail?' · '+c.detail:''))+'"><div class="p-img">'
+      var card='<a class="poster" href="'+watchUrl(c.id)+'" title="'+esc(c.title+(c.detail?' · '+c.detail:''))+'"><div class="p-img">'
         +(src?'<img loading="lazy" src="'+src+'" alt="" onerror="this.remove()">':'')+'<div class="p-none"'+(src?' style="z-index:-1"':'')+'>'+esc(c.title)+'</div>'
         +badge+bar+'<div class="p-play">▶</div></div><div class="p-title">'+esc(c.title)+'</div><div class="p-sub">'+esc(c.detail||'')+'</div></a>';
+      // Library posters: ⋯ for deleting it
+      return opts&&opts.manage?'<div class="poster-wrap">'+card+'<button class="p-more" data-item="'+esc(c.id)+'" aria-label="More for '+esc(c.title)+'" title="Delete…">⋯</button></div>':card;
     }
 
     // A recommendation: its scores, and whether it's here already (watch),
@@ -511,6 +537,49 @@
         }).catch(function(){msg.textContent='Not applied: the dashboard couldn\'t reach it (only from this Mac, your home network or Tailscale)';});
     });
 
+    // ── Deleting a title: through Radarr/Sonarr (Jellyfin alone would get
+    // it downloaded again), with its torrents; needs the Jellyfin password ──
+    var delItem=null,delInfo=null;
+    function gb(b){return b>=1073741824?(b/1073741824).toFixed(1)+' GB':Math.max(1,Math.round(b/1048576))+' MB';}
+    function closeDelete(){show('del-modal',false);delItem=delInfo=null;document.getElementById('del-pass').value='';}
+    function openDelete(item){
+      delItem=item;delInfo=null;show('del-modal',true);
+      document.getElementById('del-title').textContent='Delete';
+      document.getElementById('del-body').textContent='Looking it up…';
+      document.getElementById('del-msg').textContent='';document.getElementById('del-exclude').checked=false;
+      document.getElementById('del-go').disabled=true;
+      fetch('/api/control/delete?item='+encodeURIComponent(item),{cache:'no-store'}).then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j};});}).then(function(res){
+        if(delItem!==item)return;
+        if(!res.ok){document.getElementById('del-body').textContent=res.j.error||'Can\'t delete it here';return;}
+        delInfo=res.j;
+        document.getElementById('del-title').textContent='Delete '+delInfo.title+'?';
+        var html=delInfo.kind==='movie'?'<p>The film and its files ('+gb(delInfo.size)+').</p>'
+          :'<label class="del-opt"><input type="radio" name="del-what" value="" checked> The whole series ('+gb(delInfo.size)+')</label>'
+            +delInfo.seasons.map(function(x){return'<label class="del-opt"><input type="radio" name="del-what" value="'+x.number+'"> Only season '+x.number+' ('+gb(x.size)+'; the rest stays)</label>';}).join('');
+        document.getElementById('del-body').innerHTML=html;
+        document.getElementById('del-go').disabled=false;
+        document.getElementById('del-pass').focus();
+      }).catch(function(){document.getElementById('del-body').textContent='Not available: only from this Mac, your home network or Tailscale';});
+    }
+    document.addEventListener('click',function(e){var b=e.target.closest('.p-more');if(b){e.preventDefault();openDelete(b.getAttribute('data-item'));}});
+    document.getElementById('del-cancel').addEventListener('click',closeDelete);
+    document.getElementById('del-modal').addEventListener('click',function(e){if(e.target.id==='del-modal')closeDelete();});
+    document.addEventListener('keydown',function(e){if(e.key==='Escape'&&delItem)closeDelete();});
+    document.getElementById('del-go').addEventListener('click',function(){
+      if(!delInfo)return;
+      var msg=document.getElementById('del-msg'),pass=document.getElementById('del-pass').value;
+      if(!pass){msg.textContent='Your Jellyfin password, to confirm';return;}
+      var picked=document.querySelector('input[name="del-what"]:checked'),season=picked&&picked.value!==''?+picked.value:null;
+      msg.textContent='Deleting…';document.getElementById('del-go').disabled=true;
+      fetch('/api/control/delete',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'media-server'},
+        body:JSON.stringify({item:delItem,season:season,exclude:document.getElementById('del-exclude').checked,password:pass})})
+        .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j};});}).then(function(res){
+          if(!res.ok){msg.textContent=res.j.error||'Not deleted';document.getElementById('del-go').disabled=false;return;}
+          msg.textContent='Deleted '+res.j.deleted+' · '+gb(res.j.freed)+' freed'+(res.j.warnings.length?' · '+res.j.warnings.join('; '):'');
+          setTimeout(function(){closeDelete();refreshStatus();},1800);
+        }).catch(function(){msg.textContent='Not deleted: the dashboard couldn\'t reach it';document.getElementById('del-go').disabled=false;});
+    });
+
     // ── Watch tonight: filters remembered on this device ──
     var tonightKind=store('tonightKind')||'all',tonightLen=store('tonightLen')||0;
     function renderTonight(){
@@ -525,7 +594,7 @@
         b.classList.toggle('on',on);b.setAttribute('aria-pressed',on?'true':'false');
       });
       document.getElementById('tonight').innerHTML=items.length?items.map(function(t){
-        return posterCard(t,{badge:t.kind==='anime'?'Anime':t.partial?'Some episodes':''});
+        return posterCard(t,{badge:t.kind==='anime'?'Anime':t.partial?'Some episodes':'',manage:true});
       }).join(''):'<div class="empty">Nothing matches these filters</div>';
     }
     document.getElementById('tonight-filters').addEventListener('click',function(e){
@@ -621,12 +690,12 @@
         show('continue-sec',cw.length>0);
         document.getElementById('continue').innerHTML=cw.map(function(c){
           var badge=c.kind==='next'?'Next':'';if(many)badge=(badge?badge+' · ':'')+esc(c.user);
-          return posterCard(c,{badge:badge});
+          return posterCard(c,{badge:badge,manage:true});
         }).join('');
       }
       if(s.latest){
         show('latest-sec',s.latest.length>0);
-        document.getElementById('latest').innerHTML=s.latest.map(function(c){return posterCard(c,{badge:c.new>1?c.new+' new':''});}).join('');
+        document.getElementById('latest').innerHTML=s.latest.map(function(c){return posterCard(c,{badge:c.new>1?c.new+' new':'',manage:true});}).join('');
       }
 
       renderTonight();

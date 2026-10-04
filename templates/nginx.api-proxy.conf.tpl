@@ -76,3 +76,23 @@ location = /api/control/speed {
     set $upstream_control http://127.0.0.1:8099/speed;
     proxy_pass $upstream_control;
 }
+
+# Deleting a title (mediaserver/control.py: Radarr/Sonarr with its files,
+# its torrents, its Seerr entry). Same networks; it also needs the Jellyfin
+# password in the request, checked against Jellyfin.
+location = /api/control/delete {
+    limit_except GET POST { deny all; }
+    allow 127.0.0.1;
+    allow ::1;
+    allow 10.0.0.0/8;
+    allow 172.16.0.0/12;
+    allow 192.168.0.0/16;
+    allow 100.64.0.0/10;
+    allow fd00::/8;
+    deny all;
+    limit_req zone=api burst=5 nodelay;
+    client_max_body_size 4k;
+    set $upstream_delete http://127.0.0.1:8099/delete$is_args$args;
+    proxy_pass $upstream_delete;
+    proxy_read_timeout 120s;
+}

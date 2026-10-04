@@ -1,6 +1,7 @@
-"""control: the dashboard's one change it can make, download and upload
-speed limits, served by dashstatus on 127.0.0.1 and reached through nginx
-(/api/control/speed) only from this Mac, the home network and Tailscale.
+"""control: the changes the dashboard can make, served by dashstatus on
+127.0.0.1 and reached through nginx (/api/control/…) only from this Mac,
+the home network and Tailscale: download and upload speed limits, and
+deleting a title (which also needs the Jellyfin password; see Library).
 
 - qBittorrent: its alternative speed limits (the turtle in its UI), so the
   normal limits setup manages (downloads.upload_limit_kib) stay as they
@@ -24,6 +25,7 @@ import threading
 from pathlib import Path
 
 from mediaserver import common as c
+from mediaserver.api import ApiError
 from mediaserver.config import local
 
 MAX_KIB = 10_000_000   # about 10 GB/s: anything above is a typo
@@ -95,6 +97,137 @@ class Speed:
         return state
 
 
+# ─── Deleting a title ────────────────────────────────────────────
+
+class Library:
+    """Delete a film, a series or one season the way that sticks: through
+    Radarr/Sonarr with its files (deleting it only in Jellyfin would make
+    them download it again), its torrents in qBittorrent with their data
+    (the seeding copy would keep the space), its Seerr entry for a whole
+    title (so it can be requested again), then a Jellyfin rescan. Asking
+    needs the Jellyfin password: this can't be undone."""
+
+    def __init__(self, config: Path):
+        self.config = config
+
+    @property
+    def state(self) -> Path:
+        return self.config.parent / ".state"
+
+    def arr(self, name: str, method: str, path: str, body=None):
+        from mediaserver import api
+        return api.call(method, f"{local(name)}/api/v3/{path}", {"X-Api-Key": c.arr_key(self.config, name)}, body=body)
+
+    def jellyfin(self, path: str):
+        return c.get_json(f"{local('jellyfin')}/{path}", c.jellyfin_auth(self.state))
+
+    def password_ok(self, password: str) -> bool:
+        from mediaserver.config import Config, Paths
+        try:
+            user = Config.load(Paths(self.config.parent)).jellyfin_user
+        except (OSError, ValueError):
+            return False
+        r = c.request(f"{local('jellyfin')}/Users/AuthenticateByName", "POST",
+                      {"Authorization": 'MediaBrowser Client="dashboard", Device="dashboard", DeviceId="dashboard-delete", Version="1"'},
+                      body={"Username": user, "Pw": password}, timeout=20)
+        return r.ok and bool(r.json({}).get("AccessToken"))
+
+    def resolve(self, item_id: str) -> dict:
+        """A Jellyfin item (a film, series or episode) → the title in Radarr/Sonarr"""
+        items = self.jellyfin(f"Items?Ids={item_id}&Fields=ProviderIds").get("Items") or []
+        if not items:
+            raise LookupError("it's not in the library any more")
+        item = items[0]
+        if item.get("Type") in ("Episode", "Season") and item.get("SeriesId"):
+            item = (self.jellyfin(f"Items?Ids={item['SeriesId']}&Fields=ProviderIds").get("Items") or [item])[0]
+        ids = item.get("ProviderIds") or {}
+        if item.get("Type") == "Movie":
+            found = self.arr("radarr", "GET", f"movie?tmdbId={ids.get('Tmdb')}") if ids.get("Tmdb") else []
+            if not found:
+                raise LookupError("Radarr doesn't have it")
+            m = found[0]
+            return {"kind": "movie", "title": f"{m.get('title')} ({m.get('year')})", "id": m["id"], "tmdb": m.get("tmdbId"),
+                    "size": m.get("sizeOnDisk") or 0, "seasons": []}
+        found = self.arr("sonarr", "GET", f"series?tvdbId={ids.get('Tvdb')}") if ids.get("Tvdb") else []
+        if not found:
+            raise LookupError("Sonarr doesn't have it")
+        s = found[0]
+        return {"kind": "series", "title": s.get("title"), "id": s["id"], "tmdb": int(ids["Tmdb"]) if ids.get("Tmdb") else None,
+                "size": (s.get("statistics") or {}).get("sizeOnDisk") or 0,
+                "seasons": [{"number": x["seasonNumber"], "size": (x.get("statistics") or {}).get("sizeOnDisk") or 0}
+                            for x in s.get("seasons") or [] if (x.get("statistics") or {}).get("sizeOnDisk")]}
+
+    def downloads(self, title: dict, season: int | None) -> set:
+        """qBittorrent hashes of what was grabbed for it (or for that season)"""
+        if title["kind"] == "movie":
+            grabs = self.arr("radarr", "GET", f"history/movie?movieId={title['id']}&eventType=1") or []
+            return {g["downloadId"].lower() for g in grabs if g.get("downloadId")}
+        grabs = self.arr("sonarr", "GET", f"history/series?seriesId={title['id']}&eventType=1") or []
+        if season is not None:
+            seasons = {e["id"]: e.get("seasonNumber") for e in self.arr("sonarr", "GET", f"episode?seriesId={title['id']}") or []}
+            grabs = [g for g in grabs if seasons.get(g.get("episodeId")) == season]
+        return {g["downloadId"].lower() for g in grabs if g.get("downloadId")}
+
+    def delete(self, item_id: str, season: int | None, exclude: bool) -> dict:
+        title = self.resolve(item_id)
+        hashes = self.downloads(title, season)
+        warnings = []
+        if title["kind"] == "movie":
+            for q in (self.arr("radarr", "GET", f"queue?movieIds={title['id']}") or {}).get("records") or []:
+                self.arr("radarr", "DELETE", f"queue/{q['id']}?removeFromClient=true&blocklist=false")
+            self.arr("radarr", "DELETE", f"movie/{title['id']}?deleteFiles=true&addImportExclusion={'true' if exclude else 'false'}")
+            freed = title["size"]
+        elif season is None:
+            for q in (self.arr("sonarr", "GET", f"queue?seriesIds={title['id']}") or {}).get("records") or []:
+                self.arr("sonarr", "DELETE", f"queue/{q['id']}?removeFromClient=true&blocklist=false")
+            self.arr("sonarr", "DELETE", f"series/{title['id']}?deleteFiles=true&addImportListExclusion={'true' if exclude else 'false'}")
+            freed = title["size"]
+        else:
+            # One season: not wanted any more (or it'd be downloaded again),
+            # then its files
+            series = self.arr("sonarr", "GET", f"series/{title['id']}")
+            series["seasons"] = [dict(x, monitored=False) if x.get("seasonNumber") == season else x for x in series.get("seasons") or []]
+            self.arr("sonarr", "PUT", f"series/{title['id']}", series)
+            files = [f for f in self.arr("sonarr", "GET", f"episodefile?seriesId={title['id']}") or [] if f.get("seasonNumber") == season]
+            for f in files:
+                self.arr("sonarr", "DELETE", f"episodefile/{f['id']}")
+            freed = sum(f.get("size") or 0 for f in files)
+            title["title"] = f"{title['title']} season {season}"
+        # The seeding copies
+        if hashes:
+            r = c.request(f"{local('qbittorrent')}/api/v2/torrents/delete", "POST",
+                          form={"hashes": "|".join(sorted(hashes)), "deleteFiles": "true"}, timeout=20)
+            if not r.ok:
+                warnings.append("its torrents couldn't be removed from qBittorrent")
+        # Requestable again (a whole title only)
+        if season is None and title.get("tmdb"):
+            kind = "movie" if title["kind"] == "movie" else "tv"
+            seerr = {"X-Api-Key": c.seerr_key(self.config)}
+            media = (c.try_json(f"{local('seerr')}/api/v1/{kind}/{title['tmdb']}", seerr) or {}).get("mediaInfo") or {}
+            if media.get("id") and not c.request(f"{local('seerr')}/api/v1/media/{media['id']}", "DELETE", seerr, timeout=20).ok:
+                warnings.append("Seerr still lists it as available until its next sync")
+        c.request(f"{local('jellyfin')}/Library/Refresh", "POST", c.jellyfin_auth(self.state), body=b"", timeout=20)
+        c.log(f"deleted from the dashboard: {title['title']} ({freed // 1024 ** 2} MB, {len(hashes)} torrents)")
+        return {"deleted": title["title"], "freed": freed, "torrents": len(hashes), "warnings": warnings}
+
+
+def parse_delete(body: bytes) -> tuple[str, int | None, bool, str] | str:
+    try:
+        data = json.loads(body or b"{}")
+    except ValueError:
+        return "not JSON"
+    item, season, exclude, password = data.get("item"), data.get("season"), data.get("exclude", False), data.get("password")
+    if not isinstance(item, str) or not item.isalnum() or len(item) > 64:
+        return '"item" must be a library item id'
+    if season is not None and (not isinstance(season, int) or isinstance(season, bool) or not 0 <= season <= 1000):
+        return '"season" must be a season number'
+    if not isinstance(exclude, bool):
+        return '"exclude" must be true or false'
+    if not isinstance(password, str) or not password:
+        return "the Jellyfin password is needed to delete"
+    return item, season, exclude, password
+
+
 def parse(body: bytes) -> tuple[bool, int, int] | str:
     """(limited, down, up) from a request, or what's wrong with it"""
     try:
@@ -114,7 +247,9 @@ def parse(body: bytes) -> tuple[bool, int, int] | str:
     return True, values[0], values[1]
 
 
-def handler(speed: Speed):
+def handler(speed: Speed, library: "Library | None" = None):
+    lib: Library = library or Library(speed.config)
+
     class Handler(http.server.BaseHTTPRequestHandler):
         def answer(self, status: int, data: dict) -> None:
             body = json.dumps(data).encode()
@@ -126,22 +261,54 @@ def handler(speed: Speed):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.path != "/speed":
-                return self.answer(404, {"error": "not found"})
-            self.answer(200, speed.state())
+            if self.path == "/speed":
+                return self.answer(200, speed.state())
+            if self.path.startswith("/delete?item="):
+                # What deleting would remove, for the confirmation
+                item = self.path.split("=", 1)[1]
+                if not item.isalnum():
+                    return self.answer(400, {"error": "not a library item"})
+                try:
+                    return self.answer(200, lib.resolve(item))
+                except LookupError as e:
+                    return self.answer(404, {"error": f"Can't delete it here: {e}"})
+                except (ApiError, *c.HTTP_ERRORS):
+                    return self.answer(502, {"error": "Radarr, Sonarr or Jellyfin isn't answering"})
+            self.answer(404, {"error": "not found"})
 
         def do_POST(self):
-            if self.path != "/speed":
+            if self.path not in ("/speed", "/delete"):
                 return self.answer(404, {"error": "not found"})
             # Only the dashboard's own requests: JSON with this header
             if not self.headers.get("X-Requested-With") or "application/json" not in self.headers.get("Content-Type", ""):
                 return self.answer(403, {"error": "the dashboard's requests only"})
             length = int(self.headers.get("Content-Length") or 0)
-            parsed = parse(self.rfile.read(min(length, 10_000)))
+            body = self.rfile.read(min(length, 10_000))
+            if self.path == "/delete":
+                return self.delete(body)
+            parsed = parse(body)
             if isinstance(parsed, str):
                 return self.answer(400, {"error": parsed})
             result = speed.set(*parsed)
             self.answer(502 if "error" in result else 200, result)
+
+        def delete(self, body: bytes) -> None:
+            parsed = parse_delete(body)
+            if isinstance(parsed, str):
+                return self.answer(400, {"error": parsed})
+            item, season, exclude, password = parsed
+            if not lib.password_ok(password):
+                import time
+                time.sleep(1)   # guessing is slow
+                return self.answer(403, {"error": "That's not the Jellyfin password"})
+            try:
+                with LOCK:
+                    result = lib.delete(item, season, exclude)
+            except LookupError as e:
+                return self.answer(404, {"error": f"Can't delete it here: {e}"})
+            except (ApiError, *c.HTTP_ERRORS) as e:
+                return self.answer(502, {"error": f"It couldn't be deleted completely ({e}); check Radarr/Sonarr"})
+            self.answer(200, result)
 
         def log_message(self, format, *args):  # noqa: A002 (the base class's name)
             pass
