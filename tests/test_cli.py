@@ -396,6 +396,35 @@ class Tailscale(Scratch):
         self.assertNotIn("443", routes)
         self.assertNotIn("9443", routes)
 
+    def configure(self, fake):
+        original = fake.__call__
+
+        def answer(ts, *args, timeout=10):
+            if args == ("status", "--json"):
+                return mock.Mock(returncode=0, stdout=json.dumps({"Self": {"DNSName": "mac.ts.net."}}))
+            return original(ts, *args, timeout=timeout)
+        with mock.patch.object(tailscale, "run", answer):
+            return quiet(tailscale.configure, example_config(self.media), "ts")[1]
+
+    def test_old_dashboard_route_kept_on_record_when_routes_unreadable(self):
+        self.routes({"443": "http://127.0.0.1:80"})
+        out = self.configure(FakeTailscale({}, status_fails=True))
+        self.assertIn("may still be there", out)
+        self.assertEqual(json.loads((self.paths.state / "tailscale-routes.json").read_text())["443"], "http://127.0.0.1:80")
+
+    def test_old_dashboard_route_kept_on_record_when_removal_fails(self):
+        self.routes({"443": "http://127.0.0.1:80"})
+        fake = FakeTailscale({"Web": {"mac.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:80"}}}}}, fail_off=True)
+        out = self.configure(fake)
+        self.assertIn("tailscale serve --https=443 off", out)
+        self.assertEqual(json.loads((self.paths.state / "tailscale-routes.json").read_text())["443"], "http://127.0.0.1:80")
+
+    def test_is_dashboard(self):
+        for t in ("http://127.0.0.1:80", "http://127.0.0.1", "http://localhost/", "127.0.0.1:80", "http://[::1]:80"):
+            self.assertTrue(tailscale.is_dashboard(t, 80), t)
+        for t in ("http://127.0.0.1:8096", "http://127.0.0.1:8080", "http://10.0.0.2:80", "text:hello"):
+            self.assertFalse(tailscale.is_dashboard(t, 80), t)
+
     def test_switched_off_takes_routes_down(self):
         data = json.loads(json.dumps(example_config(self.media).data))
         data.setdefault("network", {})["tailscale_https"] = False

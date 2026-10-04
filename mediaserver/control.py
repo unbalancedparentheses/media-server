@@ -367,6 +367,23 @@ def parse(body: bytes) -> tuple[bool, int, int] | str:
     return True, values[0], values[1]
 
 
+LOOPBACK = ("127.0.0.1", "::1")
+
+
+def from_this_mac(headers) -> bool:
+    """A request made on this Mac, as nginx passes it on (it serves 127.0.0.1
+    only, but a proxy there such as an old Tailscale route relays requests
+    from elsewhere): opened as localhost, and relayed by nothing but nginx"""
+    host = (headers.get("Host") or "").lower()
+    name = host[1:host.index("]")] if host.startswith("[") and "]" in host else host.rsplit(":", 1)[0]
+    if name not in ("localhost", *LOOPBACK):
+        return False
+    if any(headers.get(h) for h in ("X-Forwarded-Host", "Forwarded", "Tailscale-User-Login")):
+        return False
+    hops = [h.strip() for h in (headers.get("X-Forwarded-For") or "").split(",") if h.strip()]
+    return all(h in LOOPBACK for h in hops) and len(hops) <= 1
+
+
 def handler(speed: Speed, library: "Library | None" = None):
     lib: Library = library or Library(speed.config)
 
@@ -381,6 +398,8 @@ def handler(speed: Speed, library: "Library | None" = None):
             self.wfile.write(body)
 
         def do_GET(self):
+            if not from_this_mac(self.headers):
+                return self.answer(403, {"error": "only on the Mac running the server"})
             if self.path == "/speed":
                 return self.answer(200, speed.state())
             if self.path.startswith("/delete?item="):
@@ -406,6 +425,8 @@ def handler(speed: Speed, library: "Library | None" = None):
         def do_POST(self):
             if self.path not in ("/speed", "/delete"):
                 return self.answer(404, {"error": "not found"})
+            if not from_this_mac(self.headers):
+                return self.answer(403, {"error": "only on the Mac running the server"})
             # Only the dashboard's own requests: JSON with this header
             if not self.headers.get("X-Requested-With") or "application/json" not in self.headers.get("Content-Type", ""):
                 return self.answer(403, {"error": "the dashboard's requests only"})

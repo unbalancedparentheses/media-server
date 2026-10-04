@@ -154,6 +154,27 @@ class Endpoint(unittest.TestCase):
         conn.close()
         return r.status, data
 
+    def test_only_from_this_mac(self):
+        # As nginx passes on a request made on this Mac
+        self.assertEqual(self.ask("GET", headers={"Host": "localhost", "X-Forwarded-For": "127.0.0.1"})[0], 200)
+        # Relayed by a proxy in front of nginx (an old Tailscale route), or another host name
+        for headers in ({"Host": "localhost", "X-Forwarded-For": "100.64.0.9, 127.0.0.1"},
+                        {"Host": "localhost", "X-Forwarded-For": "100.64.0.9"},
+                        {"Host": "localhost", "Tailscale-User-Login": "someone@example.com"},
+                        {"Host": "localhost", "X-Forwarded-Host": "mac.ts.net"},
+                        {"Host": "mac.tailnet.ts.net"}, {"Host": "192.168.1.48"}):
+            self.assertEqual(self.ask("GET", headers=headers)[0], 403, headers)
+        body = json.dumps({"limited": True, "down": 100, "up": 10})
+        self.assertEqual(self.ask("POST", body=body, headers={"Content-Type": "application/json", "X-Requested-With": "media-server",
+                                                             "Host": "mac.tailnet.ts.net"})[0], 403)
+        self.speed.set.assert_not_called()
+
+    def test_host_names_from_this_mac(self):
+        for host in ("localhost", "localhost:8088", "127.0.0.1", "127.0.0.1:80", "[::1]", "[::1]:80", "LOCALHOST"):
+            self.assertTrue(control.from_this_mac({"Host": host}), host)
+        for host in ("", "evil.localhost", "localhost.evil.com", "[::2]:80", "mac.local"):
+            self.assertFalse(control.from_this_mac({"Host": host}), host)
+
     def test_reading(self):
         self.assertEqual(self.ask("GET")[0], 200)
         self.assertEqual(self.ask("GET", "/other")[0], 404)

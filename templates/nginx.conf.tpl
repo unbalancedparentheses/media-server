@@ -62,15 +62,38 @@ http {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
 
+    # The dashboard is opened as localhost; any other name (a Tailscale
+    # *.ts.net name, a LAN name, a DNS-rebinding page) is refused
+    map $host $dashboard_foreign_host {
+        default 1;
+        localhost 0;
+        127.0.0.1 0;
+        "[::1]" 0;
+    }
+    # Set by a proxy in front (Tailscale serve adds these): a request that
+    # came through one is from elsewhere, though it arrives from 127.0.0.1
+    map "$http_x_forwarded_for$http_x_forwarded_host$http_forwarded$http_tailscale_user_login" $dashboard_proxied {
+        default 1;
+        "" 0;
+    }
+
     # Dashboard: on this Mac only (it has no login and can delete titles).
     # It listens everywhere because macOS lets a user bind a port below 1024
-    # only on every interface, and refuses every address but this Mac's.
+    # only on every interface, and refuses every address but this Mac's,
+    # other host names, and requests relayed by a proxy (an old Tailscale
+    # route to it, even one setup couldn't remove).
     server {
         listen {{DASHBOARD_PORT}} default_server;
         server_name _;
         allow 127.0.0.1;
         allow ::1;
         deny all;
+        if ($dashboard_foreign_host) {
+            return 403;
+        }
+        if ($dashboard_proxied) {
+            return 403;
+        }
 
         root www;
         index index.html;

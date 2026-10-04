@@ -47,28 +47,46 @@ def wanted(cfg: Config) -> list[tuple[str, str, str]]:
     return [("8096", "http://127.0.0.1:8096", "Jellyfin"), ("5055", "http://127.0.0.1:5055", "Seerr")]
 
 
+def is_dashboard(target: str, port: int) -> bool:
+    """A proxy target that is this Mac's dashboard (http://127.0.0.1:80, http://localhost, …)"""
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(target if "://" in target else f"http://{target}")
+        return (u.hostname or "") in ("127.0.0.1", "localhost", "::1") and (u.port or 80) == port
+    except ValueError:
+        return False
+
+
 def forget(cfg: Config, port: str) -> None:
     routes = c.read_json(routes_file(cfg), {})
     if isinstance(routes, dict) and routes.pop(port, None) is not None:
         c.write_json(routes_file(cfg), routes, mode=0o600, compact=True)
 
 
-def take_down_stale(cfg: Config, ts: str, now: dict[str, list[str]]) -> None:
+def take_down_stale(cfg: Config, ts: str, now: "dict[str, list[str]] | None") -> bool:
     """Routes an earlier setup published that it no longer wants (the
     dashboard used to be on :443): removed when still pointing where it put
-    them"""
+    them. False when one may still be there (Tailscale's routes couldn't be
+    read, or removing failed); its record is kept to try again. nginx and
+    the dashboard refuse requests relayed by such a route regardless."""
     recorded = c.read_json(routes_file(cfg), {})
     keep = {port for port, _, _ in wanted(cfg)}
-    for port, target in (recorded.items() if isinstance(recorded, dict) else []):
-        if port in keep:
-            continue
-        if target not in now.get(port, []):
+    stale = {p: t for p, t in (recorded.items() if isinstance(recorded, dict) else []) if p not in keep}
+    if stale and now is None:
+        warn(f"Couldn't read Tailscale's published routes, so HTTPS :{', :'.join(stale)} (the old dashboard route) "
+             f"may still be there; check with: tailscale serve status")
+        return False
+    gone = True
+    for port, target in stale.items():
+        if target not in (now or {}).get(port, []):
             forget(cfg, port)
         elif (r := run(ts, "serve", f"--https={port}", "off")) and r.returncode == 0:
             forget(cfg, port)
             ok(f"Tailscale HTTPS :{port} removed (no longer published)")
         else:
             warn(f"Couldn't remove Tailscale HTTPS :{port} (remove it with: tailscale serve --https={port} off)")
+            gone = False
+    return gone
 
 
 def published(status: dict) -> dict[str, list[str]]:
@@ -107,11 +125,13 @@ def configure(cfg: Config, ts: str | None = None) -> str:
     if not hostname:
         return ""
     serve = run(ts, "serve", "status", "--json")
+    now: dict[str, list[str]] | None
     try:
-        now = published(json.loads(serve.stdout) if serve and serve.stdout.strip() else {})
-    except ValueError:
-        now = {}
+        now = published(json.loads(serve.stdout) if serve.stdout.strip() else {}) if serve and serve.returncode == 0 else None
+    except (ValueError, AttributeError):
+        now = None
     take_down_stale(cfg, ts, now)
+    now = now or {}
     for port, target, label in wanted(cfg):
         # Already published to the same place (not just the same port)?
         if target in now.get(port, []):

@@ -123,6 +123,8 @@ class ConfigFiles(Base):
         self.assertIn("include /nix/store/x-nginx/conf/mime.types;", conf)
         self.assertIn("listen 80 default_server;", conf)
         self.assertIn("allow 127.0.0.1;\n        allow ::1;\n        deny all;", conf)   # this Mac only
+        self.assertIn("if ($dashboard_foreign_host) {\n            return 403;", conf)   # not as a *.ts.net name
+        self.assertIn("if ($dashboard_proxied) {\n            return 403;", conf)   # nor relayed by a proxy
         self.assertNotIn("allow 192.168", (self.cfg.paths.config / "nginx/api-proxy.conf").read_text())
         www = self.cfg.paths.config / "nginx/www"
         self.assertEqual((www / "settings.js").read_text(), 'window.MEDIA_SETTINGS={"adminLocalOnly":false};\n')

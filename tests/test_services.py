@@ -13,7 +13,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock
 
-from mediaserver import dashmedia, doctor, launchd, netwatch, postimport, verify
+from mediaserver import control, dashmedia, doctor, launchd, netwatch, postimport, verify
 from mediaserver import common as c
 from mediaserver.dashstatus import Collector
 from tests.fakes import FakeService
@@ -167,6 +167,9 @@ class FullChecks(Library):
         @d.route("POST", "/api/jellyfin/Items")
         def no_writes(req):
             return 403, None
+        # nginx's this-Mac-only rules: other host names, relayed requests
+        dispatch = d.dispatch
+        d.dispatch = lambda req: dispatch(req) if control.from_this_mac(req.headers) else (403, None, {})
         d.start()
         self.addCleanup(d.stop)
         return d

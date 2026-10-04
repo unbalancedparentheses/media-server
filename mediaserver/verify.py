@@ -4,6 +4,7 @@ services are connected to each other. Prints one line per check; the exit
 status is the number of failed checks (at most 100)."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -318,6 +319,12 @@ class Verifier:
         keys = c.status_code(f"{d}/api/jellyfin/Auth/Keys")
         self.t.check(f"Proxy → hides other endpoints (Jellyfin Auth/Keys: {keys})", keys == 404)
         self.t.check("Proxy → SABnzbd limited to queue/history", c.status_code(f"{d}/api/sabnzbd/?mode=get_config") == 403)
+        # The dashboard is this Mac's only: a request through a proxy (an old
+        # Tailscale route) or for another host name is refused
+        via_proxy = c.request(f"{d}/", headers={"X-Forwarded-For": "100.64.0.9"}).status
+        self.t.check(f"Dashboard → refuses requests through a proxy ({via_proxy})", via_proxy == 403)
+        other_host = c.request(f"{d}/api/control/speed", headers={"Host": "mac.tailnet.ts.net"}).status
+        self.t.check(f"Dashboard → refuses other host names ({other_host})", other_host == 403)
         # From this Mac qBittorrent skips its login (for the dashboard); from
         # the network it must not
         lan = subprocess.run(["ipconfig", "getifaddr", "en0"], capture_output=True, text=True, check=False).stdout.strip()
@@ -420,7 +427,14 @@ class Verifier:
                      not re.search(rb'<script[^>]*src="https?://', index.body) and b'canvasKitBaseUrl: "canvaskit/"' in boot.body)
         status = c.request(f"{self.urls.dashboard}/status.json").json({}) or {}
         self.t.check("Dashboard live data is fresh (status.json, under 2 minutes old)", time.time() - status.get("updated", 0) < 120)
-        self.t.check("Dashboard media data (requests, coming up, library health)", all(k in status for k in ("requests_live", "upcoming", "health")))
+        # Right after a first start, dashstatus may still be on its first
+        # media round (recommendations, ratings): wait for it a while
+        media = ("requests_live", "upcoming", "health")
+        deadline = time.time() + 120
+        while not all(k in status for k in media) and time.time() < deadline:
+            time.sleep(5)
+            status = c.request(f"{self.urls.dashboard}/status.json").json({}) or {}
+        self.t.check("Dashboard media data (requests, coming up, library health)", all(k in status for k in media))
         self.t.check("Moonfin web app (/Moonfin/Web/)", 200 <= index.status < 400)
 
     def services(self) -> None:
@@ -453,6 +467,17 @@ class Verifier:
             self.t.ok("Tailscale HTTPS configured")
         else:
             self.t.skip("Tailscale HTTPS not configured")
+        from mediaserver import tailscale
+        try:
+            routes = tailscale.published(json.loads(subprocess.run([cli, "serve", "status", "--json"], capture_output=True, text=True,
+                                                                   check=False).stdout or "{}"))
+        except ValueError:
+            routes = None
+        exposed = [p for p, targets in (routes or {}).items() if any(tailscale.is_dashboard(t, self.urls.dashboard_port) for t in targets)]
+        if routes is None:
+            self.t.skip("Tailscale → dashboard not published (routes unreadable)")
+        else:
+            self.t.check(f"Tailscale → dashboard not published{f' (still on :{exposed[0]}: tailscale serve --https={exposed[0]} off)' if exposed else ''}", not exposed)
 
 
 def bazarr_auth_section(yaml_text: str) -> dict:
