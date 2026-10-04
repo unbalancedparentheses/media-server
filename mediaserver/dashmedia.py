@@ -770,12 +770,12 @@ def health():
     looks = (c.read_json(STATE / "postimport/stuck.json", {}) or {}).get("dubs") or {}
     for d in dubs.values():
         seasons = [e for e in looks.values() if (e.get("title") or "").startswith(d["title"] + " season ")]
-        if any(e.get("status") == "replacing" for e in seasons):
-            d["status"] = "A Japanese release was found: the dub is being replaced"
+        if any(e.get("status") == "upgrading" for e in seasons):
+            d["status"] = "A Japanese release is out: Sonarr is replacing the dub (the old files stay until the new ones are in)"
+        elif any(e.get("status") == "manual" for e in seasons):
+            d["status"] = "Sonarr doesn't see these files as dubs, so it won't replace them: pick a Japanese or Dual Audio release in Sonarr"
         elif any(e.get("status") == "waiting" for e in seasons):
             d["status"] = f"No Japanese or Dual Audio release out yet (looked {max(e.get('looks', 0) for e in seasons)}×; again every 12 h)"
-        elif seasons and all(e.get("status") == "kept" for e in seasons):
-            d["status"] = "Kept: the replacement limit was reached"
         elif any(e.get("status") == "error" for e in seasons):
             d["status"] = "Couldn't look for a Japanese release last time (Sonarr or the indexers didn't answer); trying again every 12 h"
     out["dubs"] = sorted(dubs.values(), key=lambda d: d["title"])

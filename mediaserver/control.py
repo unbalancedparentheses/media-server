@@ -158,9 +158,12 @@ class Library:
                             for x in s.get("seasons") or [] if (x.get("statistics") or {}).get("sizeOnDisk")]}
 
     # ─── Which torrents can go ───────────────────────────────────
-    # A torrent is deleted (with its data) only when everything in it is
-    # within what's being deleted: a season pack of other seasons too, or a
-    # pack of several films, is kept and named in the result.
+    # Deleted with its data only with proof: every video in the torrent is a
+    # file Sonarr/Radarr imported for exactly what's being deleted (their
+    # import history records each file's original path). Anything else,
+    # including what's still downloading, is kept and named.
+
+    VIDEO = (".mkv", ".mp4", ".m4v", ".avi", ".ts", ".wmv", ".mov")
 
     def torrent_files(self, h: str) -> list | None:
         r = c.request(f"{local('qbittorrent')}/api/v2/torrents/files?hash={h}", timeout=20)
@@ -168,58 +171,46 @@ class Library:
         return files if isinstance(files, list) else None
 
     def torrents(self, title: dict, season: int | None) -> tuple[list, list]:
-        """(hashes to delete, names of torrents kept because they hold more)"""
-        if title["kind"] == "movie":
-            grabs = self.arr("radarr", "GET", f"history/movie?movieId={title['id']}&eventType=1") or []
-            episodes_of: dict = {}
-        else:
-            grabs = self.arr("sonarr", "GET", f"history/series?seriesId={title['id']}&eventType=1") or []
-            episodes_of = {e["id"]: e.get("seasonNumber") for e in self.arr("sonarr", "GET", f"episode?seriesId={title['id']}") or []}
-        by_hash: dict = {}
+        """(hashes to delete, names of torrents kept)"""
+        import os
+        app = "radarr" if title["kind"] == "movie" else "sonarr"
+        history = (f"history/movie?movieId={title['id']}" if title["kind"] == "movie"
+                   else f"history/series?seriesId={title['id']}")
+        grabs = self.arr(app, "GET", f"{history}&eventType=1") or []
+        imports = self.arr(app, "GET", f"{history}&eventType=3") or []
+        episodes_of = ({} if title["kind"] == "movie" else
+                       {e["id"]: e.get("seasonNumber") for e in self.arr("sonarr", "GET", f"episode?seriesId={title['id']}") or []})
+
+        def in_scope(record: dict) -> bool:
+            return season is None or episodes_of.get(record.get("episodeId")) == season
+        # File names imported for what's being deleted, per download
+        ours: dict = {}
+        for r in imports:
+            dropped = (r.get("data") or {}).get("droppedPath") or ""
+            if r.get("downloadId") and dropped and in_scope(r):
+                ours.setdefault(r["downloadId"].lower(), set()).add(os.path.basename(dropped))
+        names = {}
         for g in grabs:
-            if g.get("downloadId"):
-                by_hash.setdefault(g["downloadId"].lower(), []).append(g)
+            if g.get("downloadId") and in_scope(g):
+                names.setdefault(g["downloadId"].lower(), g.get("sourceTitle") or g["downloadId"])
         delete, kept = [], []
-        for h, entries in by_hash.items():
-            if season is not None:
-                seasons = {episodes_of.get(g.get("episodeId")) for g in entries}
-                if season not in seasons:
-                    continue   # another season's: not ours to touch
-                if seasons != {season}:
-                    kept.append(entries[0].get("sourceTitle") or h)
-                    continue
+        for h, name in names.items():
             files = self.torrent_files(h)
             if files is None:
                 if self.torrent_known(h):
-                    kept.append(entries[0].get("sourceTitle") or h)   # can't see inside: kept
-                continue   # (or it's gone already)
-            if not self.only_this(files, title, season):
-                kept.append(entries[0].get("sourceTitle") or h)
-                continue
-            delete.append(h)
+                    kept.append(name)   # can't see inside it: kept
+                continue                # (or qBittorrent no longer has it)
+            videos = [os.path.basename(f.get("name") or "") for f in files
+                      if (f.get("name") or "").lower().endswith(self.VIDEO) and "sample" not in (f.get("name") or "").lower()]
+            if videos and set(videos) <= ours.get(h, set()):
+                delete.append(h)
+            else:
+                kept.append(name)
         return delete, kept
 
     def torrent_known(self, h: str) -> bool:
         r = c.request(f"{local('qbittorrent')}/api/v2/torrents/info?hashes={h}", timeout=20)
         return bool(r.json([])) if r.ok else True
-
-    @staticmethod
-    def only_this(files: list, title: dict, season: int | None) -> bool:
-        """Every file in the torrent is within what's being deleted"""
-        import re
-        videos = [f for f in files if re.search(r"\.(mkv|mp4|m4v|avi|ts|wmv)$", f.get("name") or "", re.I)]
-        if title["kind"] == "movie":
-            # A pack of films: more than one big video
-            return len([f for f in videos if (f.get("size") or 0) > 300 * 1024 ** 2]) <= 1
-        if season is None:
-            return True
-        for f in files:
-            name = f.get("name") or ""
-            found = {int(x) for x in re.findall(r"[Ss](\d{1,2})[Ee]\d{1,3}", name)}
-            found |= {int(x) for x in re.findall(r"[Ss]eason[ ._-]?(\d{1,2})", name)}
-            if found and found != {season}:
-                return False
-        return True
 
     # ─── Deleting, from a saved plan ─────────────────────────────
     # The plan (ids, torrents, what's left to do) is saved before anything
@@ -231,8 +222,15 @@ class Library:
         return self.state / "deletions.json"
 
     def plans(self) -> dict:
-        data = c.read_json(self.plans_file, {})
-        return data if isinstance(data, dict) else {}
+        """Unfinished deletions; raises PlanTrouble when the record can't be
+        read (it may hold cleanup still to do: never replaced by an empty one)"""
+        if not self.plans_file.exists():
+            return {}
+        data = c.read_json(self.plans_file)
+        if not isinstance(data, dict):
+            raise PlanTrouble(f"{self.plans_file} can't be read; it may list cleanup still to do. "
+                              "Fix or remove it, then try again")
+        return data
 
     def save_plan(self, item_id: str, plan: dict | None) -> None:
         plans = self.plans()
@@ -262,8 +260,11 @@ class Library:
         app = "radarr" if plan["kind"] == "movie" else "sonarr"
         if name == "queue":
             ids = "movieIds" if plan["kind"] == "movie" else "seriesIds"
+            # Out of Sonarr/Radarr's queue, but left in qBittorrent: what a
+            # download that isn't finished holds can't be proven ours
             for q in (self.arr(app, "GET", f"queue?{ids}={plan['id']}") or {}).get("records") or []:
-                self.arr(app, "DELETE", f"queue/{q['id']}?removeFromClient=true&blocklist=false")
+                self.arr(app, "DELETE", f"queue/{q['id']}?removeFromClient=false&blocklist=false")
+                plan["kept"].append(f"{q.get('title') or 'a download'} (still downloading; remove it in qBittorrent if unwanted)")
         elif name == "arr":
             exclude = "true" if plan["exclude"] else "false"
             path = (f"movie/{plan['id']}?deleteFiles=true&addImportExclusion={exclude}" if plan["kind"] == "movie"
@@ -291,7 +292,10 @@ class Library:
         elif name == "seerr" and plan.get("tmdb"):
             kind = "movie" if plan["kind"] == "movie" else "tv"
             seerr = {"X-Api-Key": c.seerr_key(self.config)}
-            media = (c.try_json(f"{local('seerr')}/api/v1/{kind}/{plan['tmdb']}", seerr) or {}).get("mediaInfo") or {}
+            r = c.request(f"{local('seerr')}/api/v1/{kind}/{plan['tmdb']}", headers=seerr, timeout=20)
+            if not r.ok:   # a failed read isn't "nothing to clear": the step stays
+                raise ApiError(f"Seerr didn't answer (HTTP {r.status or 'no answer'})")
+            media = (r.json({}) or {}).get("mediaInfo") or {}
             if media.get("id"):
                 r = c.request(f"{local('seerr')}/api/v1/media/{media['id']}", "DELETE", seerr, timeout=20)
                 if not (r.ok or r.status == 404):
@@ -322,6 +326,10 @@ class Library:
                 # Sonarr/Radarr's sizes: an estimate (hardlinks, torrents)
                 "files_removed": plan["bytes"], "disk_freed": max(measured, 0),
                 "torrents": len(plan["hashes"]), "torrents_kept": plan["kept"], "warnings": plan["warnings"]}
+
+
+class PlanTrouble(Exception):
+    """The record of unfinished deletions can't be read"""
 
 
 # Wrong passwords: at most WRONG_ALLOWED in WRONG_WINDOW, counted before
@@ -406,7 +414,10 @@ def handler(speed: Speed, library: "Library | None" = None):
                 item = self.path.split("=", 1)[1]
                 if not item.isalnum():
                     return self.answer(400, {"error": "not a library item"})
-                unfinished = lib.pending(item)
+                try:
+                    unfinished = lib.pending(item)
+                except PlanTrouble as e:
+                    return self.answer(500, {"error": str(e)})
                 if unfinished:
                     return self.answer(200, {"kind": unfinished["kind"], "title": unfinished["title"], "size": unfinished["bytes"],
                                              "seasons": [], "unfinished": unfinished["steps"]})
@@ -448,13 +459,16 @@ def handler(speed: Speed, library: "Library | None" = None):
                 # The same lock as installs, restores and the e2e test (the
                 # background workers wait while it's held)
                 try:
-                    lock.acquire(lib.state)
-                except SetupError:
-                    return self.answer(409, {"error": "An install or other operation is running; try again when it's done"})
+                    lock.acquire(lib.state, wait_workers=0)   # a web request doesn't wait
+                except SetupError as e:
+                    busy = "post-import" in e.message
+                    return self.answer(409, {"error": e.message if busy else "An install or other operation is running; try again when it's done"})
                 try:
                     result = lib.delete(item, season, exclude)
                 except LookupError as e:
                     return self.answer(404, {"error": f"Can't delete it here: {e}"})
+                except PlanTrouble as e:
+                    return self.answer(500, {"error": str(e)})
                 except (ApiError, *c.HTTP_ERRORS) as e:
                     return self.answer(502, {"error": f"Partly deleted ({e}). Delete it again to finish: what's left was saved"})
                 finally:

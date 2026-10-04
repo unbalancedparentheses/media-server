@@ -69,7 +69,7 @@ from pathlib import Path
 from typing import Any
 
 from mediaserver import common as c
-from mediaserver import playback, stuck
+from mediaserver import lock, playback, stuck
 from mediaserver.config import local
 from mediaserver.common import background, log, read_json
 
@@ -351,15 +351,22 @@ def run_ffmpeg(cmd: list, total: float, progress=None) -> tuple[int, str]:
     cmd = [cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]]
     with tempfile.TemporaryFile("w+") as errors:
         proc = subprocess.Popen(background(cmd), stdout=subprocess.PIPE, stderr=errors, text=True)
-        last = 0.0
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            # out_time_us (and out_time_ms, despite its name) are microseconds
-            key, _, value = line.strip().partition("=")
-            if key == "out_time_us" and value.isdigit() and time.time() - last >= 2:
-                last = time.time()
-                progress(min(int(value) / 1e6 / total, 1.0))
-        code = proc.wait()
+        try:
+            last = 0.0
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                # out_time_us (and out_time_ms, despite its name) are microseconds
+                key, _, value = line.strip().partition("=")
+                if key == "out_time_us" and value.isdigit() and time.time() - last >= 2:
+                    last = time.time()
+                    progress(min(int(value) / 1e6 / total, 1.0))
+            code = proc.wait()
+        finally:
+            # Reporting progress failed (a full disk, say): ffmpeg isn't
+            # left running on its own
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
         errors.seek(0)
         return code, errors.read()
 
@@ -1207,41 +1214,48 @@ def by_hand(mode, path):
     if info is None:
         print("can't read the file")
         return 1
-    try:
-        state = load_state()
-    except StateTrouble as e:
-        print(e)
-        return 1
-    Worker([], settings, state).fix(path, info, display_name(path))
-    save(state)
+    with lock.worker_round(STATE.parent) as ok:
+        if not ok:
+            print("an install or other operation is running; try again when it's done")
+            return 1
+        try:
+            state = load_state()
+        except StateTrouble as e:
+            print(e)
+            return 1
+        Worker([], settings, state).fix(path, info, display_name(path))
+        save(state)
     return 0
 
 
-def main():
-    STATE.mkdir(parents=True, exist_ok=True)
-    if len(sys.argv) == 3 and sys.argv[1] in ("--check", "--fix"):
-        return by_hand(sys.argv[1], sys.argv[2])
-    apps = [Arr("Sonarr", local("sonarr"), "series"), Arr("Radarr", local("radarr"), "movie")]
-    prowlarr = Arr("Prowlarr", local("prowlarr"), "", "v1")
-    waiting = stopped = False
-    while True:
-        if operation_running():
-            if not waiting:
-                log("an install or other operation is running; waiting")
-            waiting = True
-        else:
-            waiting = False
+class Rounds:
+    """The service's loop state: what's been said already (once, not every round)"""
+
+    def __init__(self):
+        self.waiting = self.stopped = False
+        self.apps = [Arr("Sonarr", local("sonarr"), "series"), Arr("Radarr", local("radarr"), "movie")]
+        self.prowlarr = Arr("Prowlarr", local("prowlarr"), "", "v1")
+
+    def round(self) -> None:
+        # The worker lock for the whole round: an install, restore or
+        # deletion holds it while it runs, and waits for a round underway
+        with lock.worker_round(STATE.parent) as ok:
+            if not ok:
+                if not self.waiting:
+                    log("an install or other operation is running; waiting")
+                self.waiting = True
+                return
+            self.waiting = False
             try:
                 state = load_state()
             except StateTrouble as e:
-                if not stopped:   # once, not every round
+                if not self.stopped:
                     log(str(e))
                     notify("Media server: post-import checks stopped", str(e))
-                stopped = True
-                time.sleep(int(os.environ.get("POSTIMPORT_INTERVAL", "60")))
-                continue
-            stopped = False
-            worker = Worker(apps, load_settings(), state)
+                self.stopped = True
+                return
+            self.stopped = False
+            worker = Worker(self.apps, load_settings(), state)
             try:
                 worker.new_imports()
                 worker.check_rejections()
@@ -1249,13 +1263,22 @@ def main():
                 playback.run(worker.state, STATE.parent)
                 # What isn't arriving: searched again, and why (hourly)
                 offline = c.read_text(STATE.parent / "netwatch/connection") == "offline"
-                stuck.run(apps + [prowlarr], worker.settings, STATE / "stuck.json", offline)
+                stuck.run(self.apps + [self.prowlarr], worker.settings, STATE / "stuck.json", offline)
             except ToolTrouble as e:
                 log(f"skipping this round: {e}")
             except Exception as e:  # keep running; what's saved so far stays
                 log(f"round failed: {e!r}")
             save(worker.state)
             c.write_json(STATE / "status.json", worker.status())
+
+
+def main():
+    STATE.mkdir(parents=True, exist_ok=True)
+    if len(sys.argv) == 3 and sys.argv[1] in ("--check", "--fix"):
+        return by_hand(sys.argv[1], sys.argv[2])
+    rounds = Rounds()
+    while True:
+        rounds.round()
         time.sleep(int(os.environ.get("POSTIMPORT_INTERVAL", "60")))
 
 

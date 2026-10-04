@@ -342,10 +342,11 @@ def ensure_anime_profile(cfg: Config, sonarr: App) -> None:
     anime = next((p for p in profiles if p.get("name") == ANIME_PROFILE), None)
     try:
         if anime is None:
-            sonarr.call("POST", "qualityprofile", dict({k: v for k, v in base.items() if k != "id"}, name=ANIME_PROFILE))
+            sonarr.call("POST", "qualityprofile", dict({k: v for k, v in base.items() if k != "id"}, name=ANIME_PROFILE,
+                                                       **anime_upgrades(cfg, base)))
             ok(f"Sonarr: '{ANIME_PROFILE}' profile created (from {cfg.sonarr_anime_profile})")
         else:
-            synced = dict(anime, items=base.get("items"), cutoff=base.get("cutoff"), upgradeAllowed=base.get("upgradeAllowed"))
+            synced = dict(anime, items=base.get("items"), **anime_upgrades(cfg, base))
             if synced != anime:
                 sonarr.call("PUT", f"qualityprofile/{anime['id']}", synced)
     except ApiError:
@@ -361,6 +362,28 @@ def ensure_anime_profile(cfg: Config, sonarr: App) -> None:
             ok(f"Sonarr: {len(moved)} anime series moved to the '{ANIME_PROFILE}' profile")
     except ApiError:
         warn("Sonarr: could not move anime series to the Anime profile")
+
+
+def lowest_allowed(items: list):
+    """The id of a profile's lowest allowed quality (or group): items run
+    from lowest to highest"""
+    for i in items or []:
+        if i.get("allowed"):
+            return i.get("id") if i.get("items") else (i.get("quality") or {}).get("id")
+    return None
+
+
+def anime_upgrades(cfg: Config, base: dict) -> dict:
+    """With anime_block_dubs: Sonarr replaces a file scored below 0 (a dub,
+    a low-quality group) once a better-scored release is out, itself: it
+    downloads and imports the new one, matched to the same episodes, before
+    the old file goes, and postimport checks it. Upgrades by score only:
+    the quality cutoff is the lowest allowed quality, so a file is never
+    replaced just for a higher resolution."""
+    if not cfg.flag("quality.anime_block_dubs", True):
+        return {"cutoff": base.get("cutoff"), "upgradeAllowed": base.get("upgradeAllowed")}
+    return {"upgradeAllowed": True, "cutoff": lowest_allowed(base.get("items") or []) or base.get("cutoff"),
+            "cutoffFormatScore": 0}
 
 
 def run_junk_filters(cfg: Config) -> None:

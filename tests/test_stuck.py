@@ -305,39 +305,30 @@ if __name__ == "__main__":
 
 
 class Dubs(unittest.TestCase):
-    """Dubbed anime already in the library, replaced only when a Japanese
-    release exists, counted before anything is deleted"""
+    """Dubbed anime already in the library: never deleted here. Sonarr
+    upgrades files it scores below 0 (it downloads the new one first); this
+    only asks it to search when a Japanese release is out"""
 
     def setUp(self):
         self.series = [{"id": 13, "title": "Kaiji", "seriesType": "anime", "originalLanguage": {"name": "Japanese"}},
                        {"id": 14, "title": "Western", "seriesType": "standard", "originalLanguage": {"name": "English"}}]
-        audio = lambda fid, season, langs: {"id": fid, "seasonNumber": season, "mediaInfo": {"audioLanguages": langs}}  # noqa: E731
+        audio = lambda fid, season, langs, score=-10000: {"id": fid, "seasonNumber": season, "customFormatScore": score,  # noqa: E731
+                                                          "mediaInfo": {"audioLanguages": langs}}
         self.files = {13: [audio(47, 1, "eng"), audio(48, 1, "eng"), audio(49, 1, "jpn/eng"), audio(50, 2, ""),
-                           audio(51, 2, "eng")],
+                           audio(51, 2, "eng", score=0)],
                       14: [audio(60, 1, "eng")]}
-        self.imports = [{"episodeId": 101, "downloadId": "PACK", "data": {"fileId": 47}},
-                        {"episodeId": 102, "downloadId": "PACK", "data": {"fileId": 48}},
-                        {"episodeId": 110, "downloadId": "", "data": {"fileId": 51}}]   # season 2: imported by hand
-        self.failed = []
-        self.releases = [release(approved=False, rejections=["Existing file on disk is of equal or higher preference"],
-                                 seeders=12) | {"title": "Kaiji S01 1080p Dual Audio", "languages": [{"name": "Japanese"}]}]
+        self.releases = [release(approved=True, seeders=12) | {"title": "Kaiji S01 1080p Dual Audio", "languages": [{"name": "Japanese"}]}]
         self.calls = []
         self.queue = []
 
         def answer(method, path, body):
-            self.calls.append((method, path.split("?")[0], path))
+            self.calls.append((method, path.split("?")[0], body))
             if path == "series":
                 return self.series
             if path.startswith("episodefile?"):
                 return self.files[int(path.split("=")[1])]
-            if path.startswith("history/series") and "eventType=3" in path:
-                return self.imports
-            if path.startswith("history/series") and "eventType=4" in path:
-                return self.failed
             if path.startswith("release?"):
                 return self.releases
-            if path.startswith("history?"):
-                return {"records": [{"id": 900, "downloadId": "PACK"}]}
             if path.startswith("queue"):
                 return {"records": self.queue}
             if path.startswith("wanted/missing"):
@@ -354,21 +345,19 @@ class Dubs(unittest.TestCase):
         stuck.Stuck([self.sonarr], self.settings, self.state, now=at).run()
 
     def writes(self):
-        return [(m, p) for m, p, full in self.calls if m in ("POST", "DELETE")]
+        return [(m, p, b) for m, p, b in self.calls if m in ("POST", "PUT", "DELETE")]
 
     def test_which_files_are_dubbed(self):
         seasons = stuck.Stuck([self.sonarr], self.settings, {}).dubbed_seasons(self.sonarr)
         self.assertEqual({k: [f["id"] for f in v["files"]] for k, v in seasons.items()}, {(13, 1): [47, 48], (13, 2): [51]})
 
-    def test_replaced_in_the_order_that_cant_lose_count(self):
+    def test_never_deletes_only_asks_sonarr_to_search(self):
         self.round()
-        self.assertEqual(self.writes(), [("POST", "history/failed/900"), ("DELETE", "episodefile/47"), ("DELETE", "episodefile/48"),
-                                         ("POST", "command")])
-        self.assertEqual(self.state["dubs"]["13:1"]["status"], "replacing")
-        search = [full for m, p, full in self.calls if p == "command"]
-        self.assertTrue(search)
+        self.assertEqual(self.writes(), [("POST", "command", {"name": "SeasonSearch", "seriesId": 13, "seasonNumber": 1})])
+        self.assertFalse([c for c in self.calls if c[0] == "DELETE" or c[1].startswith("history/failed")])
+        self.assertEqual(self.state["dubs"]["13:1"]["status"], "upgrading")
 
-    def test_nothing_deleted_without_a_japanese_release(self):
+    def test_nothing_asked_without_a_japanese_release(self):
         for releases in ([], [release(approved=True) | {"title": "Kaiji S01 English Dub", "languages": [{"name": "English"}]}],
                          [release(approved=True, seeders=0) | {"title": "Kaiji S01 Dual Audio", "languages": []}],
                          [release(rejections=["Custom Formats Dubs Only have score -10000"]) | {"title": "Kaiji Dual Audio"}]):
@@ -377,11 +366,12 @@ class Dubs(unittest.TestCase):
             self.assertEqual(self.writes(), [], releases)
             self.assertEqual(self.state["dubs"]["13:1"]["status"], "waiting")
 
-    def test_within_the_replacement_limit(self):
-        self.failed = [{"episodeId": 101}] * 3 + [{"episodeId": 102}] * 3
+    def test_dubs_sonarr_doesnt_score_as_dubs_are_only_reported(self):
+        self.files[13] = [f for f in self.files[13] if f["seasonNumber"] == 2]   # file 51: score 0
         self.round()
         self.assertEqual(self.writes(), [])
-        self.assertEqual(self.state["dubs"]["13:1"]["status"], "kept")
+        self.assertEqual(self.state["dubs"]["13:2"]["status"], "manual")
+        self.assertFalse([c for c in self.calls if c[1] == "release"])   # not even a search
 
     def test_once_every_12_hours_and_not_while_downloading(self):
         self.releases = []
@@ -394,7 +384,8 @@ class Dubs(unittest.TestCase):
         self.assertEqual([c for c in self.calls if c[1] == "release"], [])
 
     def test_a_failed_look_is_said_not_swallowed(self):
-        self.sonarr.answers = lambda m, p, b, old=self.sonarr.answers: OSError("timed out") if p.startswith("release?") else old(m, p, b)
+        old = self.sonarr.answers
+        self.sonarr.answers = lambda m, p, b: OSError("timed out") if p.startswith("release?") else old(m, p, b)
         self.round()
         self.assertEqual((self.state["dubs"]["13:1"]["status"], self.state["dubs"]["13:1"]["error"]), ("error", "timed out"))
 
@@ -403,3 +394,22 @@ class Dubs(unittest.TestCase):
         self.round()
         self.assertEqual(self.writes(), [])
         self.assertNotIn("dubs", self.state)
+
+
+class AnimeUpgrades(unittest.TestCase):
+    """Setup's Anime profile: upgrades by score only (dubs and low-quality
+    groups replaced by Sonarr itself), never for resolution"""
+
+    def test_profile_settings(self):
+        from mediaserver.steps import arrs
+        items = [{"quality": {"id": 1, "name": "SDTV"}, "allowed": False},
+                 {"name": "WEB 720p", "id": 1001, "allowed": False, "items": []},
+                 {"quality": {"id": 9, "name": "HDTV-1080p"}, "allowed": True},
+                 {"quality": {"id": 7, "name": "Bluray-1080p"}, "allowed": True}]
+        cfg = mock.Mock()
+        cfg.flag.return_value = True
+        self.assertEqual(arrs.anime_upgrades(cfg, {"items": items, "cutoff": 7, "upgradeAllowed": False}),
+                         {"upgradeAllowed": True, "cutoff": 9, "cutoffFormatScore": 0})
+        cfg.flag.return_value = False
+        self.assertEqual(arrs.anime_upgrades(cfg, {"items": items, "cutoff": 7, "upgradeAllowed": False}),
+                         {"cutoff": 7, "upgradeAllowed": False})

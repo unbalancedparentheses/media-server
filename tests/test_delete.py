@@ -37,13 +37,23 @@ class Delete(Stack):
             ids = req.arg("Ids").split(",")
             return {"Items": [i for i in s.jellyfin.items if i["Id"] in ids]}
 
+        # Grabs (eventType 1) and imports (3, with each file's original
+        # path: the proof a torrent's files are this title's)
+        self.radarr_history = {"1": [{"downloadId": "ABCDEF", "sourceTitle": "Skyfall.2012.1080p"}],
+                               "3": [{"downloadId": "ABCDEF", "data": {"droppedPath": "/dl/Skyfall.2012.1080p/Skyfall.mkv"}}]}
+        self.sonarr_history = {"1": [{"downloadId": "S1PACK", "episodeId": 501, "sourceTitle": "Kaiji S01"},
+                                     {"downloadId": "S2EP", "episodeId": 502, "sourceTitle": "Kaiji S02E01"}],
+                               "3": [{"downloadId": "S1PACK", "episodeId": 501, "data": {"droppedPath": f"/dl/Kaiji S01/Kaiji.S01E{n:02d}.mkv"}}
+                                     for n in range(1, 4)]
+                                    + [{"downloadId": "S2EP", "episodeId": 502, "data": {"droppedPath": "/dl/Kaiji.S02E01.mkv"}}]}
+
         @first(s.radarr, "GET", r"/api/v3/history/movie")
-        def radarr_grabs(req):
-            return [{"downloadId": "ABCDEF"}]
+        def radarr_history(req):
+            return self.radarr_history[req.arg("eventType")]
 
         @first(s.sonarr, "GET", r"/api/v3/history/series")
-        def sonarr_grabs(req):
-            return [{"downloadId": "S1PACK", "episodeId": 501}, {"downloadId": "S2EP", "episodeId": 502}]
+        def sonarr_history(req):
+            return self.sonarr_history[req.arg("eventType")]
 
         @first(s.sonarr, "GET", r"/api/v3/episodefile")
         def files(req):
@@ -107,30 +117,60 @@ class Delete(Stack):
 
     def test_a_torrent_with_other_seasons_is_kept(self):
         """A pack of seasons 1 and 2: deleting season 1 mustn't take it"""
-        s = self.stack
-
-        @first(s.sonarr, "GET", r"/api/v3/history/series")
-        def grabs(req):
-            return [{"downloadId": "BOTH", "episodeId": 501, "sourceTitle": "Kaiji S01-S02"},
-                    {"downloadId": "BOTH", "episodeId": 502, "sourceTitle": "Kaiji S01-S02"}]
-        self.contents["both"] = [{"name": "Kaiji.S01E01.mkv"}, {"name": "Kaiji.S02E01.mkv"}]
+        self.sonarr_history["1"] = [{"downloadId": "BOTH", "episodeId": 501, "sourceTitle": "Kaiji S01-S02"},
+                                    {"downloadId": "BOTH", "episodeId": 502, "sourceTitle": "Kaiji S01-S02"}]
+        self.sonarr_history["3"] = [{"downloadId": "BOTH", "episodeId": 501, "data": {"droppedPath": "/dl/x/Kaiji.S01E01.mkv"}},
+                                    {"downloadId": "BOTH", "episodeId": 502, "data": {"droppedPath": "/dl/x/Kaiji.S02E01.mkv"}}]
+        self.contents["both"] = [{"name": "x/Kaiji.S01E01.mkv"}, {"name": "x/Kaiji.S02E01.mkv"}]
         result = self.library.delete("jfseries", 1, False)
         self.assertEqual(self.deleted_hashes, [])
         self.assertEqual(result["torrents_kept"], ["Kaiji S01-S02"])
 
-    def test_a_torrent_whose_files_say_other_seasons_is_kept(self):
-        """History says season 1 only, but the files say otherwise"""
-        self.contents["s1pack"].append({"name": "Kaiji Season 2/Kaiji.S02E01.mkv"})
+    def test_a_video_that_wasnt_imported_for_it_keeps_the_torrent(self):
+        """Proof, not a guess: a file in the torrent that no import of this
+        season came from (no season in its name at all) keeps it"""
+        self.contents["s1pack"].append({"name": "Kaiji S01/Bonus Movie.mkv", "size": 2 * 1024 ** 3})
         result = self.library.delete("jfseries", 1, False)
         self.assertEqual(self.deleted_hashes, [])
-        self.assertEqual(len(result["torrents_kept"]), 1)
+        self.assertEqual(result["torrents_kept"], ["Kaiji S01"])
 
-    def test_a_pack_of_films_is_kept(self):
-        self.contents["abcdef"] = [{"name": "Bond/Skyfall.mkv", "size": 30 * 1024 ** 3}, {"name": "Bond/Spectre.mkv", "size": 30 * 1024 ** 3}]
+    def test_a_pack_of_films_is_kept_whatever_the_sizes(self):
+        self.contents["abcdef"] = [{"name": "Bond/Skyfall.mkv", "size": 30 * 1024 ** 3}, {"name": "Bond/Spectre.mkv", "size": 100 * 1024 ** 2}]
         result = self.library.delete("jfmovie", None, False)
         self.assertEqual(self.deleted_hashes, [])
         self.assertEqual(len(result["torrents_kept"]), 1)
         self.assertEqual(self.stack.radarr.resources["movie"].items, [])   # the film itself goes
+
+    def test_whole_series_still_needs_proof(self):
+        """Deleting the whole series doesn't take a torrent with another series in it"""
+        self.contents["s2ep"].append({"name": "Other.Show.S01E01.mkv"})
+        self.library.delete("jfseries", None, False)
+        self.assertEqual(self.deleted_hashes, [("s1pack", "true")])
+
+    def test_unfinished_downloads_stay_in_qbittorrent(self):
+        removed = []
+        first(self.stack.radarr, "GET", "/api/v3/queue")(lambda req: {"records": [{"id": 5, "title": "Skyfall.2160p"}]})
+        first(self.stack.radarr, "DELETE", r"/api/v3/queue/(\d+)")(lambda req, qid: (removed.append(req.arg("removeFromClient")), (200, {}))[1])
+        result = self.library.delete("jfmovie", None, False)
+        self.assertEqual(removed, ["false"])   # out of Radarr's queue, left in qBittorrent
+        self.assertTrue(any("still downloading" in k for k in result["torrents_kept"]))
+
+    def test_a_damaged_plans_file_is_kept_not_emptied(self):
+        self.library.plans_file.write_text("{damaged")
+        with self.assertRaises(control.PlanTrouble):
+            self.library.delete("jfmovie", None, False)
+        self.assertEqual(self.library.plans_file.read_text(), "{damaged")
+        self.assertEqual(len(self.stack.radarr.resources["movie"].items), 1)   # nothing deleted
+
+    def test_seerr_not_answering_leaves_its_step(self):
+        broken = first(self.stack.seerr, "GET", r"/api/v1/movie/\d+")(lambda req: (503, None))
+        from mediaserver.api import ApiError
+        with self.assertRaises(ApiError):
+            self.library.delete("jfmovie", None, False)
+        self.assertEqual(self.library.plans()["jfmovie"]["steps"], ["seerr", "refresh"])
+        self.stack.seerr.routes = [r for r in self.stack.seerr.routes if r[2] is not broken]
+        self.library.delete("jfmovie", None, False)
+        self.assertEqual(self.seerr_deleted, [900])
 
     def test_a_failure_after_the_title_is_gone_is_finished_by_trying_again(self):
         s = self.stack

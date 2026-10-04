@@ -295,12 +295,29 @@ class MainLoop(Scratch):
         self.assertEqual(state_file, self.dir / "postimport/stuck.json")
         self.assertTrue(offline)
 
+    def hold_operation(self):
+        """An install holding the operation and worker locks"""
+        from mediaserver import lock
+        lock.acquire(self.dir, wait_workers=0)
+        self.addCleanup(lock.release, self.dir)
+
     def test_waits_while_an_install_runs(self):
-        with mock.patch.object(pi.sys, "argv", ["postimport"]), mock.patch.object(pi, "operation_running", return_value=True), \
+        self.hold_operation()
+        with mock.patch.object(pi.sys, "argv", ["postimport"]), \
                 mock.patch.object(pi.Worker, "new_imports") as work, mock.patch.object(pi.time, "sleep", self.rounds(1)), \
                 self.assertRaises(KeyboardInterrupt):
             pi.main()
         work.assert_not_called()
+
+    def test_by_hand_fix_waits_its_turn_too(self):
+        self.hold_operation()
+        video = self.dir / "Film.mkv"
+        video.write_bytes(b"x")
+        with mock.patch.object(pi, "probe", return_value=media(audio(1, "aac", "eng"))), \
+                mock.patch.object(pi.Worker, "fix") as fix, redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(pi.by_hand("--fix", str(video)), 1)
+        fix.assert_not_called()
+        self.assertIn("an install or other operation is running", out.getvalue())
 
     def test_by_hand_from_the_command_line(self):
         with mock.patch.object(pi.sys, "argv", ["postimport", "--check", "x.mkv"]), \
@@ -499,3 +516,50 @@ class UnpreservableRecord(Scratch):
             pi.main()
         work.assert_not_called()
         self.assertEqual(notify.call_count, 1)
+
+
+class WorkerLock(unittest.TestCase):
+    """Operations and the background worker never change things at once"""
+
+    def setUp(self):
+        self.state = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.state)
+
+    def test_a_round_underway_makes_an_operation_wait_or_refuse(self):
+        from mediaserver import lock
+        from mediaserver.ui import SetupError
+        with lock.worker_round(self.state) as ok:
+            self.assertTrue(ok)
+            with self.assertRaises(SetupError), redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
+                lock.acquire(self.state, wait_workers=0)
+            self.assertFalse((self.state / "lock").exists())   # and the operation lock was let go
+        lock.acquire(self.state, wait_workers=0)   # after the round: fine
+        try:
+            with lock.worker_round(self.state) as ok:
+                self.assertFalse(ok)   # an operation holds it: the round is skipped
+        finally:
+            lock.release(self.state)
+        with lock.worker_round(self.state) as ok:
+            self.assertTrue(ok)
+
+
+@unittest.skipUnless(HAS_FFMPEG, "needs ffmpeg")
+class FfmpegCleanup(Scratch):
+    def test_failing_progress_report_doesnt_leave_ffmpeg_running(self):
+        video = self.dir / "Long.mkv"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=size=64x64:rate=5:duration=600",
+                        "-f", "lavfi", "-i", "sine=duration=600", "-ac", "6", "-c:v", "mpeg4", "-c:a", "ac3", str(video)], check=True)
+        started = []
+        real_popen = subprocess.Popen
+
+        def popen(*a, **kw):
+            started.append(real_popen(*a, **kw))
+            return started[-1]
+
+        def full_disk(fraction):
+            raise OSError(28, "No space left on device")
+        cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(video), "-c:v", "copy", "-c:a", "aac", "-f", "matroska",
+               str(self.dir / "out.mkv")]
+        with mock.patch.object(pi.subprocess, "Popen", popen), self.assertRaises(OSError):
+            pi.run_ffmpeg(cmd, 600, full_disk)
+        self.assertIsNotNone(started[0].poll())   # stopped, not left running

@@ -18,6 +18,14 @@ from mediaserver import common as c
 from mediaserver.ui import err
 
 _held: dict[Path, int] = {}   # state dir → the open, locked file
+_workers_held: dict[Path, int] = {}   # state dir → the worker lock an operation holds
+
+# The background workers (postimport) take .state/worker.lock for each
+# round's changes, without waiting: if they can't, an operation has it and
+# they skip the round. An operation takes it after its own lock and holds
+# it to the end, waiting (WORKER_WAIT at most) for a round already underway
+# to finish its file. So the two never change things at the same time.
+WORKER_WAIT = 30 * 60
 
 
 def path(state: Path) -> Path:
@@ -34,9 +42,59 @@ def owner(state: Path) -> int | None:
         return None
 
 
-def acquire(state: Path) -> None:
+def _worker_fd(state: Path) -> int:
+    state.mkdir(parents=True, exist_ok=True)
+    return os.open(state / "worker.lock", os.O_RDWR | os.O_CREAT, 0o600)
+
+
+def acquire(state: Path, wait_workers: float = WORKER_WAIT) -> None:
+    """The operation lock, then the workers': waits up to <wait_workers>
+    seconds for a background round to finish (0: don't wait)"""
     if state in _held:
         return
+    _acquire_operation(state)
+    import time
+    fd = _worker_fd(state)
+    deadline, said = time.time() + wait_workers, False
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.time() >= deadline:
+                os.close(fd)
+                release(state)
+                raise err("The post-import checks are busy with a file; try again in a few minutes") from None
+            if not said:
+                print("   Waiting for the post-import checks to finish the file they're working on…", flush=True)
+                said = True
+            time.sleep(2)
+    _workers_held[state] = fd
+
+
+class worker_round:
+    """with worker_round(state) as ok: a background worker's round, only
+    when no operation holds the worker lock (ok is False then: skip it)"""
+
+    def __init__(self, state: Path):
+        self.state, self.fd, self.ok = state, -1, False
+
+    def __enter__(self) -> bool:
+        self.fd = _worker_fd(self.state)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.ok = True
+        except BlockingIOError:
+            self.ok = False
+        return self.ok
+
+    def __exit__(self, *exc) -> None:
+        if self.ok:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+        os.close(self.fd)
+
+
+def _acquire_operation(state: Path) -> None:
     state.mkdir(parents=True, exist_ok=True)
     fd = os.open(state / "operation.lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -57,6 +115,10 @@ def acquire(state: Path) -> None:
 
 def release(state: Path) -> None:
     """Only a lock this process holds"""
+    wfd = _workers_held.pop(state, None)
+    if wfd is not None:
+        fcntl.flock(wfd, fcntl.LOCK_UN)
+        os.close(wfd)
     fd = _held.pop(state, None)
     if fd is None:
         return

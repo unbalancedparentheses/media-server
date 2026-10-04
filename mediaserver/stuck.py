@@ -25,13 +25,16 @@ missing. So, run from the postimport service:
   language, cutoff, minimum score) stays as it was. Sonarr sets profiles
   per series, so for a series the copy applies to all of it.
 - Dubbed anime already in the library (Japanese anime whose file has no
-  Japanese audio, as Sonarr read the file): replaced only once a look-only
-  search finds a Japanese or Dual Audio release Sonarr would take, with
-  seeders (a dub you can watch beats nothing). Then, in the order that
-  can't lose count: the dub's download is marked failed (blocklisted, and
-  counted by the replacement limit), its files deleted, the season searched.
-  Within library.max_replacements per episode, one season an hour, never
-  files imported by hand. quality.anime_block_dubs = false turns it off.
+  Japanese audio, as Sonarr read the file): nothing is deleted here. Setup
+  lets Sonarr replace files scored below 0 (its Dubs Only format) once a
+  better release is out, which it does safely: the new release is
+  downloaded and imported, matched to the same episodes, before the old
+  file goes, and postimport checks it (within max_replacements). This asks
+  Sonarr to search such a season when a look-only search finds a Japanese
+  or Dual Audio release it would take, with seeders; every 12 hours, one
+  season an hour. Dubs Sonarr doesn't score as dubs (their release names
+  don't say so) are only reported: pick a release by hand.
+  quality.anime_block_dubs = false turns it off.
 - library.search_missing = false turns all of it off: nothing here asks
   the indexers anything.
 
@@ -367,6 +370,7 @@ class Stuck:
         # Forget seasons that are no longer dubbed (replaced, or deleted)
         for key in [k for k in dubs if tuple(int(x) for x in k.split(":")) not in seasons]:
             dubs.pop(key)
+
         def looked_lately(k) -> bool:
             entry = dubs.get(f"{k[0]}:{k[1]}") or {}
             return "looked_at" in entry and self.now - entry["looked_at"] < DIAGNOSE_EVERY
@@ -374,58 +378,34 @@ class Stuck:
         due.sort(key=lambda k: dubs.get(f"{k[0]}:{k[1]}", {}).get("looked_at", 0))
         for sid, season in due[:1]:
             entry = dubs.setdefault(f"{sid}:{season}", {"looks": 0})
-            entry.update(title=seasons[(sid, season)]["title"], episodes=len(seasons[(sid, season)]["files"]))
+            files = seasons[(sid, season)]["files"]
+            entry.update(title=seasons[(sid, season)]["title"], episodes=len(files))
             try:
-                self.replace_season(sonarr, sid, season, seasons[(sid, season)]["files"], entry)
+                self.look_for_japanese(sonarr, sid, season, files, entry)
             except c.HTTP_ERRORS as e:
                 # Said, not swallowed: tried again in 12 hours
                 entry["status"] = "error"
                 entry["error"] = str(e)[:200]
                 c.log(f"{entry['title']}: couldn't look for a Japanese release ({e}); trying again in 12 h")
 
-    def replace_season(self, sonarr, sid: int, season: int, files: list, entry: dict) -> None:
+    def look_for_japanese(self, sonarr, sid: int, season: int, files: list, entry: dict) -> None:
+        """Nothing is deleted: Sonarr upgrades files it scores below 0 (it
+        downloads the new one first); this only asks it to search when
+        there's something to find"""
         entry["looks"] += 1
         entry["looked_at"] = self.now
-        # Within the replacement limit, per episode (Sonarr's failed releases)
-        imports = sonarr.call("GET", f"history/series?seriesId={sid}&eventType=3") or []
-        failed = sonarr.call("GET", f"history/series?seriesId={sid}&eventType=4") or []
-        by_file = {str((r.get("data") or {}).get("fileId")): r for r in imports if (r.get("data") or {}).get("fileId")}
-        tries = {}
-        for r in failed:
-            tries[r.get("episodeId")] = tries.get(r.get("episodeId"), 0) + 1
-        limit = self.settings.get("max_replacements", 3)
-        groups: dict = {}
-        for f in files:
-            record = by_file.get(str(f["id"]))
-            if not record or not record.get("downloadId"):
-                continue   # imported by hand: left alone
-            if tries.get(record.get("episodeId"), 0) >= limit:
-                continue   # tried enough: kept
-            groups.setdefault(record["downloadId"], []).append(f["id"])
-        if not groups:
-            entry["status"] = "kept"
+        if all((f.get("customFormatScore") or 0) >= 0 for f in files):
+            # Sonarr doesn't see them as dubs, so it won't replace them
+            entry["status"] = "manual"
             return
         releases = sonarr.call("GET", f"release?seriesId={sid}&seasonNumber={season}", timeout=RELEASE_SEARCH_TIMEOUT) or []
         if not any(japanese_release(r) and takeable(r) for r in releases):
-            entry["status"] = "waiting"   # no Japanese release to replace it with yet
+            entry["status"] = "waiting"
             return
-        for download, file_ids in groups.items():
-            grabs = (sonarr.call("GET", f"history?page=1&pageSize=10&eventType=1&downloadId={download}") or {}).get("records") or []
-            grab = next((g for g in grabs if g.get("downloadId") == download), None)
-            if not grab:
-                continue
-            # Counted (blocklisted as failed) before anything is deleted
-            sonarr.call("POST", f"history/failed/{grab['id']}")
-            for fid in file_ids:
-                try:
-                    sonarr.call("DELETE", f"episodefile/{fid}")
-                except c.HTTP_ERRORS as e:
-                    if getattr(e, "code", None) != 404:
-                        raise
         sonarr.call("POST", "command", {"name": "SeasonSearch", "seriesId": sid, "seasonNumber": season})
-        entry["status"] = "replacing"
-        entry["replaced_at"] = self.now
-        c.log(f"{entry['title']}: a Japanese release is out; replacing the dub ({entry['episodes']} episodes)")
+        entry["status"] = "upgrading"
+        entry["searched_at"] = self.now
+        c.log(f"{entry['title']}: a Japanese release is out; Sonarr is asked to upgrade the dub ({entry['episodes']} episodes)")
 
     def retest_indexers(self) -> None:
         """Ask Prowlarr to test the indexers again when some are switched off
