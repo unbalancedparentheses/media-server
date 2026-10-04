@@ -719,12 +719,12 @@ class Arr:
         except OSError:
             return ""
 
-    def call(self, method, path, body=None) -> Any:
+    def call(self, method, path, body=None, timeout: float = 30) -> Any:
         """The decoded JSON answer ({} when there's no body)"""
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"{self.url}/api/{self.version}/{path}", data=data, method=method,
                                      headers={"X-Api-Key": self.key(), "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
         return json.loads(raw) if raw else {}
 

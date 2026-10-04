@@ -53,6 +53,8 @@ DIAGNOSE_AFTER = 86400          # missing this long before it's looked into
 DIAGNOSE_EVERY = 12 * 3600      # and not again sooner (it queries the indexers)
 MAX_WAIT = 86400                # the longest pause between searches
 RETEST_INDEXERS_EVERY = 6 * 3600
+# A release search asks every indexer: it can take a minute or more
+RELEASE_SEARCH_TIMEOUT = 180
 FALLBACK_AFTER = 7 * 86400
 
 # Words in Sonarr/Radarr's rejection reasons → what kind of reason it is
@@ -289,8 +291,9 @@ class Stuck:
             m, item = missing[key], items[key]
             app = self.apps[m["app"]]
             try:
-                releases = app.call("GET", m["query"]) or []
-            except c.HTTP_ERRORS:
+                releases = app.call("GET", m["query"], timeout=RELEASE_SEARCH_TIMEOUT) or []
+            except c.HTTP_ERRORS as e:
+                c.log(f"{m['title']}: couldn't look at the releases ({e})")
                 continue
             item["diagnosis"] = classify(releases if isinstance(releases, list) else [], self.indexers_down(app))
             item["diagnosed_at"] = self.now
@@ -374,8 +377,11 @@ class Stuck:
             entry.update(title=seasons[(sid, season)]["title"], episodes=len(seasons[(sid, season)]["files"]))
             try:
                 self.replace_season(sonarr, sid, season, seasons[(sid, season)]["files"], entry)
-            except c.HTTP_ERRORS:
-                pass   # tried again in 12 hours
+            except c.HTTP_ERRORS as e:
+                # Said, not swallowed: tried again in 12 hours
+                entry["status"] = "error"
+                entry["error"] = str(e)[:200]
+                c.log(f"{entry['title']}: couldn't look for a Japanese release ({e}); trying again in 12 h")
 
     def replace_season(self, sonarr, sid: int, season: int, files: list, entry: dict) -> None:
         entry["looks"] += 1
@@ -399,7 +405,7 @@ class Stuck:
         if not groups:
             entry["status"] = "kept"
             return
-        releases = sonarr.call("GET", f"release?seriesId={sid}&seasonNumber={season}") or []
+        releases = sonarr.call("GET", f"release?seriesId={sid}&seasonNumber={season}", timeout=RELEASE_SEARCH_TIMEOUT) or []
         if not any(japanese_release(r) and takeable(r) for r in releases):
             entry["status"] = "waiting"   # no Japanese release to replace it with yet
             return

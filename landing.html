@@ -853,7 +853,9 @@
       return['↓ '+fmtSpeed(t.dlspeed)+' · '+t.num_seeds+' seeders',''];
     }
     function dlRow(name,pct,meta,cls,right){
-      return'<div class="dl"><div class="dl-top"><span class="dl-name" title="'+esc(name)+'">'+esc(name)+'</span><span class="dl-pct">'+(right||pct+'%')+'</span></div>'
+      // Seeding rows have no percentage: their upload speed, or nothing
+      var corner=right||(pct==null?'':pct+'%');
+      return'<div class="dl"><div class="dl-top"><span class="dl-name" title="'+esc(name)+'">'+esc(name)+'</span><span class="dl-pct">'+corner+'</span></div>'
         +'<div class="dl-meta">'+meta+'</div>'+(pct==null?'':'<div class="bar '+cls+'"><i style="width:'+pct+'%"></i></div>')+'</div>';
     }
     // Each source on its own: one that doesn't answer is said so, never
@@ -889,7 +891,7 @@
         if(d.seeding.length){
           var open=store('seedingOpen')?' open':'';
           html+='<details class="more-list" id="seeding"'+open+'><summary>'+plural(d.seeding.length,'finished download')+' sharing back (seeding) · ↑ '+fmtSpeed(d.up)+' ▾</summary>'
-            +d.seeding.map(function(t){return dlRow(t.name,null,'<span>'+fmtSize(t.size)+'</span><span>ratio '+(t.ratio||0).toFixed(2)+'</span>'+(t.upspeed?'<span>↑ '+fmtSpeed(t.upspeed)+'</span>':'')+(t.category?'<span>'+esc(t.category)+'</span>':''),'','');}).join('')+'</details>';
+            +d.seeding.map(function(t){return dlRow(t.name,null,'<span>'+fmtSize(t.size)+'</span><span>ratio '+(t.ratio||0).toFixed(2)+'</span>'+(t.category?'<span>'+esc(t.category)+'</span>':''),'',t.upspeed?'↑ '+fmtSpeed(t.upspeed):'');}).join('')+'</details>';
         }
         document.getElementById('downloads').innerHTML=html;
         var sd=document.getElementById('seeding');

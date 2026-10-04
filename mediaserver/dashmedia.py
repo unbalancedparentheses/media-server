@@ -776,6 +776,8 @@ def health():
             d["status"] = f"No Japanese or Dual Audio release out yet (looked {max(e.get('looks', 0) for e in seasons)}×; again every 12 h)"
         elif seasons and all(e.get("status") == "kept" for e in seasons):
             d["status"] = "Kept: the replacement limit was reached"
+        elif any(e.get("status") == "error" for e in seasons):
+            d["status"] = "Couldn't look for a Japanese release last time (Sonarr or the indexers didn't answer); trying again every 12 h"
     out["dubs"] = sorted(dubs.values(), key=lambda d: d["title"])
     return out
 

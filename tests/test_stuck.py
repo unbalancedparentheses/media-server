@@ -67,7 +67,7 @@ class FakeApp:
         self.name, self.calls = name, []
         self.answers: Any = answers
 
-    def call(self, method, path, body=None):
+    def call(self, method, path, body=None, timeout=30):
         self.calls.append((method, path, body))
         answer = self.answers(method, path, body)
         if isinstance(answer, Exception):
@@ -392,6 +392,11 @@ class Dubs(unittest.TestCase):
         self.calls = []
         self.round(13 * 3600)
         self.assertEqual([c for c in self.calls if c[1] == "release"], [])
+
+    def test_a_failed_look_is_said_not_swallowed(self):
+        self.sonarr.answers = lambda m, p, b, old=self.sonarr.answers: OSError("timed out") if p.startswith("release?") else old(m, p, b)
+        self.round()
+        self.assertEqual((self.state["dubs"]["13:1"]["status"], self.state["dubs"]["13:1"]["error"]), ("error", "timed out"))
 
     def test_off_with_anime_block_dubs(self):
         self.settings["block_dubs"] = False
