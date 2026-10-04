@@ -120,8 +120,9 @@
   .sp-foot{display:flex;align-items:center;justify-content:space-between;gap:0.6rem;margin-top:0.8rem}
   .sp-msg{font-size:0.7rem;color:var(--text2)}
   .poster-wrap{position:relative}
-  .p-more{position:absolute;top:0.4rem;right:0.4rem;width:2rem;height:2rem;border-radius:50%;border:1px solid var(--border-hover);background:#000a;color:var(--text);font-size:1rem;line-height:1;cursor:pointer;opacity:0;transition:opacity .15s}
+  .p-more{position:absolute;top:0.4rem;right:0.4rem;width:2rem;height:2rem;border-radius:50%;border:1px solid var(--border-hover);background:#000a;color:var(--text);font-size:1rem;line-height:1;cursor:pointer;opacity:0.55;transition:opacity .15s}
   .poster-wrap:hover .p-more,.p-more:focus-visible{opacity:1}
+  .p-more:hover{background:var(--red);border-color:var(--red);color:#111}
   @media (hover:none){.p-more{opacity:0.85}}
   .modal{position:fixed;inset:0;z-index:100;background:#000a;display:flex;align-items:center;justify-content:center;padding:1rem}
   .modal.hidden{display:none}
@@ -409,7 +410,7 @@
         +(src?'<img loading="lazy" src="'+src+'" alt="" onerror="this.remove()">':'')+'<div class="p-none"'+(src?' style="z-index:-1"':'')+'>'+esc(c.title)+'</div>'
         +badge+bar+'<div class="p-play">▶</div></div><div class="p-title">'+esc(c.title)+'</div><div class="p-sub">'+esc(c.detail||'')+'</div></a>';
       // Library posters: ⋯ for deleting it
-      return opts&&opts.manage?'<div class="poster-wrap">'+card+'<button class="p-more" data-item="'+esc(c.id)+'" aria-label="More for '+esc(c.title)+'" title="Delete…">⋯</button></div>':card;
+      return opts&&opts.manage?'<div class="poster-wrap">'+card+'<button class="p-more" data-item="'+esc(c.id)+'" aria-label="Delete '+esc(c.title)+'…" title="Delete…">⋯</button></div>':card;
     }
 
     // A recommendation: its scores, and whether it's here already (watch),
