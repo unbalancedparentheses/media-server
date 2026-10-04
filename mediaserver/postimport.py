@@ -69,7 +69,7 @@ from pathlib import Path
 from typing import Any
 
 from mediaserver import common as c
-from mediaserver import stuck
+from mediaserver import playback, stuck
 from mediaserver.config import local
 from mediaserver.common import background, log, read_json
 
@@ -829,7 +829,7 @@ class Worker:
     def __init__(self, apps, settings, state):
         self.apps, self.settings, self.state = apps, settings, state
         for key, empty in (("last_import", {}), ("rejections", {}), ("seen", {}), ("recent", []),
-                           ("pending", {}), ("failures", {})):
+                           ("pending", {}), ("failures", {}), ("playback", []), ("playback_pending", {})):
             self.state.setdefault(key, empty)
         self.current: dict | None = None
 
@@ -1002,6 +1002,8 @@ class Worker:
                 app.rescan(record)
             except (OSError, urllib.error.URLError):
                 pass
+        # Imported and checked; whether Jellyfin plays it is verified next
+        playback.queue(self.state, path, title)
         return True
 
     def check_rejections(self):
@@ -1121,6 +1123,10 @@ class Worker:
                         "episodeId": e["record"].get("episodeId"), "path": (e["record"].get("data") or {}).get("importedPath"),
                         "suspect": (e.get("suspect") or {}).get("problem")} for e in self.state["pending"].values()],
             "retrying": sorted(self.state["failures"]),
+            # Playback verified (Jellyfin opens it, tracks, a short stream),
+            # separate from imported
+            "playback": self.state["playback"][:50],
+            "playback_waiting": len(self.state["playback_pending"]),
         }
 
 
@@ -1240,6 +1246,7 @@ def main():
                 worker.new_imports()
                 worker.check_rejections()
                 worker.sweep()
+                playback.run(worker.state, STATE.parent)
                 # What isn't arriving: searched again, and why (hourly)
                 offline = c.read_text(STATE.parent / "netwatch/connection") == "offline"
                 stuck.run(apps + [prowlarr], worker.settings, STATE / "stuck.json", offline)

@@ -396,6 +396,35 @@ def requests():
     return out
 
 
+def playback_results() -> list:
+    """postimport's playback checks, newest first"""
+    return (c.read_json(STATE / "postimport/status.json", {}) or {}).get("playback") or []
+
+
+def with_playback(stages: list, folder: str, results: list) -> list:
+    """The Ready stage says whether playback was verified (imported isn't
+    the same as playable): the latest check of each file in the folder;
+    any that failed make it a problem, with the reason"""
+    if not folder:
+        return stages
+    latest: dict = {}
+    for r in results:
+        if str(r.get("path", "")).startswith(folder.rstrip("/") + "/"):
+            latest.setdefault(r["path"], r)
+    if not latest:
+        return stages
+    failed = [r for r in latest.values() if r.get("status") == "failed"]
+    for st in stages:
+        if st["name"] != "ready":
+            continue
+        if failed:
+            st["state"] = "problem"
+            st["detail"] = "; ".join(f"{r.get('title')}: {r.get('detail')}" for r in failed[:2])
+        elif st["state"] == "done":
+            st["detail"] = (st["detail"] + " · " if st["detail"] else "") + "playback verified"
+    return stages
+
+
 def stuck_items() -> dict:
     """What the postimport service found out about titles that aren't arriving"""
     return (c.read_json(STATE / "postimport/stuck.json", {}) or {}).get("items") or {}
@@ -424,7 +453,7 @@ def movie_pipeline(movie: dict, requested, queue_m: dict, current: dict, queued:
                                     checking_for(current, queued, movie.get("path", ""), "Radarr", movie.get("id")),
                                     subs.get(movie.get("id"), 0)), current, movie.get("path", ""))
     item = stuck_items().get(f"radarr:{movie.get('id')}")
-    return with_diagnosis(stages, [item] if item else [])
+    return with_playback(with_diagnosis(stages, [item] if item else []), movie.get("path", ""), playback_results())
 
 
 def series_pipeline(show: dict, requested, queue_s: dict, current: dict, queued: list, subs: dict) -> list:
@@ -435,7 +464,7 @@ def series_pipeline(show: dict, requested, queue_s: dict, current: dict, queued:
                                     checking_for(current, queued, show.get("path", ""), "Sonarr", show.get("id")),
                                     subs.get(show.get("id"), 0)), current, show.get("path", ""))
     seasons = [i for k, i in sorted(stuck_items().items()) if k.startswith(f"sonarr:{show.get('id')}:")]
-    return with_diagnosis(stages, seasons)
+    return with_playback(with_diagnosis(stages, seasons), show.get("path", ""), playback_results())
 
 
 def downloading(queue):
@@ -730,6 +759,13 @@ def health():
                     d = dubs.setdefault(item["SeriesName"], {"title": item["SeriesName"], "episodes": 0,
                                                              "admin": f"sonarr:/series/{japanese[item['SeriesName']]}"})
                     d["episodes"] += 1
+    # Files imported that Jellyfin couldn't play (the latest check of each)
+    latest: dict = {}
+    for r in status.get("playback") or []:
+        latest.setdefault(r.get("path"), r)
+    out["playback_failed"] = [{"title": r.get("title"), "detail": r.get("detail"), "time": r.get("at")}
+                              for r in latest.values() if r.get("status") == "failed" and (r.get("at") or 0) > week][:6]
+    out["playback_verified"] = sum(1 for r in latest.values() if r.get("status") == "verified" and (r.get("at") or 0) > week)
     # What the automatic replacement is doing about each (stuck.py)
     looks = (c.read_json(STATE / "postimport/stuck.json", {}) or {}).get("dubs") or {}
     for d in dubs.values():

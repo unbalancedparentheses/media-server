@@ -509,6 +509,20 @@ class FakeJellyfin(FakeService):
                 rows = [i for i in rows if i.get("Type") in kinds]
             return {"Items": copy.deepcopy(rows), "TotalRecordCount": len(rows)}
 
+        self.playback: dict = {}     # item id → PlaybackInfo answer
+        self.streams: dict = {}      # item id → HTTP status of its stream
+
+        @self.route("POST", r"/Items/(\w+)/PlaybackInfo")
+        def playback_info(req, item):
+            if item not in self.playback:
+                return 404, {"error": "no such item"}
+            return copy.deepcopy(self.playback[item])
+
+        @self.route("GET", r"/Videos/(\w+)/stream")
+        def stream(req, item):
+            status = self.streams.get(item, 206)
+            return status, (b"\x1aE\xdf\xa3" * 1024 if status in (200, 206) else None), {"Content-Type": "video/x-matroska"}
+
         @self.route("GET", "/Items/Counts")
         def counts(req):
             return {"MovieCount": sum(i["Type"] == "Movie" for i in self.items), "SeriesCount": 1, "EpisodeCount": sum(i["Type"] == "Episode" for i in self.items)}
