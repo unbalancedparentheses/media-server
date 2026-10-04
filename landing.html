@@ -29,6 +29,7 @@
   .header-inner{display:flex;align-items:center;gap:1.5rem;max-width:1200px;margin:0 auto;position:relative}
   .brand h1{font-size:1.4rem;font-weight:700;letter-spacing:-0.03em}
   .brand h1 span{color:var(--gold)}
+  .home-link{color:inherit;text-decoration:none}
   .hello{font-size:0.78rem;color:var(--text2);margin-top:0.2rem;white-space:nowrap}
   .clock{font-family:var(--mono);color:var(--text3)}
   .search-wrap{position:relative;flex:1;max-width:440px;margin-left:auto}
@@ -243,7 +244,7 @@
   <div class="header">
     <div class="header-inner">
       <div class="brand">
-        <h1><span>Media</span> Server</h1>
+        <h1><a class="home-link" href="#" title="Home"><span>Media</span> Server</a></h1>
         <div class="hello"><span id="hello">Hello</span> · <span class="clock" id="clock"></span></div>
       </div>
       <div class="search-wrap">
@@ -486,6 +487,18 @@
       if(v==='manage')refreshDownloads();
     }
     window.addEventListener('hashchange',function(){applyView();window.scrollTo(0,0);});
+    // The title goes Home (and to the top when already there)
+    document.querySelector('.home-link').addEventListener('click',function(){if(currentView()==='home')window.scrollTo({top:0,behavior:'smooth'});});
+    // Links that leave the dashboard (Jellyfin, Seerr, the admin pages) open
+    // in a tab of their own: in the Media Server app, which has no address
+    // bar or back button, the dashboard stays where it is
+    document.addEventListener('click',function(e){
+      var a=e.target.closest('a[href]');
+      if(!a||a.target)return;
+      var u;try{u=new URL(a.href,location.href);}catch(_){return;}
+      if(u.protocol.indexOf('http')!==0)return;
+      if(u.origin!==location.origin||u.pathname!==location.pathname){a.target='_blank';a.rel='noopener';}
+    },true);
 
     // ── Speed limits: qBittorrent's alternative limits and SABnzbd's limit,
     // through /api/control/speed ──
