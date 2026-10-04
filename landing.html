@@ -107,6 +107,8 @@
   .step-now{font-size:0.68rem;color:var(--text2);margin-top:0.3rem}
   .fix-bar{max-width:16rem;margin-top:0.3rem}
   .worth-label{font-size:0.72rem;color:var(--text2);margin:0.9rem 0 0.5rem}
+  .worth-label b{color:var(--text);font-weight:500}
+  .p-act{font-size:0.68rem;color:var(--gold);margin-top:0.15rem}.p-act.play{color:var(--green)}.p-act.dim{color:var(--text3)}
   .speed-wrap{position:relative}
   #speed-btn.limited{border-color:var(--amber);color:var(--amber)}
   .speed-pop{position:absolute;right:0;top:calc(100% + 0.4rem);z-index:50;width:min(20rem,90vw);background:var(--surface);border:1px solid var(--border-hover);border-radius:12px;padding:0.9rem;box-shadow:0 12px 40px #0008}
@@ -275,6 +277,11 @@
       <div class="row" id="tonight"></div>
     </div>
 
+    <div class="section hidden" id="because-sec">
+      <div class="section-title">Because you watched <span class="more" style="cursor:default">TMDB's recommendations, rated well enough · Play or Request</span></div>
+      <div id="because"></div>
+    </div>
+
     <div class="section hidden" id="latest-sec">
       <div class="section-title">Recently added <a class="more" id="library-link" href="#">Open library →</a></div>
       <div class="row" id="latest"></div>
@@ -392,7 +399,8 @@
       var sub=(r.type==='tv'?'Series':'Film')+(r.year?' · '+r.year:'');
       return'<a class="poster" href="'+href+'" title="'+esc(r.title+' · '+scores+(here?'':' · '+(asked?'requested':'click to request in Seerr')))+'"><div class="p-img">'
         +'<img loading="lazy" src="'+esc(src)+'" alt="" onerror="this.remove()"><div class="p-none" style="z-index:-1">'+esc(r.title)+'</div>'
-        +badge+'<div class="p-play">'+(here?'▶':'+')+'</div></div><div class="p-title">'+esc(r.title)+'</div><div class="p-sub">'+esc(scores)+'</div><div class="p-sub">'+esc(sub)+'</div></a>';
+        +badge+'<div class="p-play">'+(here?'▶':'+')+'</div></div><div class="p-title">'+esc(r.title)+'</div><div class="p-sub">'+esc(scores)+'</div><div class="p-sub">'+esc(sub)+'</div>'
+        +'<div class="p-act '+(here&&r.watch?'play':asked?'dim':'')+'">'+(here&&r.watch?'▶ Play':r.status===4?'Some episodes · request the rest':asked?'Requested':here?'In your library':'＋ Request')+'</div></a>';
     }
 
     // ── Attention (dismissed alerts come back when they change, or after a day) ──
@@ -623,6 +631,13 @@
 
       renderTonight();
 
+      if(s.because){
+        show('because-sec',s.because.length>0);
+        document.getElementById('because').innerHTML=s.because.map(function(row){
+          return'<div class="worth-label">Because you watched <b>'+esc(row.because)+'</b></div><div class="row">'+row.items.map(worthCard).join('')+'</div>';
+        }).join('');
+      }
+
       // Three rows: anime, series, films (an empty one isn't shown)
       if(s.recommended&&!Array.isArray(s.recommended)){
         var rows=[['anime','Anime'],['series','Series'],['movies','Films']].filter(function(x){return(s.recommended[x[0]]||[]).length;});
@@ -734,7 +749,7 @@
     // (every few minutes), indexers and disk; a part that failed to refresh
     // says so and how old what's shown is; a status file that stopped
     // updating is a warning, not a quiet old timestamp
-    var PART_NAMES={'continue':'continue watching',tonight:'watch tonight',latest:'recently added',requests_live:'requests',upcoming:'coming up',health:'library health',recommended:'worth watching'};
+    var PART_NAMES={'continue':'continue watching',tonight:'watch tonight',because:'because you watched',latest:'recently added',requests_live:'requests',upcoming:'coming up',health:'library health',recommended:'worth watching'};
     function when(t){return t?ago(new Date(t*1000).toISOString()):'never';}
     function freshness(s){
       var age=Date.now()/1000-(s.updated||0),parts=[];

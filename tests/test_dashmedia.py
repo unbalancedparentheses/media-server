@@ -334,3 +334,58 @@ class Tonight(unittest.TestCase):
         self.assertEqual((by["Unwatched Film"]["minutes"], by["Unwatched Film"]["detail"]), (135, "2024 · 2 h 15 min"))
         self.assertEqual((by["Fresh Show"]["detail"], by["Fresh Show"]["partial"]), ("8 of 24 episodes · 24 min each", True))
         self.assertEqual((by["Full Show"]["detail"], by["Full Show"]["partial"]), ("6 episodes · 50 min each", False))
+
+
+class Because(unittest.TestCase):
+    def setUp(self):
+        import tempfile, shutil
+        self.state = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.state)
+        patcher = mock.patch.object(dm, "STATE", self.state)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def jellyfin(self, path):
+        if path == "Users":
+            return [{"Id": "u1"}]
+        if "Filters=IsResumable" in path:
+            return {"Items": [{"Name": "Skyfall", "Type": "Movie", "ProviderIds": {"Tmdb": "37724"}, "UserData": {"LastPlayedDate": "2026-10-03"}},
+                              {"Name": "Turning Point", "Type": "Episode", "SeriesId": "sg", "UserData": {"LastPlayedDate": "2026-10-02"}},
+                              {"Name": "Ep 2", "Type": "Episode", "SeriesId": "sg", "UserData": {"LastPlayedDate": "2026-10-01"}}]}
+        if "Filters=IsPlayed" in path:
+            return {"Items": [{"Name": "Spectre", "Type": "Movie", "ProviderIds": {"Tmdb": "206647"}, "UserData": {"LastPlayedDate": "2026-09-01"}}]}
+        if "Ids=sg" in path:
+            return {"Items": [{"Id": "sg", "Name": "Steins;Gate", "ProviderIds": {"Tmdb": "42509"}}]}
+        return {"Items": []}
+
+    def seerr(self, path):
+        def r(i, title, kind, vote=8.0, votes=500, **kw):
+            return {"id": i, "mediaType": kind, ("title" if kind == "movie" else "name"): title, "voteAverage": vote,
+                    "voteCount": votes, "posterPath": f"/{i}.jpg", **kw}
+        if path.startswith("movie/37724/recommendations"):
+            return {"results": [r(206647, "Spectre", "movie"),             # watched: left out
+                                r(1, "Casino Royale", "movie", mediaInfo={"status": 5, "jellyfinMediaId": "cr"}),
+                                r(2, "Weak Film", "movie", vote=5.0),     # badly rated: left out
+                                r(5, "Decent Film", "movie", vote=6.8),   # good enough here (not for Worth watching)
+                                r(3, "Shared", "movie")]}
+        if path.startswith("tv/42509/recommendations"):
+            return {"results": [r(3, "Shared", "movie"),                  # already in the first row
+                                r(4, "Psycho-Pass", "tv", genreIds=[16], originalLanguage="ja", votes=40)]}
+        if path.startswith("movie/206647/recommendations"):
+            return {"results": []}
+        return {}
+
+    def test_rows_from_what_you_watched_last(self):
+        with mock.patch.object(dm, "jellyfin", self.jellyfin), mock.patch.object(dm, "seerr", self.seerr), \
+                mock.patch.object(dm, "ratings", return_value={}):
+            rows = dm.because()
+        self.assertEqual([r["because"] for r in rows], ["Skyfall", "Steins;Gate"])   # Spectre gave nothing
+        self.assertEqual([i["title"] for i in rows[0]["items"]], ["Casino Royale", "Decent Film", "Shared"])
+        self.assertEqual([i["title"] for i in rows[1]["items"]], ["Psycho-Pass"])   # anime: fewer votes count
+        self.assertEqual((rows[0]["items"][0]["status"], rows[0]["items"][0]["watch"]), (5, "cr"))
+
+    def test_recently_watched_counts_an_episode_as_its_series(self):
+        with mock.patch.object(dm, "jellyfin", self.jellyfin):
+            watched = dm.recently_watched()
+        self.assertEqual([(w["title"], w["kind"], w["tmdb"]) for w in watched],
+                         [("Skyfall", "movie", 37724), ("Steins;Gate", "tv", 42509), ("Spectre", "movie", 206647)])

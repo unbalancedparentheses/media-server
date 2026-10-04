@@ -640,6 +640,12 @@ class FakeSeerr(FakeService):
         def discover(req, kind):
             return {"page": 1, "results": copy.deepcopy(self.discover[kind])}
 
+        self.recommendations: dict = {}
+
+        @self.route("GET", r"/api/v1/(movie|tv)/(\d+)/recommendations")
+        def recommendations(req, kind, tmdb):
+            return {"page": 1, "results": copy.deepcopy(self.recommendations.get((kind, int(tmdb)), []))}
+
         @self.route("GET", r"/api/v1/(movie|tv)/(\d+)/(ratingscombined|ratings)")
         def rating(req, kind, tmdb, _):
             return self.ratings.get((kind, int(tmdb)), {})

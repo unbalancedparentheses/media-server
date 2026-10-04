@@ -508,6 +508,8 @@ def upcoming():
 # Rotten Tomatoes have no public API; Letterboxd's is partners only).
 RECENT_DAYS = 120
 GOOD_SCORE = 75          # out of 100
+# "Because you watched" is about relevance, so good is enough there
+GOOD_ENOUGH_SCORE = 65
 RATINGS_KEEP = 86400     # a title's ratings are asked for once a day
 RATINGS_RETRY = 6 * 3600  # and after a failed lookup, not again for 6 hours
 # TMDB's own score only counts with this many votes; anime gets far fewer
@@ -561,6 +563,85 @@ def row_of(kind: str, r: dict) -> str:
     return "movies" if kind == "movie" else "series"
 
 
+def pick(kind: str, tmdb: int, r: dict, cache: dict, row: str, bar: int = GOOD_SCORE) -> dict | None:
+    """A Seerr result as a poster, if it's rated at least <bar> (else None)"""
+    rating = ratings(kind, tmdb, cache)
+    value = score(rating, r.get("voteAverage"), r.get("voteCount") or 0, TMDB_MIN_VOTES[row])
+    if value is None or value < bar:
+        return None
+    media = r.get("mediaInfo") or {}
+    return {"title": r.get("title") or r.get("name"), "type": kind, "tmdb": tmdb,
+            "year": (r.get("releaseDate") or r.get("firstAirDate") or "")[:4], "poster": r.get("posterPath"),
+            "score": round(value), **rating, "tmdb_vote": r.get("voteAverage"),
+            # Seerr's status: 5 available, 4 partly, 2/3 requested or on its way
+            "status": media.get("status"), "watch": media.get("jellyfinMediaId")}
+
+
+def recently_watched(limit: int = 3) -> list[dict]:
+    """The titles watched most recently, finished or not ({"title", "kind",
+    "tmdb"}; an episode counts as its series), newest first"""
+    users = jellyfin("Users")
+    if not users:
+        return []
+    uid = users[0]["Id"]   # one viewer for now
+    common = (f"userId={uid}&Recursive=true&IncludeItemTypes=Movie,Episode&SortBy=DatePlayed&SortOrder=Descending"
+              "&Limit=40&Fields=ProviderIds")
+    items = [i for f in ("IsResumable", "IsPlayed") for i in jellyfin(f"Items?{common}&Filters={f}").get("Items", [])]
+    items.sort(key=lambda i: (i.get("UserData") or {}).get("LastPlayedDate") or "", reverse=True)
+    series_ids = sorted({i["SeriesId"] for i in items if i.get("SeriesId")})
+    series = {s["Id"]: s for s in (jellyfin(f"Items?userId={uid}&Ids={','.join(series_ids)}&Fields=ProviderIds")
+                                   .get("Items", []) if series_ids else [])}
+    out, seen = [], set()
+    for i in items:
+        source = series.get(i.get("SeriesId")) if i.get("SeriesId") else i
+        if not source:
+            continue   # the series' details didn't come back
+        tmdb = (source.get("ProviderIds") or {}).get("Tmdb")
+        kind = "tv" if i.get("SeriesId") else "movie"
+        if not tmdb or (kind, str(tmdb)) in seen:
+            continue
+        seen.add((kind, str(tmdb)))
+        out.append({"title": source.get("Name"), "kind": kind, "tmdb": int(tmdb)})
+    return out[:limit]
+
+
+def because(per_row: int = 12) -> list:
+    """[{"because": "Skyfall", "items": [...]}]: TMDB's recommendations for
+    what you watched last (through Seerr), rated at least GOOD_ENOUGH_SCORE,
+    in TMDB's order of relevance; nothing you've watched, nothing twice"""
+    watched = recently_watched(limit=10)
+    skip = {(w["kind"], w["tmdb"]) for w in watched}
+    cache_file = STATE / "dashstatus/ratings.json"
+    cache = c.read_json(cache_file, {}) or {}
+    rows = []
+    for seed in watched[:3]:
+        items = []
+        # TMDB's second page only when the first gave few well-rated ones
+        for page in (1, 2):
+            if page == 2 and len(items) >= 6:
+                break
+            results = (seerr(f"{seed['kind']}/{seed['tmdb']}/recommendations?page={page}") or {}).get("results") or []
+            add_picks(results, seed, skip, cache, items, per_row)
+        if items:
+            rows.append({"because": seed["title"], "items": items})
+    c.write_json(cache_file, cache, compact=True)
+    return rows
+
+
+def add_picks(results: list, seed: dict, skip: set, cache: dict, items: list, per_row: int) -> None:
+    """The well-rated ones of a page of recommendations, in order, into items"""
+    for r in results[:20]:
+        kind = r.get("mediaType") or seed["kind"]
+        if kind not in ("movie", "tv") or not r.get("posterPath") or (kind, r.get("id")) in skip:
+            continue
+        picked = pick(kind, r["id"], r, cache, row_of(kind, r), GOOD_ENOUGH_SCORE)
+        if picked:
+            items.append(picked)
+            skip.add((kind, r["id"]))   # not again in another row
+        if len(items) >= per_row:
+            return
+
+
 def recommended(per_row: int = 12) -> dict:
     """{"anime": [...], "series": [...], "movies": [...]}, best first"""
     today = datetime.now(timezone.utc)
@@ -593,16 +674,9 @@ def recommended(per_row: int = 12) -> dict:
         # The most popular of each row first, so the ratings asked for are
         # the ones that matter, and every row gets its share
         for kind, tmdb, r in sorted(by_row[name], key=lambda x: -(x[2].get("popularity") or 0))[:20]:
-            rating = ratings(kind, tmdb, cache)
-            value = score(rating, r.get("voteAverage"), r.get("voteCount") or 0, TMDB_MIN_VOTES[name])
-            if value is None or value < GOOD_SCORE:
-                continue
-            media = r.get("mediaInfo") or {}
-            rows[name].append({"title": r.get("title") or r.get("name"), "type": kind, "tmdb": tmdb,
-                               "year": (r.get("releaseDate") or r.get("firstAirDate") or "")[:4], "poster": r.get("posterPath"),
-                               "score": round(value), **rating, "tmdb_vote": r.get("voteAverage"),
-                               # Seerr's status: 5 available, 4 partly, 2/3 requested or on its way
-                               "status": media.get("status"), "watch": media.get("jellyfinMediaId")})
+            picked = pick(kind, tmdb, r, cache, name)
+            if picked:
+                rows[name].append(picked)
         rows[name].sort(key=lambda x: (-x["score"], x["title"] or ""))
         rows[name] = rows[name][:per_row]
     # Forget ratings not asked for in a week
@@ -660,7 +734,7 @@ def health():
     return out
 
 
-MEDIA_PARTS = ("continue", "tonight", "latest", "requests_live", "upcoming", "health", "recommended")
+MEDIA_PARTS = ("continue", "tonight", "because", "latest", "requests_live", "upcoming", "health", "recommended")
 
 
 def carry_over(previous: dict | None, new: dict) -> dict:
@@ -681,7 +755,7 @@ def carry_over(previous: dict | None, new: dict) -> dict:
 
 def collect() -> dict:
     result, failed = {}, []
-    for name, part in (("continue", continue_watching), ("tonight", tonight), ("latest", latest), ("requests_live", requests),
+    for name, part in (("continue", continue_watching), ("tonight", tonight), ("because", because), ("latest", latest), ("requests_live", requests),
                        ("upcoming", upcoming), ("health", health), ("recommended", recommended)):
         try:
             result[name] = part()
