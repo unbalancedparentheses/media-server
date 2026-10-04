@@ -121,8 +121,8 @@ class ConfigFiles(Base):
         quiet(host.service_configs, self.cfg)
         conf = (self.cfg.paths.config / "nginx/nginx.conf").read_text()
         self.assertIn("include /nix/store/x-nginx/conf/mime.types;", conf)
-        self.assertIn("listen 127.0.0.1:80 default_server;", conf)   # this Mac only
-        self.assertIn("listen [::1]:80 default_server;", conf)
+        self.assertIn("listen 80 default_server;", conf)
+        self.assertIn("allow 127.0.0.1;\n        allow ::1;\n        deny all;", conf)   # this Mac only
         self.assertNotIn("allow 192.168", (self.cfg.paths.config / "nginx/api-proxy.conf").read_text())
         www = self.cfg.paths.config / "nginx/www"
         self.assertEqual((www / "settings.js").read_text(), 'window.MEDIA_SETTINGS={"adminLocalOnly":false};\n')
@@ -133,7 +133,7 @@ class ConfigFiles(Base):
         # A new dashboard port: nginx restarts
         self.with_config(dashboard_port=8088, admin_bind="127.0.0.1")
         quiet(host.service_configs, self.cfg)
-        self.assertIn("listen 127.0.0.1:8088 default_server;", (self.cfg.paths.config / "nginx/nginx.conf").read_text())
+        self.assertIn("listen 8088 default_server;", (self.cfg.paths.config / "nginx/nginx.conf").read_text())
         self.assertEqual((www / "settings.js").read_text(), 'window.MEDIA_SETTINGS={"adminLocalOnly":true};\n')
         self.assertEqual(self.changed(), ["nginx", "prowlarr", "radarr", "sonarr"])
 

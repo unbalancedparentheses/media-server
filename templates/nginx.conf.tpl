@@ -62,11 +62,15 @@ http {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
 
-    # Dashboard: on this Mac only (it has no login and can delete titles)
+    # Dashboard: on this Mac only (it has no login and can delete titles).
+    # It listens everywhere because macOS lets a user bind a port below 1024
+    # only on every interface, and refuses every address but this Mac's.
     server {
-        listen 127.0.0.1:{{DASHBOARD_PORT}} default_server;
-        listen [::1]:{{DASHBOARD_PORT}} default_server;
+        listen {{DASHBOARD_PORT}} default_server;
         server_name _;
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
 
         root www;
         index index.html;
