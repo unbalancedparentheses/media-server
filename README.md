@@ -69,7 +69,7 @@ You can run `nix run .#install` again at any time: it only changes what differs 
 2. **Request something.** Search for a movie or show in Moonfin (or in Seerr at `http://<mac-ip>:5055`) and press Request. It usually appears in the library within minutes to an hour, depending on how many people are sharing the release.
 3. **Install the apps.** Get **Moonfin** from the App Store, Google Play or Amazon on your TV, phone or tablet, enter `http://<mac-ip>:8096` as the server, and log in. LG and Samsung TVs can sideload Moonfin, or use Litefin.
 4. **Add your family.** In Jellyfin (`http://<mac-ip>:8096` → Dashboard → Users), create a user per person. Moonfin shows them as profiles, each with its own watch history. They can request too, and their requests download right away (`[requests] auto_approve`; set it to `false` to approve them yourself in Seerr). The playback defaults (subtitles on, Japanese audio for anime) are set for your user only; others choose theirs in the player.
-5. **Look around the dashboard** at `http://localhost` (or `http://<mac-ip>`). On one page:
+5. **Look around the dashboard** at `http://localhost` on the Mac (only there: it has no login and can delete titles). On one page:
    - **Search** (press `/`): your library ("watch") and anything else to request, in one box.
    - **What needs attention**, with what to do, or "Everything is working"; an offline banner when the Mac has no connection.
    - **At a glance**: now playing, transfer speeds, library size, requests, missing items, missing subtitles, indexer health (with the last 24 hours of searches and grabs), CPU and memory, disk, Tailscale.
@@ -97,7 +97,7 @@ To find your Mac's address, run `ipconfig getifaddr en0` or look in System Setti
 - **Running out of space:** you get a macOS notification when the disk drops below 50 GB free. Sonarr and Radarr stop importing below 10 GB free; downloads already in progress can still use more, so free space before it gets that far. Delete things in Sonarr or Radarr, with "Delete files" ticked.
 - **Offline (on a flight):** everything plays from the Mac itself without internet. Open **`http://localhost:8096/web/`**, Jellyfin's own player (verified offline: login, libraries, artwork, playback, subtitles). Moonfin's web app is patched so it doesn't need the internet either (setup serves the renderer and player files it would download), but use the Jellyfin player if it doesn't load. Requests, new downloads, subtitle searches and Seerr need a connection. Going offline doesn't cost you downloads: netwatch pauses Cleanuparr while there's no connection, and when you're back it re-tests the indexers and subtitle providers so downloads resume on their own.
 - **On a phone or tablet, offline:** download before you leave. In the Moonfin app (iPhone, iPad, Android), open a movie or episode → Download; choose a smaller quality to save space (the Mac converts it while downloading, so do it at home on Wi-Fi). [Infuse](https://firecore.com/infuse) (Apple devices) and [Findroid](https://github.com/jarnedemeulemeester/Findroid) (Android) can download from Jellyfin too. Downloads are allowed for every user.
-- **Away from home:** install [Tailscale](https://tailscale.com) on the Mac and your devices. Setup then publishes Moonfin, Seerr and the dashboard over HTTPS on your private tailnet (for example `https://<mac-name>.<tailnet>.ts.net:8096`). Invite family to the tailnet to share.
+- **Away from home:** install [Tailscale](https://tailscale.com) on the Mac and your devices. Setup then publishes Moonfin and Seerr over HTTPS on your private tailnet (for example `https://<mac-name>.<tailnet>.ts.net:8096`). Invite family to the tailnet to share.
 
 ## Changing settings
 
@@ -298,9 +298,9 @@ Setup re-applies these on every install. Intro Skipper is always on for the TV a
 
 | Setting | Default | What it does |
 |---|---|---|
-| `admin_bind` | `"0.0.0.0"` | Where the admin pages listen: `"0.0.0.0"` (every interface) or `"127.0.0.1"` (this Mac only). Moonfin, Seerr and the dashboard are always reachable. |
+| `admin_bind` | `"0.0.0.0"` | Where the admin pages listen: `"0.0.0.0"` (every interface) or `"127.0.0.1"` (this Mac only). Moonfin and Seerr are always reachable; the dashboard only on this Mac. |
 | `dashboard_port` | `80` | The dashboard's port |
-| `tailscale_https` | `true` | If Tailscale is signed in, publish Moonfin, Seerr and the dashboard over HTTPS on your tailnet; `false` takes them down |
+| `tailscale_https` | `true` | If Tailscale is signed in, publish Moonfin and Seerr over HTTPS on your tailnet; `false` takes them down |
 
 There's no built-in VPN. If you use one, run its Mac app; torrent traffic follows the system connection.
 
@@ -353,9 +353,9 @@ Public torrents are often thinly shared; Usenet is faster and more reliable, but
 
 ### Access and security
 
-- **Remote access:** if [Tailscale](https://tailscale.com) is installed and signed in, setup publishes Jellyfin/Moonfin (`:8096`), Seerr (`:5055`) and the dashboard over HTTPS on your tailnet. `tailscale_https = false` takes them down again.
+- **Remote access:** if [Tailscale](https://tailscale.com) is installed and signed in, setup publishes Jellyfin/Moonfin (`:8096`) and Seerr (`:5055`) over HTTPS on your tailnet (not the dashboard; a route an older version published for it is taken down). `tailscale_https = false` takes them down again.
 - **Logins:** every admin UI requires a login. `nix run .#test` logs in to each with the `config.toml` password, except qBittorrent, which skips its login for this Mac: its stored password hash is checked instead.
-- **Dashboard:** it needs no login and shows downloads, calendars, requests and recently added items to anyone who can reach it. The API keys stay in nginx, which only allows the read-only endpoints the widgets use, and only `GET`. The one change it can make is the speed limit (the ⇅ button: qBittorrent's alternative speed limits and SABnzbd's limit; "Normal limits" goes back to the ones in `config.toml`, which aren't touched): that endpoint answers only this Mac, private home-network addresses and Tailscale, and only JSON requests with the dashboard's header, so another website can't make your browser change it. That isn't a login: anyone on your home network or tailnet can change the speed limit. Deleting a title (the ⋯ on a library poster) also asks for your Jellyfin password, checked against Jellyfin: it removes the title through Radarr/Sonarr with its files (deleting it in Jellyfin alone would get it downloaded again), its torrents in qBittorrent with their data, and its Seerr entry so it can be requested again; for a series, the whole series or one season (which is then no longer monitored). With `admin_bind = "127.0.0.1"`, admin cards say "Only on the Mac" when the dashboard is opened from another device.
+- **Dashboard:** it answers only on this Mac (`http://localhost`): nginx listens on 127.0.0.1 and ::1, and isn't published on Tailscale. It has no login, since only someone at the Mac can open it. The API keys stay in nginx, which only allows the read-only endpoints the widgets use, and only `GET`. It can change two things: the speed limit (the ⇅ button: qBittorrent's alternative speed limits and SABnzbd's limit; "Normal limits" goes back to the ones in `config.toml`, which aren't touched), and deleting a title (the trash button on a poster, or Delete in Your library): it removes the title through Radarr/Sonarr with its files (deleting it in Jellyfin alone would get it downloaded again), its torrents in qBittorrent with their data, and its Seerr entry so it can be requested again; for a series, the whole series or one season (which is then no longer monitored). Both endpoints also accept only this Mac's address, and only JSON requests with the dashboard's header, so another website can't make your browser use them.
 - **qBittorrent:** it skips its login only for requests from this Mac, which is how setup, the *arr apps and the dashboard reach it.
 - **Byparr:** it has no login, so it only listens on `127.0.0.1`. Its Firefox runs truly headless (no window), so solving Cloudflare challenges doesn't switch Spaces or move your windows.
 - **Plugins:** Moonbase and Intro Skipper are pinned to a version, from their manifests at a fixed commit (Jellyfin verifies each download's checksum).

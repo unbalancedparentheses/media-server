@@ -1,7 +1,7 @@
 """control: the changes the dashboard can make, served by dashstatus on
-127.0.0.1 and reached through nginx (/api/control/…) only from this Mac,
-the home network and Tailscale: download and upload speed limits, and
-deleting a title (which also needs the Jellyfin password; see Library).
+127.0.0.1 and reached through nginx (/api/control/…), which serves the
+dashboard on this Mac only: download and upload speed limits, and
+deleting a title (see Library).
 
 - qBittorrent: its alternative speed limits (the turtle in its UI), so the
   normal limits setup manages (downloads.upload_limit_kib) stay as they
@@ -12,7 +12,7 @@ GET /speed: {"limited", "down", "up"} in KiB/s (0 = no limit that way).
 POST /speed: {"limited": true, "down": 5120, "up": 512} or {"limited": false};
 JSON only, with an X-Requested-With header, so a web page elsewhere can't
 make your browser change them (that needs a CORS preflight nginx won't pass).
-That isn't a login: anyone on the allowed networks can still change them.
+There's no login: the dashboard answers only on this Mac.
 
 Changes are made one at a time (a lock), then read back: the answer says
 what actually took, and names a client that didn't.
@@ -104,8 +104,7 @@ class Library:
     Radarr/Sonarr with its files (deleting it only in Jellyfin would make
     them download it again), its torrents in qBittorrent with their data
     (the seeding copy would keep the space), its Seerr entry for a whole
-    title (so it can be requested again), then a Jellyfin rescan. Asking
-    needs the Jellyfin password: this can't be undone."""
+    title (so it can be requested again), then a Jellyfin rescan."""
 
     def __init__(self, config: Path):
         self.config = config
@@ -120,17 +119,6 @@ class Library:
 
     def jellyfin(self, path: str):
         return c.get_json(f"{local('jellyfin')}/{path}", c.jellyfin_auth(self.state))
-
-    def password_ok(self, password: str) -> bool:
-        from mediaserver.config import Config, Paths
-        try:
-            user = Config.load(Paths(self.config.parent)).jellyfin_user
-        except (OSError, ValueError):
-            return False
-        r = c.request(f"{local('jellyfin')}/Users/AuthenticateByName", "POST",
-                      {"Authorization": 'MediaBrowser Client="dashboard", Device="dashboard", DeviceId="dashboard-delete", Version="1"'},
-                      body={"Username": user, "Pw": password}, timeout=20)
-        return r.ok and bool(r.json({}).get("AccessToken"))
 
     def resolve(self, item_id: str) -> dict:
         """A Jellyfin item (a film, series or episode) → the title in Radarr/Sonarr"""
@@ -343,46 +331,21 @@ class PlanTrouble(Exception):
     """The record of unfinished deletions can't be read"""
 
 
-# Wrong passwords: at most WRONG_ALLOWED in WRONG_WINDOW, counted before
-# Jellyfin is asked, one check at a time (parallel guesses wait their turn)
-WRONG_ALLOWED, WRONG_WINDOW = 5, 600
-_wrong: list[float] = []
-_auth = threading.Lock()
-
-
-def check_password(lib: "Library", password: str) -> tuple[int, dict] | None:
-    """None when it's right; else (status, answer)"""
-    import time
-    with _auth:
-        now = time.time()
-        _wrong[:] = [t for t in _wrong if now - t < WRONG_WINDOW]
-        if len(_wrong) >= WRONG_ALLOWED:
-            wait = int((WRONG_WINDOW - (now - _wrong[0])) // 60) + 1
-            return 429, {"error": f"Too many wrong passwords; try again in {wait} min"}
-        if lib.password_ok(password):
-            return None
-        _wrong.append(now)
-        time.sleep(1)
-        return 403, {"error": "That's not the Jellyfin password"}
-
-
-def parse_delete(body: bytes) -> tuple[str, int | None, bool, str] | str:
+def parse_delete(body: bytes) -> tuple[str, int | None, bool] | str:
     try:
         data = json.loads(body or b"{}")
     except ValueError:
         return "not JSON"
     if not isinstance(data, dict):
         return "the request must be a JSON object"
-    item, season, exclude, password = data.get("item"), data.get("season"), data.get("exclude", False), data.get("password")
+    item, season, exclude = data.get("item"), data.get("season"), data.get("exclude", False)
     if not isinstance(item, str) or not item.isalnum() or len(item) > 64:
         return '"item" must be a library item id'
     if season is not None and (not isinstance(season, int) or isinstance(season, bool) or not 0 <= season <= 1000):
         return '"season" must be a season number'
     if not isinstance(exclude, bool):
         return '"exclude" must be true or false'
-    if not isinstance(password, str) or not password:
-        return "the Jellyfin password is needed to delete"
-    return item, season, exclude, password
+    return item, season, exclude
 
 
 def parse(body: bytes) -> tuple[bool, int, int] | str:
@@ -460,10 +423,7 @@ def handler(speed: Speed, library: "Library | None" = None):
             parsed = parse_delete(body)
             if isinstance(parsed, str):
                 return self.answer(400, {"error": parsed})
-            item, season, exclude, password = parsed
-            refused = check_password(lib, password)
-            if refused:
-                return self.answer(*refused)
+            item, season, exclude = parsed
             from mediaserver import lock
             from mediaserver.ui import SetupError
             with LOCK:

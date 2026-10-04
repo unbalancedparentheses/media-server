@@ -57,19 +57,13 @@ location = /api/sabnzbd/ {
 
 # The one change the dashboard can make: download/upload speed limits
 # (mediaserver/control.py, run by dashstatus on this Mac). Only from this
-# Mac, the home network and Tailscale; it takes JSON with an
-# X-Requested-With header only, so another website can't make a browser
-# change it (that needs a CORS preflight, which isn't answered). That's not
-# a login: anyone on the allowed networks can change the limits.
+# Mac (the dashboard listens nowhere else; this is a second guard); it takes
+# JSON with an X-Requested-With header only, so another website can't make
+# a browser change it (that needs a CORS preflight, which isn't answered).
 location = /api/control/speed {
     limit_except GET POST { deny all; }
     allow 127.0.0.1;
     allow ::1;
-    allow 10.0.0.0/8;
-    allow 172.16.0.0/12;
-    allow 192.168.0.0/16;
-    allow 100.64.0.0/10;
-    allow fd00::/8;
     deny all;
     limit_req zone=api burst=10 nodelay;
     client_max_body_size 4k;
@@ -78,17 +72,11 @@ location = /api/control/speed {
 }
 
 # Deleting a title (mediaserver/control.py: Radarr/Sonarr with its files,
-# its torrents, its Seerr entry). Same networks; it also needs the Jellyfin
-# password in the request, checked against Jellyfin.
+# its torrents, its Seerr entry). Same guards.
 location = /api/control/delete {
     limit_except GET POST { deny all; }
     allow 127.0.0.1;
     allow ::1;
-    allow 10.0.0.0/8;
-    allow 172.16.0.0/12;
-    allow 192.168.0.0/16;
-    allow 100.64.0.0/10;
-    allow fd00::/8;
     deny all;
     limit_req zone=api burst=5 nodelay;
     client_max_body_size 4k;

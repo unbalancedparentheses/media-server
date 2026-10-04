@@ -89,11 +89,11 @@ auto_approve = true
 # ─── Network ────────────────────────────────────────────────────
 # admin_bind: address the admin UIs (Sonarr, Radarr, Prowlarr, Bazarr,
 #   qBittorrent, SABnzbd) listen on: "0.0.0.0" = every interface (LAN +
-#   Tailscale) or "127.0.0.1" = this Mac only. Jellyfin/Moonfin, Seerr and
-#   the dashboard are always reachable.
+#   Tailscale) or "127.0.0.1" = this Mac only. Jellyfin/Moonfin and Seerr
+#   are always reachable; the dashboard only on this Mac.
 # dashboard_port: port of the dashboard (http://localhost by default).
-# tailscale_https: if Tailscale is signed in, publish Jellyfin/Moonfin,
-#   Seerr and the dashboard over HTTPS on your tailnet.
+# tailscale_https: if Tailscale is signed in, publish Jellyfin/Moonfin and
+#   Seerr over HTTPS on your tailnet.
 
 [network]
 admin_bind = "0.0.0.0"

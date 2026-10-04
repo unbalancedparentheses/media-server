@@ -62,9 +62,10 @@ http {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $connection_upgrade;
 
-    # Dashboard
+    # Dashboard: on this Mac only (it has no login and can delete titles)
     server {
-        listen {{DASHBOARD_PORT}} default_server;
+        listen 127.0.0.1:{{DASHBOARD_PORT}} default_server;
+        listen [::1]:{{DASHBOARD_PORT}} default_server;
         server_name _;
 
         root www;

@@ -371,11 +371,30 @@ class Tailscale(Scratch):
             hostname, out = quiet(tailscale.configure, cfg, "ts")
         self.assertEqual(hostname, "mac.ts.net")
         self.assertIn("HTTPS :8096 → Jellyfin\n", out.replace("\x1b[0m", ""))
-        self.assertIn("HTTPS :443 → dashboard (published)", out)
         published = [a for a in fake.calls if "--bg" in a]
-        self.assertEqual([a[3] for a in published], ["--https=443", "--https=5055"])
+        self.assertEqual([a[3] for a in published], ["--https=5055"])   # not the dashboard: this Mac only
         self.assertEqual(json.loads((self.paths.state / "tailscale-routes.json").read_text()),
-                         {"443": "http://127.0.0.1:80", "8096": "http://127.0.0.1:8096", "5055": "http://127.0.0.1:5055"})
+                         {"8096": "http://127.0.0.1:8096", "5055": "http://127.0.0.1:5055"})
+
+    def test_publishing_takes_down_the_dashboard_route_from_before(self):
+        cfg = example_config(self.media)
+        self.routes({"443": "http://127.0.0.1:80", "9443": "http://127.0.0.1:81"})
+        fake = FakeTailscale({"Web": {"mac.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:80"}}},
+                                      "mac.ts.net:9443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:9999"}}}}})
+        original = fake.__call__
+
+        def answer(ts, *args, timeout=10):
+            if args == ("status", "--json"):
+                return mock.Mock(returncode=0, stdout=json.dumps({"Self": {"DNSName": "mac.ts.net."}}))
+            return original(ts, *args, timeout=timeout)
+        with mock.patch.object(tailscale, "run", answer):
+            _, out = quiet(tailscale.configure, cfg, "ts")
+        self.assertIn(("serve", "--https=443", "off"), fake.calls)
+        self.assertNotIn(("serve", "--https=9443", "off"), fake.calls)   # someone else's now
+        self.assertIn("HTTPS :443 removed", out)
+        routes = json.loads((self.paths.state / "tailscale-routes.json").read_text())
+        self.assertNotIn("443", routes)
+        self.assertNotIn("9443", routes)
 
     def test_switched_off_takes_routes_down(self):
         data = json.loads(json.dumps(example_config(self.media).data))

@@ -1,6 +1,6 @@
 """Deleting a title from the dashboard (mediaserver/control.py: Library),
 against the fake services: through Radarr/Sonarr with its files, its
-torrents, its Seerr entry, a Jellyfin rescan; and only with the password.
+torrents, its Seerr entry, a Jellyfin rescan; only the dashboard's own requests.
 
 Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
@@ -216,10 +216,6 @@ class Delete(Stack):
         self.stack.jellyfin.items.append({"Id": "jfep", "Type": "Episode", "SeriesId": "jfseries"})
         self.assertEqual(self.library.resolve("jfep")["title"], "Kaiji")
 
-    def test_password(self):
-        self.assertTrue(self.library.password_ok("admin-pass"))
-        self.assertFalse(self.library.password_ok("guess"))
-
 
 class Endpoint(Delete):
     def ask(self, method, path, body=None, headers=None):
@@ -236,31 +232,9 @@ class Endpoint(Delete):
     def post(self, data):
         return self.ask("POST", "/delete", json.dumps(data), {"Content-Type": "application/json", "X-Requested-With": "media-server"})
 
-    def test_wrong_password_deletes_nothing(self):
-        control._wrong.clear()
-        self.addCleanup(control._wrong.clear)
-        with mock.patch("time.sleep"):
-            status, data = self.post({"item": "jfmovie", "password": "guess"})
-        self.assertEqual((status, data["error"]), (403, "That's not the Jellyfin password"))
-        self.assertEqual(len(self.stack.radarr.resources["movie"].items), 1)
-
-    def test_right_password_deletes(self):
-        control._wrong.clear()
-        status, data = self.post({"item": "jfmovie", "password": "admin-pass"})
+    def test_deletes(self):
+        status, data = self.post({"item": "jfmovie"})
         self.assertEqual((status, data["deleted"]), (200, "Skyfall (2012)"))
-
-    def test_wrong_passwords_are_budgeted_before_jellyfin_is_asked(self):
-        control._wrong.clear()
-        self.addCleanup(control._wrong.clear)
-        with mock.patch("time.sleep"):
-            for _ in range(control.WRONG_ALLOWED):
-                self.assertEqual(self.post({"item": "jfmovie", "password": "guess"})[0], 403)
-            asked = len([w for w in self.stack.jellyfin.requests if w[1] == "/Users/AuthenticateByName"])
-            status, data = self.post({"item": "jfmovie", "password": "admin-pass"})
-        self.assertEqual(status, 429)
-        self.assertIn("Too many wrong passwords", data["error"])
-        self.assertEqual(len([w for w in self.stack.jellyfin.requests if w[1] == "/Users/AuthenticateByName"]), asked)
-        self.assertEqual(len(self.stack.radarr.resources["movie"].items), 1)
 
     def test_not_during_an_install(self):
         import subprocess, sys
@@ -271,8 +245,7 @@ class Endpoint(Delete):
         self.addCleanup(owner.kill)
         assert owner.stdout is not None
         self.assertEqual(owner.stdout.readline().strip(), "held")
-        control._wrong.clear()
-        status, data = self.post({"item": "jfmovie", "password": "admin-pass"})
+        status, data = self.post({"item": "jfmovie"})
         self.assertEqual(status, 409)
         self.assertEqual(len(self.stack.radarr.resources["movie"].items), 1)
 
@@ -280,9 +253,9 @@ class Endpoint(Delete):
         status, data = self.ask("GET", "/delete?item=jfmovie")
         self.assertEqual((status, data["kind"]), (200, "movie"))
         self.assertEqual(self.ask("GET", "/delete?item=nope")[0], 404)
-        for bad in ({"item": "../x", "password": "p"}, {"item": "jfmovie"}, {"item": "jfmovie", "password": "p", "season": "1"}, [], "x"):
+        for bad in ({"item": "../x"}, {}, {"item": "jfmovie", "season": "1"}, {"item": "jfmovie", "exclude": "yes"}, [], "x"):
             self.assertEqual(self.post(bad)[0], 400, bad)
         # Not the dashboard's own request
-        self.assertEqual(self.ask("POST", "/delete", json.dumps({"item": "jfmovie", "password": "admin-pass"}),
+        self.assertEqual(self.ask("POST", "/delete", json.dumps({"item": "jfmovie"}),
                                   {"Content-Type": "text/plain"})[0], 403)
         self.assertEqual(len(self.stack.radarr.resources["movie"].items), 1)

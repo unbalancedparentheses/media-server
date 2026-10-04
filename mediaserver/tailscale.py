@@ -1,6 +1,7 @@
-"""Remote access over Tailscale: the dashboard, Jellyfin and Seerr
-published over HTTPS with `tailscale serve`, and taken down again (also
-routes published for an earlier config, recorded in tailscale-routes.json)."""
+"""Remote access over Tailscale: Jellyfin and Seerr published over HTTPS
+with `tailscale serve`, and taken down again (also routes published for an
+earlier config, recorded in tailscale-routes.json). The dashboard isn't
+published: it answers on this Mac only."""
 from __future__ import annotations
 
 import json
@@ -43,8 +44,31 @@ def record(cfg: Config, port: str, target: str) -> None:
 
 def wanted(cfg: Config) -> list[tuple[str, str, str]]:
     """(port, target, label) setup publishes"""
-    return [("443", f"http://127.0.0.1:{cfg.urls.dashboard_port}", "dashboard"),
-            ("8096", "http://127.0.0.1:8096", "Jellyfin"), ("5055", "http://127.0.0.1:5055", "Seerr")]
+    return [("8096", "http://127.0.0.1:8096", "Jellyfin"), ("5055", "http://127.0.0.1:5055", "Seerr")]
+
+
+def forget(cfg: Config, port: str) -> None:
+    routes = c.read_json(routes_file(cfg), {})
+    if isinstance(routes, dict) and routes.pop(port, None) is not None:
+        c.write_json(routes_file(cfg), routes, mode=0o600, compact=True)
+
+
+def take_down_stale(cfg: Config, ts: str, now: dict[str, list[str]]) -> None:
+    """Routes an earlier setup published that it no longer wants (the
+    dashboard used to be on :443): removed when still pointing where it put
+    them"""
+    recorded = c.read_json(routes_file(cfg), {})
+    keep = {port for port, _, _ in wanted(cfg)}
+    for port, target in (recorded.items() if isinstance(recorded, dict) else []):
+        if port in keep:
+            continue
+        if target not in now.get(port, []):
+            forget(cfg, port)
+        elif (r := run(ts, "serve", f"--https={port}", "off")) and r.returncode == 0:
+            forget(cfg, port)
+            ok(f"Tailscale HTTPS :{port} removed (no longer published)")
+        else:
+            warn(f"Couldn't remove Tailscale HTTPS :{port} (remove it with: tailscale serve --https={port} off)")
 
 
 def published(status: dict) -> dict[str, list[str]]:
@@ -87,6 +111,7 @@ def configure(cfg: Config, ts: str | None = None) -> str:
         now = published(json.loads(serve.stdout) if serve and serve.stdout.strip() else {})
     except ValueError:
         now = {}
+    take_down_stale(cfg, ts, now)
     for port, target, label in wanted(cfg):
         # Already published to the same place (not just the same port)?
         if target in now.get(port, []):
