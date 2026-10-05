@@ -241,9 +241,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 15
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let data = data, (response as? HTTPURLResponse)?.statusCode == 200,
                   let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                NSLog("Media Server: couldn't read %@: %@", url.absoluteString,
+                      error?.localizedDescription ?? "HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
                 DispatchQueue.main.async { NSApp.dockTile.badgeLabel = self?.polled == true ? "?" : nil }
                 return
             }

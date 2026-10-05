@@ -126,6 +126,7 @@ class MacApp(unittest.TestCase):
             self.assertIn("in one window", out)
             info = plistlib.loads((self.app / "Contents/Info.plist").read_bytes())
             self.assertFalse(info["LSUIElement"])   # a real app, with its Dock icon
+            self.assertTrue(info["NSAppTransportSecurity"]["NSAllowsLocalNetworking"])   # reads http://localhost/status.json
             pages = json.loads((self.app / "Contents/Resources/services.json").read_text())
             self.assertEqual([p["name"] for p in pages][:3], ["Home", "Watch", "Requests"])
             self.assertEqual(pages[0]["url"], "http://localhost")

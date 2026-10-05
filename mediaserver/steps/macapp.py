@@ -100,6 +100,8 @@ def info_plist(native: bool) -> bytes:
         "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "13.0",
         # The launcher only hands the page to a browser: no Dock icon of its own while it does
         "LSUIElement": not native,
+        # Plain http to this Mac's services (the status it reads; the pages)
+        "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True, "NSAllowsArbitraryLoadsInWebContent": True},
     })
 
 
