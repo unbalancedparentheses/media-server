@@ -27,6 +27,7 @@ def settings(cfg: Config) -> dict:
         "library_dirs": [str(p.movies), str(p.tv), str(p.anime)],
         "search_missing": cfg.flag("library.search_missing", True),
         "fallback_resolution": cfg.get("quality.fallback_resolution", ""),
+        "repackage_mp4": cfg.flag("library.repackage_mp4", True),
     }
 
 

@@ -142,6 +142,8 @@ ocr_subtitles = true      # read Blu-ray picture subtitles into text .srt files
 drop_picture_subtitles = true   # remove a picture subtitle track when its language is there as text
                                 # (players otherwise pick the picture one, burned into the video)
 default_tracks = true     # make each file's default audio/subtitles your preferences ([playback], [subtitles])
+repackage_mp4 = true      # overnight, MKV files nobody has started → MP4 (nothing re-encoded), so the app,
+                          # Safari and Apple devices play them directly; files that wouldn't fit whole stay MKV
 search_missing = true     # search again for what's still missing (Sonarr/Radarr only do it once):
                           # at most 3 search commands an hour (a season search counts as one) and 2
                           # look-only searches to explain why, each title waiting longer each time,

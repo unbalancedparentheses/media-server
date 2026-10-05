@@ -128,6 +128,7 @@ SCHEMA = {
         "default_tracks": boolean,
         "max_replacements": integer(lo=0, hi=20),
         "search_missing": boolean,
+        "repackage_mp4": boolean,
     },
 }
 INDEXER = {

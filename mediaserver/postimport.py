@@ -95,6 +95,7 @@ DEFAULTS = {
     "library_dirs": [],
     "search_missing": True,
     "fallback_resolution": "",
+    "repackage_mp4": True,
 }
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".m4v"}
 # Audio every browser plays; anything else makes Jellyfin convert
@@ -367,6 +368,8 @@ def run_ffmpeg(cmd: list, total: float, progress=None) -> tuple[int, str]:
             if proc.poll() is None:
                 proc.kill()
                 proc.wait()
+            if proc.stdout:
+                proc.stdout.close()
         errors.seek(0)
         return code, errors.read()
 
@@ -817,13 +820,15 @@ class Arr:
         return bool(self.call("GET", f"movie/{item_id}").get("hasFile"))
 
 
-def jellyfin_updated(path):
-    """Tell Jellyfin a file changed, so it re-reads its tracks"""
+def jellyfin_updated(path, changes: list | None = None):
+    """Tell Jellyfin a file changed, so it re-reads its tracks (or <changes>:
+    [(path, "Created"/"Deleted"/"Modified")])"""
     try:
         key = (STATE.parent / "dashstatus/jellyfin-key").read_text().strip()
+        updates = [{"Path": str(p), "UpdateType": t} for p, t in (changes or [(path, "Modified")])]
         req = urllib.request.Request(
             local("jellyfin") + "/Library/Media/Updated", method="POST",
-            data=json.dumps({"Updates": [{"Path": str(path), "UpdateType": "Modified"}]}).encode(),
+            data=json.dumps({"Updates": updates}).encode(),
             headers={"Authorization": f'MediaBrowser Token="{key}"', "Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=15).close()
     except (OSError, urllib.error.URLError):
@@ -1114,6 +1119,117 @@ class Worker:
         self.state["seen"] = {p: v for p, v in seen.items() if os.path.exists(p)}
         self.state["failures"] = {p: v for p, v in self.state["failures"].items() if os.path.exists(p)}
 
+    # ─── MKV → MP4, overnight (repackage.py) ─────────────────────
+
+    def repackage(self, now: float | None = None) -> None:
+        """A few MKV files a round, between repackage.NIGHT hours; files that
+        don't fit (or were started) are remembered by their mark, so they're
+        not looked at again until they change"""
+        from mediaserver import repackage as rp
+        if not self.settings.get("repackage_mp4", True) or not rp.night(now):
+            return
+        skip = self.state.setdefault("repackage_skip", {})
+        jf = playback.Jellyfin(STATE.parent)
+        try:
+            items = jf.items()
+        except c.HTTP_ERRORS:
+            return   # Jellyfin isn't answering: not tonight
+        unwatched = rp.unwatched(items, jf.user_data)
+        done = 0
+        for root in self.settings["library_dirs"]:
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                for name in sorted(filenames):
+                    path = Path(dirpath) / name
+                    if name.startswith(".") or path.suffix.lower() != ".mkv":
+                        continue
+                    try:
+                        mark = seen_mark(path)
+                    except OSError:
+                        continue
+                    if (skip.get(str(path)) or {}).get("mark") == mark:
+                        continue
+                    if done >= rp.PER_ROUND or operation_running():
+                        return
+                    if self.repackage_one(path, mark, unwatched, skip):
+                        done += 1
+                        save(self.state)
+        self.state["repackage_skip"] = {p: v for p, v in skip.items() if os.path.exists(p)}
+
+    def repackage_one(self, path: Path, mark: list, unwatched, skip: dict) -> bool:
+        """True when it was repackaged"""
+        from mediaserver import repackage as rp
+        title = display_name(path)
+
+        def not_now(reason: str) -> bool:
+            skip[str(path)] = {"mark": mark, "reason": reason}
+            return False
+        info = probe(path)
+        if info is None:
+            return not_now("unreadable")
+        subtitles, why = rp.fits(info)
+        if why:
+            return not_now(why)
+        watched = unwatched(path)
+        if watched is None:
+            return False   # Jellyfin doesn't list it yet: another night
+        if not watched:
+            return not_now("started or watched (its progress would be lost)")
+        new = path.with_suffix(".mp4")
+        if new.exists():
+            return not_now(f"{new.name} is already there")
+        if not room_for(path, self.settings):
+            return False
+        st = path.stat()
+        before = (st.st_ino, st.st_size, st.st_mtime)
+        self.working(path, title, "repackaging as MP4 for Apple devices")
+        written: list = []
+        out = path.with_name(f".{path.stem}.mp4.postimport")
+        try:
+            for stream in subtitles:
+                sidecar = rp.sidecar_name(path, stream, stream_language(stream), set(written))
+                code, errors = run_ffmpeg(rp.extract_command(path, stream, sidecar), 0)
+                if code != 0 or not sidecar.exists():
+                    log(f"couldn't save the subtitles of {path.name} as {sidecar.name}: {errors.strip()[-200:]}")
+                    return False
+                written.append(sidecar)
+            code, errors = run_ffmpeg(rp.remux_command(path, out, info), duration(info), self.progress)
+            if code != 0 or not rp.checks_out(info, probe(out)):
+                why = errors.strip()[-200:] or "the new file didn't check out"
+                log(f"couldn't repackage {path.name} as MP4 ({why}); kept it")
+                return not_now("repackaging failed")
+            if not rp.same(path, before):
+                log(f"{path.name} changed while being repackaged; kept it")
+                return False
+            os.chmod(out, st.st_mode & 0o777)
+            os.replace(out, new)
+            path.unlink()
+            written = []   # kept: they go with the new file
+        finally:
+            out.unlink(missing_ok=True)
+            for f in written:   # it didn't happen: no stray copies of its subtitles
+                f.unlink(missing_ok=True)
+            self.working(path, title, None)
+        self.remember(title, "repackaged as MP4 so Apple devices and the app play it directly (nothing re-encoded)")
+        self.rescan_owner(new)
+        jellyfin_updated(new, [(path, "Deleted"), (new, "Created")])
+        playback.queue(self.state, new, title)
+        return True
+
+    def rescan_owner(self, path: Path) -> None:
+        """Sonarr/Radarr rescan the title whose folder holds <path>, so they
+        track the new file"""
+        for app in self.apps:
+            try:
+                for item in app.call("GET", "series" if app.kind == "series" else "movie") or []:
+                    folder = item.get("path")
+                    if folder and str(path).startswith(folder.rstrip("/") + "/"):
+                        record = {"seriesId": item["id"]} if app.kind == "series" else {"movieId": item["id"]}
+                        app.rescan(record)
+                        return
+            except (OSError, urllib.error.URLError, ValueError) as e:
+                log(f"couldn't ask {app.name} to rescan after repackaging {path.name}: {e}")
+
     def status(self):
         rejections = self.state["rejections"].values()
         return {
@@ -1269,6 +1385,7 @@ class Rounds:
                 worker.new_imports()
                 worker.check_rejections()
                 worker.sweep()
+                worker.repackage()
                 playback.run(worker.state, STATE.parent)
                 # What isn't arriving: searched again, and why (hourly)
                 offline = c.read_text(STATE.parent / "netwatch/connection") == "offline"

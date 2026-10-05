@@ -100,6 +100,7 @@ Run `nix run .#install` again whenever you like: it only changes what differs fr
   - A download that stalls for about 30 minutes, or never starts, is removed and replaced (Cleanuparr).
   - Each new file is renamed (`Show - S01E01 - Title`, `Movie (Year)`), checked and added to Jellyfin. One that won't play, is far too short or is a dub of Japanese anime is replaced; you're told only if nothing better turns up.
   - Files are made to play directly in browsers: a stereo track is added when the audio is only Dolby/DTS, and picture subtitles are read into text. Files already in the library get the same, a few at a time.
+  - Overnight, MKV files nobody has started are repackaged as MP4 (nothing re-encoded) when they fit whole, so the app and Apple devices play them directly.
   - Bazarr fetches subtitles, and new episodes of followed shows are grabbed as they air.
 - **A file is bad in a way the checks missed** (wrong edition, poor quality): in Sonarr or Radarr, open the title, use the interactive search (the person icon) and pick another release.
 - **Running out of space:** a notification comes below 50 GB free, and imports stop below 10 GB. Delete things from the dashboard.
@@ -370,6 +371,7 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 | `stereo_audio` | `true` | Add a stereo AAC track, first, when the audio is only in formats browsers can't play (Dolby Digital/Atmos, DTS, TrueHD); the original tracks stay |
 | `ocr_subtitles` | `true` | Read picture subtitles (Blu-ray PGS) into a text `.srt` next to the file, for the `subtitles.languages` that have no text subtitles yet (only the first with `want = "first"`) |
 | `drop_picture_subtitles` | `true` | Remove a picture subtitle track (Blu-ray PGS) when its language is also there as text. Moonfin picks picture subtitles over text ones whatever the file says, and Jellyfin has to burn them into the video (two subtitles at once, heavy on the CPU). Picture tracks in other languages, and forced ones, stay |
+| `repackage_mp4` | `true` | Overnight (1 to 7 am), MKV files nobody has started are repackaged as MP4, so the app, Safari, iPhone, iPad and Apple TV play them directly instead of Jellyfin repacking them while you watch. Nothing is re-encoded. Only files that fit MP4 whole: H.264 or HEVC video, audio in AAC, AC-3, E-AC-3 or MP3 (DTS and TrueHD stay MKV), and plain-text subtitles, which are saved as `.srt` files next to the video first. Styled anime subtitles with fonts and picture subtitles stay MKV. Started files are left alone, since a new file name would lose their progress. The new file is checked before the MKV goes; Sonarr/Radarr rescan and Jellyfin is told |
 | `default_tracks` | `true` | Each file's default tracks follow your preferences, so every player picks them: the audio above, and subtitles in the first of `subtitles.languages` that's there as text (English, else Spanish). Text wins over picture subtitles in the same language (a default picture track would be burned into the video while the player shows the text one) |
 
 By hand: `nix run .#postimport -- --check FILE` says what it would do; `--fix FILE` does it now.

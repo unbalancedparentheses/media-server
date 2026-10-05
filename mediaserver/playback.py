@@ -49,6 +49,15 @@ class Jellyfin:
             self._user = (self.get("Users") or [{}])[0].get("Id", "")
         return self._user
 
+    def user_data(self, item: str) -> list | None:
+        """Every user's watch state of <item> (played, position); None when
+        Jellyfin didn't answer"""
+        try:
+            users = self.get("Users") or []
+            return [(self.get(f"Users/{u['Id']}/Items/{item}") or {}).get("UserData") or {} for u in users]
+        except c.HTTP_ERRORS:
+            return None
+
     def playback_info(self, item: str) -> dict:
         r = c.request(f"{self.url}/Items/{item}/PlaybackInfo?userId={self.user()}", "POST", self.auth, body={}, timeout=60)
         return r.json({}) if r.ok else {"ErrorCode": f"HTTP {r.status}" if r.status else "no answer"}
