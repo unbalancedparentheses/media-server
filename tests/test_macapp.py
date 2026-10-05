@@ -131,9 +131,17 @@ class MacApp(unittest.TestCase):
             self.assertEqual([p["name"] for p in pages][:3], ["Home", "Watch", "Requests"])
             self.assertEqual(pages[0]["url"], "http://localhost")
             self.assertEqual(pages[1]["url"], "http://localhost:8096/Moonfin/Web/")
-            self.assertEqual(len(pages), 9)
+            self.assertEqual([p["name"] for p in pages][-2:], ["qBittorrent", "Bazarr"])   # no Usenet provider: no SABnzbd
+            self.assertEqual(len(pages), 8)
             self.setup()   # unchanged: not rebuilt
             self.assertEqual(built.call_count, 1)
+
+    def test_sabnzbd_page_with_a_usenet_provider(self):
+        self.setup('[[usenet_providers]]\nname = "news"\nenable = true\n')
+        names = [p["name"] for p in macapp.pages(self.cfg)]
+        self.assertEqual(names[-2:], ["SABnzbd", "Bazarr"])
+        self.setup('[[usenet_providers]]\nname = "news"\nenable = false\n')
+        self.assertNotIn("SABnzbd", [p["name"] for p in macapp.pages(self.cfg)])
 
     def test_failed_build_falls_back_and_tries_again(self):
         self.compiler.return_value = ["swiftc"]

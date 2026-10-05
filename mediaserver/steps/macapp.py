@@ -26,7 +26,7 @@ import tempfile
 import zlib
 from pathlib import Path
 
-from mediaserver.config import Config, Urls
+from mediaserver.config import Config
 from mediaserver.ui import info, ok, warn
 
 NAME = "Media Server"
@@ -40,13 +40,16 @@ BROWSERS = ("Brave Browser", "Google Chrome", "Microsoft Edge", "Chromium", "Viv
 SOURCE = Path(__file__).resolve().parents[2] / "templates/MediaServerApp.swift"
 
 
-def pages(urls: Urls) -> list[dict]:
-    """The app's toolbar, in order (Cmd+1…9)"""
+def pages(cfg: Config) -> list[dict]:
+    """The app's toolbar, in order (Cmd+1…9). SABnzbd only with a Usenet
+    provider switched on (without one it's unused, and shows its wizard)"""
+    urls = cfg.urls
+    usenet = any(p.get("enable", True) for p in cfg.get("usenet_providers", []) or [] if isinstance(p, dict))
     return [{"name": "Home", "url": urls.dashboard}, {"name": "Watch", "url": f"{urls.jellyfin}/Moonfin/Web/"},
             {"name": "Requests", "url": urls.seerr}, {"name": "Sonarr", "url": urls.sonarr},
             {"name": "Radarr", "url": urls.radarr}, {"name": "Prowlarr", "url": urls.prowlarr},
-            {"name": "qBittorrent", "url": urls.qbittorrent}, {"name": "SABnzbd", "url": urls.sabnzbd},
-            {"name": "Bazarr", "url": urls.bazarr}]
+            {"name": "qBittorrent", "url": urls.qbittorrent}] + \
+        ([{"name": "SABnzbd", "url": urls.sabnzbd}] if usenet else []) + [{"name": "Bazarr", "url": urls.bazarr}]
 
 
 def apple_env() -> dict:
@@ -284,7 +287,7 @@ def run(cfg: Config) -> None:
     if cfg.get("app.enabled", True) is not True:
         remove(cfg)
         return
-    built = build(pages(cfg.urls), app)
+    built = build(pages(cfg), app)
     if built == "native":
         ok(f"{NAME} app built: the dashboard, Moonfin, Seerr and the admin pages in one window ({app})")
     elif built == "launcher":
