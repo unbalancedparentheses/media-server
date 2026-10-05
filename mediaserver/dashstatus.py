@@ -30,6 +30,31 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from mediaserver import common as c
+
+
+def site(indexer: dict) -> str:
+    """An indexer's site: its base URL setting, else its definition's first"""
+    base = next((f.get("value") for f in indexer.get("fields") or [] if f.get("name") == "baseUrl" and f.get("value")), "")
+    return base or next(iter(indexer.get("indexerUrls") or []), "")
+
+
+def unresolved(url: str) -> str:
+    """The host, when the DNS doesn't know it ("" when it does, or there's
+    no URL, or the Mac is offline: then nothing resolves)"""
+    import socket
+    from urllib.parse import urlsplit
+    host = urlsplit(url).hostname or ""
+    if not host:
+        return ""
+    try:
+        socket.getaddrinfo(host, 443)
+        return ""
+    except socket.gaierror:
+        try:
+            socket.getaddrinfo("apple.com", 443)   # online, and this one is unknown
+        except socket.gaierror:
+            return ""
+        return host
 from mediaserver import control, dashmedia, launchd
 from mediaserver.config import PORTS, local
 
@@ -214,10 +239,12 @@ class Collector:
         indexers = c.try_json(local("prowlarr") + "/api/v1/indexer", {"X-Api-Key": pk}, []) or []
         statuses = c.try_json(local("prowlarr") + "/api/v1/indexerstatus", {"X-Api-Key": pk}, []) or []
         names = {i["id"]: i["name"] for i in indexers}
+        by_id = {i["id"]: i for i in indexers}
         on = {i["id"] for i in indexers if i.get("enable")}
         now = time.time()
         # Switched-off indexers keep their last failure; only enabled ones count
-        off = [{"name": names.get(s["indexerId"], f"indexer {s['indexerId']}"), "until": s["disabledTill"]}
+        off = [{"name": names.get(s["indexerId"], f"indexer {s['indexerId']}"), "until": s["disabledTill"],
+                **({"unresolved": host} if (host := unresolved(site(by_id.get(s["indexerId"]) or {}))) else {})}
                for s in statuses if s.get("indexerId") in on and s.get("disabledTill") and iso_time(s["disabledTill"]) > now]
         since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
         stats = c.try_json(local("prowlarr") + f"/api/v1/indexerstats?startDate={since}", {"X-Api-Key": pk})
@@ -266,8 +293,15 @@ class Collector:
         elif free < disk.get("warn_gb", 50):
             out.append({"level": "warn", "text": f"{free} GB free on the media disk", "action": f"Imports stop below {disk.get('min_gb')} GB"})
         off = (slow.get("prowlarr") or {}).get("off") or []
-        if off:
-            out.append({"level": "warn", "text": "Indexers switched off after failures: " + ", ".join(o["name"] for o in off),
+        # A site the DNS doesn't know won't come back by retrying (often an
+        # internet provider's block): said apart from passing failures
+        unknown = [o for o in off if o.get("unresolved")]
+        passing = [o for o in off if not o.get("unresolved")]
+        for o in unknown:
+            out.append({"level": "warn", "text": f"{o['name']}: its site ({o['unresolved']}) can't be found; your internet provider may block it",
+                        "action": f"Set enable = false for {o['name']} under [[indexers]] in config.toml, or use another DNS"})
+        if passing:
+            out.append({"level": "warn", "text": "Indexers switched off after failures: " + ", ".join(o["name"] for o in passing),
                         "action": "Usually temporary; Prowlarr → Indexers → Test All brings back the ones that work"})
         for app in ("sonarr", "radarr"):
             for h in (slow.get(app) or {}).get("health") or []:

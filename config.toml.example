@@ -222,6 +222,7 @@ flaresolverr = true   # behind Cloudflare
 name = "Tokyo Toshokan"
 definitionName = "tokyotosho"
 enable = true
+flaresolverr = true   # behind Cloudflare too
 
 [[indexers]]
 name = "nekoBT"

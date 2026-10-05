@@ -96,6 +96,43 @@ class Attention(unittest.TestCase):
         self.assertTrue(any("burned into the video" in t for t in texts))
 
 
+class BlockedIndexers(unittest.TestCase):
+    """An indexer whose site the DNS doesn't know (an internet provider's
+    block, a dead domain) is said apart from passing failures"""
+
+    def test_site_and_dns(self):
+        import socket
+        from mediaserver import dashstatus as ds
+        self.assertEqual(ds.site({"fields": [{"name": "baseUrl", "value": "https://mirror.example/"}], "indexerUrls": ["https://a.example/"]}),
+                         "https://mirror.example/")
+        self.assertEqual(ds.site({"fields": [{"name": "baseUrl", "value": None}], "indexerUrls": ["https://a.example/"]}), "https://a.example/")
+
+        def resolver(known):
+            def getaddrinfo(host, port):
+                if host not in known:
+                    raise socket.gaierror(8, "nodename nor servname provided, or not known")
+                return [()]
+            return getaddrinfo
+        with mock.patch("socket.getaddrinfo", resolver({"apple.com"})):
+            self.assertEqual(ds.unresolved("https://1337x.to/"), "1337x.to")
+        with mock.patch("socket.getaddrinfo", resolver({"apple.com", "1337x.to"})):
+            self.assertEqual(ds.unresolved("https://1337x.to/"), "")
+        with mock.patch("socket.getaddrinfo", resolver(set())):   # offline: nothing resolves, nothing blamed
+            self.assertEqual(ds.unresolved("https://1337x.to/"), "")
+        self.assertEqual(ds.unresolved(""), "")
+
+    def test_attention(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        col = Collector(root / "config", root / "state", root, 50, 10)
+        off = [{"name": "1337x", "until": "x", "unresolved": "1337x.to"}, {"name": "Nyaa.si", "until": "x"}]
+        items = col.attention({}, {"prowlarr": {"off": off}}, [])
+        texts = [a["text"] for a in items]
+        self.assertIn("1337x: its site (1337x.to) can't be found; your internet provider may block it", texts)
+        self.assertIn("Indexers switched off after failures: Nyaa.si", texts)
+        self.assertIn("enable = false for 1337x", next(a["action"] for a in items if a["text"].startswith("1337x")))
+
+
 class Uptime(unittest.TestCase):
     def test_percent_ignores_unknown_samples(self):
         root = Path(tempfile.mkdtemp())
