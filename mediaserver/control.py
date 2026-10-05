@@ -121,7 +121,21 @@ class Library:
         return c.get_json(f"{local('jellyfin')}/{path}", c.jellyfin_auth(self.state))
 
     def resolve(self, item_id: str) -> dict:
-        """A Jellyfin item (a film, series or episode) → the title in Radarr/Sonarr"""
+        """A Jellyfin item (a film, series or episode) → the title in
+        Radarr/Sonarr; or radarr<id>/sonarr<id> for one that never arrived
+        (the Manage page's "not found for weeks"), with its seasons whether
+        or not they have files"""
+        import re
+        direct = re.fullmatch(r"(radarr|sonarr)(\d+)", item_id)
+        if direct:
+            app, num = direct.group(1), int(direct.group(2))
+            try:
+                found = self.arr(app, "GET", f"{'movie' if app == 'radarr' else 'series'}/{num}")
+            except ApiError:
+                raise LookupError(f"{app.capitalize()} doesn't have it") from None
+            if app == "radarr":
+                return self.movie_title(found)
+            return self.series_title(found, found.get("tmdbId"), every_season=True)
         items = self.jellyfin(f"Items?Ids={item_id}&Fields=ProviderIds").get("Items") or []
         if not items:
             raise LookupError("it's not in the library any more")
@@ -133,17 +147,27 @@ class Library:
             found = self.arr("radarr", "GET", f"movie?tmdbId={ids.get('Tmdb')}") if ids.get("Tmdb") else []
             if not found:
                 raise LookupError("Radarr doesn't have it")
-            m = found[0]
-            return {"kind": "movie", "title": f"{m.get('title')} ({m.get('year')})", "id": m["id"], "tmdb": m.get("tmdbId"),
-                    "size": m.get("sizeOnDisk") or 0, "seasons": []}
+            return self.movie_title(found[0])
         found = self.arr("sonarr", "GET", f"series?tvdbId={ids.get('Tvdb')}") if ids.get("Tvdb") else []
         if not found:
             raise LookupError("Sonarr doesn't have it")
-        s = found[0]
-        return {"kind": "series", "title": s.get("title"), "id": s["id"], "tmdb": int(ids["Tmdb"]) if ids.get("Tmdb") else None,
+        return self.series_title(found[0], int(ids["Tmdb"]) if ids.get("Tmdb") else None)
+
+    @staticmethod
+    def movie_title(m: dict) -> dict:
+        return {"kind": "movie", "title": f"{m.get('title')} ({m.get('year')})", "id": m["id"], "tmdb": m.get("tmdbId"),
+                "size": m.get("sizeOnDisk") or 0, "seasons": []}
+
+    @staticmethod
+    def series_title(s: dict, tmdb, every_season: bool = False) -> dict:
+        """Its seasons with files (to delete); every_season: the monitored
+        ones without files too (to stop looking for)"""
+        def size(x):
+            return (x.get("statistics") or {}).get("sizeOnDisk") or 0
+        return {"kind": "series", "title": s.get("title"), "id": s["id"], "tmdb": tmdb,
                 "size": (s.get("statistics") or {}).get("sizeOnDisk") or 0,
-                "seasons": [{"number": x["seasonNumber"], "size": (x.get("statistics") or {}).get("sizeOnDisk") or 0}
-                            for x in s.get("seasons") or [] if (x.get("statistics") or {}).get("sizeOnDisk")]}
+                "seasons": [{"number": x["seasonNumber"], "size": size(x)} for x in s.get("seasons") or []
+                            if size(x) or every_season and x.get("monitored") and x.get("seasonNumber")]}
 
     # ─── Which torrents can go ───────────────────────────────────
     # Deleted with its data only with proof: every video in the torrent is a

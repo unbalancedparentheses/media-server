@@ -350,6 +350,13 @@
     </div>
 
     <div class="section">
+      <div class="panel hidden" id="abandoned-sec">
+        <div class="p-head"><div class="p-head-title">Not found for weeks</div><div class="p-head-sub">still searched now and then · give up, or pick a release by hand</div></div>
+        <div id="abandoned"></div>
+      </div>
+    </div>
+
+    <div class="section">
       <div class="panel hidden" id="health-sec">
         <div class="p-head"><div class="p-head-title">Library health</div><div class="p-head-sub" id="health-sub"></div></div>
         <div id="health"></div>
@@ -567,15 +574,28 @@
       }).join(''):'<div class="empty">Nothing matches</div>';
     }
     document.getElementById('library-filter').addEventListener('input',renderLibrary);
+    // Missing for weeks with nothing usable found: delete the film / stop
+    // looking for the season, or pick a release in Sonarr/Radarr
+    function renderAbandoned(){
+      var list=(lastStatus&&lastStatus.abandoned)||[];
+      show('abandoned-sec',list.length>0);
+      document.getElementById('abandoned').innerHTML=list.map(function(x){
+        var weeks=Math.floor(x.days/7),u=adminUrl(x.admin),season=x.season!=null;
+        return'<div class="lib-row"><div class="i-info"><div>'+esc(x.title)+'</div>'
+          +'<div class="i-sub">missing '+(weeks>=2?weeks+' weeks':x.days+' days')+' · searched '+plural(x.searches,'time')+' · '+esc(x.why||'')+'</div></div>'
+          +'<span>'+(u?'<a class="i-link" href="'+u+'">Pick a release in '+esc(x.app)+' →</a> ':'')
+          +'<button class="btn danger-outline" data-delete="'+esc(x.item)+'"'+(season?' data-season="'+x.season+'"':'')+'>'+(season?'Stop looking':'Delete')+'</button></span></div>';
+      }).join('');
+    }
     // Any Delete button (Library, search) opens the dialog
-    document.addEventListener('click',function(e){var b=e.target.closest('[data-delete]');if(b){e.preventDefault();sr.style.display='none';openDelete(b.getAttribute('data-delete'));}});
+    document.addEventListener('click',function(e){var b=e.target.closest('[data-delete]');if(b){e.preventDefault();sr.style.display='none';openDelete(b.getAttribute('data-delete'),b.getAttribute('data-season'));}});
 
     // ── Deleting a title: through Radarr/Sonarr (Jellyfin alone would get
     // it downloaded again), with its torrents ──
     var delItem=null,delInfo=null;
     function gb(b){return b>=1073741824?(b/1073741824).toFixed(1)+' GB':Math.max(1,Math.round(b/1048576))+' MB';}
     function closeDelete(){show('del-modal',false);delItem=delInfo=null;}
-    function openDelete(item){
+    function openDelete(item,preselect){
       delItem=item;delInfo=null;show('del-modal',true);
       document.getElementById('del-title').textContent='Delete';
       document.getElementById('del-body').textContent='Looking it up…';
@@ -589,8 +609,9 @@
         var html=delInfo.unfinished?'<p>Deleting it didn\'t finish last time; still to do: '+esc(delInfo.unfinished.join(', '))+'.</p>'
           :delInfo.kind==='movie'?'<p>The film and its files (about '+gb(delInfo.size)+').</p>'
           :'<label class="del-opt"><input type="radio" name="del-what" value="" checked> The whole series (about '+gb(delInfo.size)+')</label>'
-            +delInfo.seasons.map(function(x){return'<label class="del-opt"><input type="radio" name="del-what" value="'+x.number+'"> Only season '+x.number+' ('+gb(x.size)+'; the rest stays)</label>';}).join('');
+            +delInfo.seasons.map(function(x){return'<label class="del-opt"><input type="radio" name="del-what" value="'+x.number+'"> Only season '+x.number+' ('+(x.size?gb(x.size):'nothing downloaded: stops looking for it')+'; the rest stays)</label>';}).join('');
         document.getElementById('del-body').innerHTML=html;
+        if(preselect!=null){var r=document.querySelector('input[name="del-what"][value="'+preselect+'"]');if(r)r.checked=true;}
         document.getElementById('del-go').disabled=false;
         document.getElementById('del-go').focus();
       }).catch(function(){document.getElementById('del-body').textContent='Not available: the dashboard couldn\'t reach it';});
@@ -738,6 +759,7 @@
       renderTonight();
       renderSpeed(s.speed_limit,false);
       renderLibrary();
+      renderAbandoned();
 
       if(s.because){
         show('because-sec',s.because.length>0);

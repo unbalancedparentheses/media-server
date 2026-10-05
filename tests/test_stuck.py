@@ -161,6 +161,8 @@ class Recovery(unittest.TestCase):
         self.assertGreaterEqual(spectre["searches"], 3)
         waits = [stuck.wait_after(n) for n in (1, 2, 3, 4, 5, 6, 7)]
         self.assertEqual(waits, [3600, 7200, 14400, 28800, 57600, 86400, 86400])
+        # Missing for over a week: up to 3 days between searches
+        self.assertEqual([stuck.wait_after(n, 8 * DAY) for n in (6, 7, 8, 9)], [32 * 3600, 64 * 3600, 3 * DAY, 3 * DAY])
 
     def test_switched_off_asks_the_indexers_nothing(self):
         self.round(0)
@@ -201,6 +203,30 @@ class Recovery(unittest.TestCase):
         self.assertEqual(len(asked), 1)   # once in those 12 hours
         self.assertEqual(self.state["items"]["radarr:1"]["diagnosis"]["code"], "quality")
         self.assertIn("Releases found, but none in a quality", stuck.explain(self.state["items"]["radarr:1"], now=36 * 3600))
+
+    def test_looks_that_find_nothing_come_less_often(self):
+        # Nothing found each time: 12 h, then a day, two days, four, up to a week
+        for hour in range(0, 24 * 40):
+            self.round(hour * 3600)
+        asked = [i for i, (m, p, b) in enumerate(self.radarr.calls) if p == "release?movieId=7"]
+        self.assertEqual(self.state["items"]["radarr:7"]["looks"], len(asked))
+        self.assertLessEqual(len(asked), 10)   # not 2 a day for 40 days
+        self.assertEqual([stuck.look_wait(n) for n in (1, 2, 3, 4, 5, 6)],
+                         [12 * 3600, DAY, 2 * DAY, 4 * DAY, 7 * DAY, 7 * DAY])
+
+    def test_a_look_that_times_out_counts(self):
+        def timing_out(method, path, body):
+            if path.startswith("release"):
+                raise TimeoutError("timed out")
+            return self.radarr_answers(method, path, body)
+        self.radarr.answers = timing_out
+        for hour in range(0, 36):   # looked at after a day, then not for 12 h
+            self.round(hour * 3600)
+        asked = [p for m, p, b in self.radarr.calls if p == "release?movieId=1"]
+        self.assertEqual(len(asked), 1)   # not once an hour
+        self.assertEqual(self.state["items"]["radarr:1"]["looks"], 1)
+        self.assertNotIn("diagnosis", self.state["items"]["radarr:1"])
+        self.assertTrue(any("next look in 24 h" in line or "next look in 12 h" in line for line in self.logs))
 
     def test_missing_since_it_was_added_not_since_first_seen(self):
         self.movies[0]["added"] = "1970-01-01T00:00:00Z"   # long ago

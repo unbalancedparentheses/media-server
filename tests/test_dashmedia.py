@@ -3,6 +3,7 @@ release date a movie is waiting for, and grouping new episodes.
 
 Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
+import json
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -63,6 +64,29 @@ class Latest(unittest.TestCase):
         self.assertEqual([(c["title"], c["detail"]) for c in cards], [("Show", "3 new episodes"), ("Film", "2020")])
         self.assertEqual((cards[0]["image"], cards[1]["image"]), ("s1", "m1"))
 
+
+
+
+class Abandoned(unittest.TestCase):
+    def test_missing_for_weeks_with_nothing_usable(self):
+        import tempfile
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "postimport").mkdir()
+        day = 86400
+        items = {"radarr:1": {"app": "Radarr", "title": "Old Film (1990)", "movie": 1, "since": 0, "searches": 9,
+                              "diagnosis": {"code": "none", "text": "No releases found on your indexers"}},
+                 "sonarr:9:2": {"app": "Sonarr", "title": "Kaiji season 2", "series": 9, "season": 2, "since": 10 * day, "searches": 7,
+                                "episodes": 26, "diagnosis": {"code": "none", "text": "No releases found on your indexers"}},
+                 "radarr:2": {"app": "Radarr", "title": "Recent (2026)", "movie": 2, "since": 30 * day, "searches": 2},
+                 "radarr:3": {"app": "Radarr", "title": "Usable (2000)", "movie": 3, "since": 0, "diagnosis": {"code": "usable", "text": "x"}},
+                 "radarr:4": {"app": "Radarr", "title": "Coming (2001)", "movie": 4, "since": 0, "downloading": True}}
+        (tmp / "postimport/stuck.json").write_text(json.dumps({"items": items}))
+        with mock.patch.object(dm, "STATE", tmp):
+            out = dm.abandoned(now=40 * day)
+        self.assertEqual([x["title"] for x in out], ["Old Film (1990)", "Kaiji season 2"])   # longest missing first
+        self.assertEqual((out[0]["item"], out[0]["season"], out[0]["days"]), ("radarr1", None, 40))
+        self.assertEqual((out[1]["item"], out[1]["season"], out[1]["admin"]), ("sonarr9", 2, "sonarr:/wanted/missing"))
+        self.assertEqual(out[1]["why"], "No releases found on your indexers")
 
 if __name__ == "__main__":
     unittest.main()
@@ -407,7 +431,7 @@ class DubStatus(unittest.TestCase):
         with mock.patch.object(dm, "STATE", state), mock.patch.object(dm, "sonarr", return_value=sonarr), \
                 mock.patch.object(dm, "jellyfin", jellyfin):
             dubs = dm.health()["dubs"]
-        self.assertEqual(dubs[0]["status"], "No Japanese or Dual Audio release out yet (looked 2×; again every 12 h)")
+        self.assertEqual(dubs[0]["status"], "No Japanese or Dual Audio release out yet (looked 2×; looked at less often each time, up to weekly)")
 
 
 class UniqueRequests(unittest.TestCase):

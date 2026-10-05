@@ -212,6 +212,22 @@ class Delete(Stack):
         self.assertEqual(self.stack.sonarr.resources["series"].items, [])
         self.assertEqual(self.seerr_deleted, [901])
 
+    def test_by_radarr_or_sonarr_id_for_what_never_arrived(self):
+        film = self.library.resolve(f"radarr{self.movie['id']}")
+        self.assertEqual((film["kind"], film["title"], film["tmdb"]), ("movie", "Skyfall (2012)", 37724))
+        series = self.library.resolve(f"sonarr{self.series['id']}")
+        # A season with nothing downloaded is offered too: to stop looking for it
+        self.assertEqual([x["number"] for x in series["seasons"]], [1, 2])
+        self.assertEqual([x["number"] for x in self.library.resolve("jfseries")["seasons"]], [1])
+        with self.assertRaises(LookupError):
+            self.library.resolve("radarr999")
+
+    def test_stop_looking_for_a_season(self):
+        self.library.delete(f"sonarr{self.series['id']}", 2, False)
+        series = self.stack.sonarr.resources["series"].items[0]
+        self.assertFalse(next(x for x in series["seasons"] if x["seasonNumber"] == 2)["monitored"])
+        self.assertTrue(next(x for x in series["seasons"] if x["seasonNumber"] == 1)["monitored"])
+
     def test_an_episode_card_means_its_series(self):
         self.stack.jellyfin.items.append({"Id": "jfep", "Type": "Episode", "SeriesId": "jfseries"})
         self.assertEqual(self.library.resolve("jfep")["title"], "Kaiji")

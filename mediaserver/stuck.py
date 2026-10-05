@@ -7,7 +7,9 @@ missing. So, run from the postimport service:
 - Recovery: films and seasons still missing (released, monitored) are
   searched again through Sonarr/Radarr, so your quality profiles, language
   and size rules and release filters all apply as always. Each one waits
-  longer after every search (1 h, 2 h, 4 h, … up to a day). At most
+  longer after every search (1 h, 2 h, 4 h, … up to a day; up to 3 days
+  once it's been missing a week: new releases still arrive through the
+  RSS feeds in between). At most
   SEARCHES_PER_RUN search commands an hour (a season search is one command,
   though Sonarr may ask the indexers several times for it), never while
   offline or during an install. Indexers switched off after failures are
@@ -17,7 +19,10 @@ missing. So, run from the postimport service:
   nothing (Sonarr/Radarr's interactive search) shows what's out there and
   why each release was turned down: nothing found, indexers down, quality,
   language, size, the release filters, no seeders, blocklisted. That's what
-  the dashboard shows, with what to do.
+  the dashboard shows, with what to do. A look at an anime season can be
+  a thousand indexer queries, so after one that finds nothing usable, or
+  doesn't finish in time (it still cost them), the next waits twice as
+  long: 12 h, a day, two days, … up to a week.
 - Lower resolution only if you ask for it: with quality.fallback_resolution
   ("720p" or "480p"), a title stuck for a week whose releases are turned
   down only for their quality gets a copy of its own profile that also
@@ -31,8 +36,8 @@ missing. So, run from the postimport service:
   downloaded and imported, matched to the same episodes, before the old
   file goes, and postimport checks it (within max_replacements). This asks
   Sonarr to search such a season when a look-only search finds a Japanese
-  or Dual Audio release it would take, with seeders; every 12 hours, one
-  season an hour. Dubs Sonarr doesn't score as dubs (their release names
+  or Dual Audio release it would take, with seeders; one season an hour,
+  each looked at again after 12 h, then a day, two days, … up to a week. Dubs Sonarr doesn't score as dubs (their release names
   don't say so) are only reported: pick a release by hand.
   quality.anime_block_dubs = false turns it off.
 - library.search_missing = false turns all of it off: nothing here asks
@@ -54,7 +59,13 @@ SEARCHES_PER_RUN = 3
 DIAGNOSES_PER_RUN = 2           # look-only release searches an hour
 DIAGNOSE_AFTER = 86400          # missing this long before it's looked into
 DIAGNOSE_EVERY = 12 * 3600      # and not again sooner (it queries the indexers)
-MAX_WAIT = 86400                # the longest pause between searches
+# A look at an anime season asks every indexer for every episode under each
+# of its names (around a thousand queries): one that finds nothing usable,
+# or doesn't finish, waits twice as long before the next, up to a week
+MAX_LOOK_WAIT = 7 * 86400
+MAX_WAIT = 86400                # the longest pause between searches…
+LONG_MISSING = 7 * 86400        # …until missing this long, then:
+MAX_WAIT_LONG_MISSING = 3 * 86400
 RETEST_INDEXERS_EVERY = 6 * 3600
 # A release search asks every indexer: it can take a minute or more
 RELEASE_SEARCH_TIMEOUT = 180
@@ -171,8 +182,14 @@ def timestamp(iso: str | None) -> float | None:
         return None
 
 
-def wait_after(searches: int) -> int:
-    return min(3600 * 2 ** max(searches - 1, 0), MAX_WAIT)
+def wait_after(searches: int, missing_for: float = 0) -> int:
+    longest = MAX_WAIT_LONG_MISSING if missing_for >= LONG_MISSING else MAX_WAIT
+    return min(3600 * 2 ** max(searches - 1, 0), longest)
+
+
+def look_wait(looks: int) -> int:
+    """Before the next look-only search, after <looks> that found nothing usable"""
+    return min(DIAGNOSE_EVERY * 2 ** max(looks - 1, 0), MAX_LOOK_WAIT)
 
 
 class Stuck:
@@ -282,26 +299,35 @@ class Stuck:
                 continue   # tried again next round
             item["searches"] += 1
             item["last_search"] = self.now
-            item["next_search"] = self.now + wait_after(item["searches"])
-            c.log(f"searching again for {m['title']} (search {item['searches']}; next in {wait_after(item['searches']) // 3600} h)")
+            wait = wait_after(item["searches"], self.now - item["since"])
+            item["next_search"] = self.now + wait
+            c.log(f"searching again for {m['title']} (search {item['searches']}; next in {wait // 3600} h)")
 
     def diagnose(self, missing: dict) -> None:
         items = self.state["items"]
+        def last_look(item) -> float:
+            return max(item.get("diagnosed_at", 0), item.get("look_tried", 0))
         due = [k for k in missing if self.now - items[k]["since"] >= DIAGNOSE_AFTER
-               and self.now - items[k].get("diagnosed_at", 0) >= DIAGNOSE_EVERY]
-        due.sort(key=lambda k: items[k].get("diagnosed_at", 0))
+               and ("diagnosed_at" not in items[k] and "look_tried" not in items[k]
+                    or self.now - last_look(items[k]) >= look_wait(items[k].get("looks", 0)))]
+        due.sort(key=lambda k: last_look(items[k]))
         for key in due[:DIAGNOSES_PER_RUN]:
             m, item = missing[key], items[key]
             app = self.apps[m["app"]]
+            # Counted before asking: a look that doesn't finish still cost
+            # the indexers (Sonarr goes on searching after we stop waiting)
+            item["look_tried"] = self.now
+            item["looks"] = item.get("looks", 0) + 1
             try:
                 releases = app.call("GET", m["query"], timeout=RELEASE_SEARCH_TIMEOUT) or []
             except c.HTTP_ERRORS as e:
-                c.log(f"{m['title']}: couldn't look at the releases ({e})")
+                c.log(f"{m['title']}: couldn't look at the releases ({e}); next look in {look_wait(item['looks']) // 3600} h")
                 continue
             item["diagnosis"] = classify(releases if isinstance(releases, list) else [], self.indexers_down(app))
             item["diagnosed_at"] = self.now
             if item["diagnosis"]["code"] == "usable":
                 item["next_search"] = self.now   # it'd be grabbed: search now rather than wait
+                item["looks"] = 0
             c.log(f"{m['title']}: {item['diagnosis']['text']}")
 
     def fallback(self, missing: dict) -> None:
@@ -372,8 +398,10 @@ class Stuck:
             dubs.pop(key)
 
         def looked_lately(k) -> bool:
+            # Twice as long after each look, up to a week (a release with
+            # Japanese audio that turns up is grabbed by Sonarr's own RSS)
             entry = dubs.get(f"{k[0]}:{k[1]}") or {}
-            return "looked_at" in entry and self.now - entry["looked_at"] < DIAGNOSE_EVERY
+            return "looked_at" in entry and self.now - entry["looked_at"] < look_wait(entry.get("looks", 0))
         due = [k for k in seasons if f"sonarr:{k[0]}:{k[1]}" not in downloading and not looked_lately(k)]
         due.sort(key=lambda k: dubs.get(f"{k[0]}:{k[1]}", {}).get("looked_at", 0))
         for sid, season in due[:1]:
@@ -383,10 +411,10 @@ class Stuck:
             try:
                 self.look_for_japanese(sonarr, sid, season, files, entry)
             except c.HTTP_ERRORS as e:
-                # Said, not swallowed: tried again in 12 hours
+                # Said, not swallowed: tried again later (look_wait)
                 entry["status"] = "error"
                 entry["error"] = str(e)[:200]
-                c.log(f"{entry['title']}: couldn't look for a Japanese release ({e}); trying again in 12 h")
+                c.log(f"{entry['title']}: couldn't look for a Japanese release ({e}); trying again in {look_wait(entry['looks']) // 3600} h")
 
     def look_for_japanese(self, sonarr, sid: int, season: int, files: list, entry: dict) -> None:
         """Nothing is deleted: Sonarr upgrades files it scores below 0 (it

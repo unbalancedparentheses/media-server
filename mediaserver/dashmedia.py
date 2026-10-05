@@ -473,6 +473,29 @@ def stuck_items() -> dict:
     return (c.read_json(STATE / "postimport/stuck.json", {}) or {}).get("items") or {}
 
 
+ABANDONED_AFTER = 21 * 86400   # missing this long, with nothing usable found
+
+
+def abandoned(now: float | None = None) -> list:
+    """Films and seasons missing for weeks with nothing usable found, for
+    the Manage page: give up on them (delete the film, stop looking for the
+    season) or pick a release by hand. Longest missing first."""
+    from mediaserver import stuck
+    now = time.time() if now is None else now
+    out = []
+    for key, item in stuck_items().items():
+        code = (item.get("diagnosis") or {}).get("code")
+        if item.get("downloading") or code == "usable" or now - item.get("since", now) < ABANDONED_AFTER:
+            continue
+        app = item.get("app")
+        out.append({"title": item.get("title", key), "app": app, "days": int((now - item["since"]) // 86400),
+                    "searches": item.get("searches", 0), "why": (item.get("diagnosis") or {}).get("text") or stuck.explain(item, now),
+                    "item": f"radarr{item['movie']}" if "movie" in item else f"sonarr{item.get('series')}",
+                    "season": item.get("season"), "episodes": item.get("episodes"),
+                    "admin": f"{'radarr' if app == 'Radarr' else 'sonarr'}:/wanted/missing"})
+    return sorted(out, key=lambda x: -x["days"])
+
+
 def with_diagnosis(stages: list, items: list) -> list:
     """On the active Search stage: why nothing is arriving and what's done
     about it (the stuck items of this film, or of this series' seasons)"""
@@ -818,14 +841,14 @@ def health():
         elif any(e.get("status") == "manual" for e in seasons):
             d["status"] = "Sonarr doesn't see these files as dubs, so it won't replace them: pick a Japanese or Dual Audio release in Sonarr"
         elif any(e.get("status") == "waiting" for e in seasons):
-            d["status"] = f"No Japanese or Dual Audio release out yet (looked {max(e.get('looks', 0) for e in seasons)}×; again every 12 h)"
+            d["status"] = f"No Japanese or Dual Audio release out yet (looked {max(e.get('looks', 0) for e in seasons)}×; looked at less often each time, up to weekly)"
         elif any(e.get("status") == "error" for e in seasons):
-            d["status"] = "Couldn't look for a Japanese release last time (Sonarr or the indexers didn't answer); trying again every 12 h"
+            d["status"] = "Couldn't look for a Japanese release last time (Sonarr or the indexers didn't answer); trying again later"
     out["dubs"] = sorted(dubs.values(), key=lambda d: d["title"])
     return out
 
 
-MEDIA_PARTS = ("continue", "tonight", "because", "latest", "requests_live", "upcoming", "health", "recommended", "library")
+MEDIA_PARTS = ("continue", "tonight", "because", "latest", "requests_live", "upcoming", "health", "recommended", "library", "abandoned")
 
 
 def carry_over(previous: dict | None, new: dict) -> dict:
@@ -847,7 +870,8 @@ def carry_over(previous: dict | None, new: dict) -> dict:
 def collect() -> dict:
     result, failed = {}, []
     for name, part in (("continue", continue_watching), ("tonight", tonight), ("because", because), ("latest", latest), ("requests_live", requests),
-                       ("upcoming", upcoming), ("health", health), ("recommended", recommended), ("library", library_sizes)):
+                       ("upcoming", upcoming), ("health", health), ("recommended", recommended), ("library", library_sizes),
+                       ("abandoned", abandoned)):
         try:
             result[name] = part()
         except Exception as e:  # one broken source mustn't blank the others
