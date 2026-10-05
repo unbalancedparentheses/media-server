@@ -3,9 +3,16 @@
 // you're on another. Links to another service open on its page; links
 // off this Mac (IMDb, a trailer) open in your browser.
 //
+// While it runs (closing the window keeps it running), it reads the
+// dashboard's status.json every 30 s: the Dock icon's badge counts what
+// needs a look (or shows ↓ while something downloads), and a notification
+// says when something is ready to watch or newly needs a look (a stuck
+// download, the disk filling up, a service down).
+//
 // Written by setup (mediaserver/steps/macapp.py), compiled on this Mac;
 // the services and their addresses come from services.json beside it.
 import AppKit
+import UserNotifications
 import WebKit
 
 struct Service: Decodable {
@@ -13,7 +20,8 @@ struct Service: Decodable {
     let url: String
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKNavigationDelegate, WKUIDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKNavigationDelegate, WKUIDelegate,
+                         UNUserNotificationCenterDelegate {
     var window: NSWindow!
     var services: [Service] = []
     var views: [Int: WKWebView] = [:]
@@ -67,9 +75,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         show(0)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        poll()
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.poll() }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    // Closing the window keeps it running (the badge and notifications);
+    // the Dock icon brings the window back, Cmd+Q quits
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     // Clicking the Dock icon with the window closed brings it back
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -213,6 +229,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         panel.allowsMultipleSelection = parameters.allowsMultipleSelection
         panel.canChooseDirectories = parameters.allowsDirectories
         panel.beginSheetModal(for: window) { completionHandler($0 == .OK ? panel.urls : nil) }
+    }
+
+    // ─── Status: the Dock badge and notifications ────────────────
+
+    let defaults = UserDefaults.standard
+    var polled = false
+
+    func poll() {
+        guard let url = URL(string: services[0].url + "/status.json") else { return }
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 15
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            guard let data = data, (response as? HTTPURLResponse)?.statusCode == 200,
+                  let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                DispatchQueue.main.async { NSApp.dockTile.badgeLabel = self?.polled == true ? "?" : nil }
+                return
+            }
+            DispatchQueue.main.async { self?.update(status) }
+        }.resume()
+    }
+
+    // What needs a look, ignoring passing information; the key leaves out
+    // numbers ("990 GB free" and "980 GB free" are the same warning)
+    static func problems(_ status: [String: Any]) -> [(key: String, level: String, text: String, action: String)] {
+        let items = status["attention"] as? [[String: Any]] ?? []
+        return items.compactMap { item in
+            let level = item["level"] as? String ?? ""
+            guard level == "error" || level == "warn", let text = item["text"] as? String else { return nil }
+            let key = text.replacingOccurrences(of: "[0-9.,]+", with: "#", options: .regularExpression)
+            return (key, level, text, item["action"] as? String ?? "")
+        }
+    }
+
+    func update(_ status: [String: Any]) {
+        let problems = AppDelegate.problems(status)
+        let downloading = (status["downloads"] as? [String: Any])?["downloading"] as? Int ?? 0
+        NSApp.dockTile.badgeLabel = !problems.isEmpty ? "\(problems.count)" : downloading > 0 ? "↓\(downloading)" : nil
+
+        // Notified once each: a problem until it goes away, a title for good
+        let known = Set(defaults.stringArray(forKey: "notifiedProblems") ?? [])
+        let current = Set(problems.map { $0.key })
+        let latest = (status["latest"] as? [[String: Any]] ?? []).compactMap { item -> (id: String, title: String)? in
+            guard let id = item["id"] as? String, let title = item["title"] as? String else { return nil }
+            let detail = item["detail"] as? String ?? ""
+            return (id, detail.isEmpty ? title : "\(title) (\(detail))")
+        }
+        var seen = defaults.stringArray(forKey: "notifiedReady") ?? []
+        let firstRun = defaults.object(forKey: "notifiedReady") == nil
+        if !firstRun {   // the first time, what's there already isn't news
+            for p in problems where !known.contains(p.key) {
+                notify(p.level == "error" ? "Problem: \(p.text)" : "Needs a look: \(p.text)", p.action, open: services[0].url + "/#manage")
+            }
+            for item in latest where !seen.contains(item.id) {
+                notify("Ready to watch", item.title, open: watchURL(item.id))
+            }
+        }
+        seen = Array((latest.map { $0.id } + seen).prefix(200))
+        defaults.set(seen, forKey: "notifiedReady")
+        defaults.set(Array(current), forKey: "notifiedProblems")
+        polled = true
+    }
+
+    func watchURL(_ id: String) -> String {
+        let watch = services.first { $0.name == "Watch" }?.url ?? services[0].url
+        return watch + "?open=item/" + id
+    }
+
+    func notify(_ title: String, _ body: String, open: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.userInfo = ["open": open]
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
+    // Clicking a notification: the window, on the page it's about
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler done: @escaping () -> Void) {
+        if let open = response.notification.request.content.userInfo["open"] as? String, let url = URL(string: open) {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            show(service(for: url) ?? 0, url: url)
+        }
+        done()
+    }
+
+    // Shown even while the app is in front
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+        done([.banner, .sound])
     }
 
     // ─── Toolbar ─────────────────────────────────────────────────
