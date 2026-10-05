@@ -57,3 +57,10 @@ def record(state: Path, service: str, user: str, password: str) -> None:
     data = load(state)
     data["services"][service] = {"username": user, "password": password}
     c.write_json(path(state), data, mode=0o600)
+
+
+def forget(state: Path, service: str) -> None:
+    """<service> has no login now (set again, and recorded, if it needs one)"""
+    data = load(state)
+    if data["services"].pop(service, None) is not None:
+        c.write_json(path(state), data, mode=0o600)

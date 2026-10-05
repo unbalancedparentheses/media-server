@@ -18,6 +18,14 @@ def arr(url: str, user: str, password: str) -> bool:
     return 300 <= r.status < 400 and bool(location) and "loginFailed" not in location
 
 
+def opens_without_login(url: str) -> bool:
+    """The page itself, not a redirect to its login (Sonarr, Radarr,
+    Prowlarr, SABnzbd)"""
+    r = c.request(f"{url}/", follow=False)
+    location = (r.headers.get("Location") or r.headers.get("location") or "").lower()
+    return 200 <= r.status < 400 and "login" not in location
+
+
 def sabnzbd(url: str, user: str, password: str) -> bool:
     """SABnzbd's login form: 303 to the app when the login works"""
     return c.request(f"{url}/login/", "POST", form={"username": user, "password": password}, follow=False).status == 303

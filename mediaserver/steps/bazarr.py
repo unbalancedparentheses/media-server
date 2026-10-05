@@ -76,11 +76,13 @@ def language_profiles(existing: list, languages: list, want: str) -> list | None
                         "cutoff": cutoff, "items": items, "mustContain": [], "mustNotContain": [], "originalFormat": None}]
 
 
-def login_settings(current: dict, user: str, password: str) -> dict | None:
+def login_settings(current: dict, user: str, password: str, required: bool = True) -> dict | None:
     """Bazarr accepts only "form" or "basic" (anything else, like the
     "forms" an older version of this setup wrote, is reset to null = no
-    login) and stores the password as an MD5 hash. None when it's set."""
-    want = {"type": "form", "username": user, "password": hashlib.md5(password.encode()).hexdigest()}
+    login) and stores the password as an MD5 hash. Not required (it answers
+    on this Mac only): type null, the user and password kept for when it is
+    again. None when it's set."""
+    want = {"type": "form" if required else None, "username": user, "password": hashlib.md5(password.encode()).hexdigest()}
     auth = current.get("auth") or {}
     if all(auth.get(k) == v for k, v in want.items()):
         return None
@@ -172,14 +174,16 @@ def run(cfg: Config) -> None:
     # The login, in config.yaml; after the settings API (it would be overwritten)
     user, password = cfg.jellyfin_user, cfg.jellyfin_pass
     try:
-        updated = login_settings(read_yaml(path), user, password)
+        updated = login_settings(read_yaml(path), user, password, required=not cfg.admin_local_only)
         if updated is not None:
             write_yaml(path, updated)
             restart(cfg)
     except (OSError, ValueError, ImportError):
         warn("Could not set the Bazarr login")
         return
-    if logins.bazarr(url, user, password):
+    if cfg.admin_local_only:
+        ok("Bazarr: no login (it answers on this Mac only)")
+    elif logins.bazarr(url, user, password):
         if not creds.match(cfg.paths.state, "bazarr", user, password):
             creds.record(cfg.paths.state, "bazarr", user, password)
         ok(f"Bazarr login: {user}")

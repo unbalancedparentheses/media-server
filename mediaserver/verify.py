@@ -225,6 +225,8 @@ class Verifier:
     def authentication(self) -> None:
         info("Authentication...")
         user, pw = self.cfg.jellyfin_user, self.cfg.jellyfin_pass
+        # On this Mac only (network.admin_bind): the admin pages open without a login
+        local = self.cfg.admin_local_only
         # Log in with config.toml's password, not just check a username is set
         for name, url, key, ver in (("Sonarr", self.urls.sonarr, self.keys.sonarr, "v3"), ("Radarr", self.urls.radarr, self.keys.radarr, "v3"),
                                     ("Prowlarr", self.urls.prowlarr, self.keys.prowlarr, "v1")):
@@ -234,17 +236,27 @@ class Verifier:
             if not host:
                 self.t.skip(f"{name} → auth")
                 continue
+            if local:
+                self.t.check(f"{name} → opens without a login on this Mac",
+                             host.get("authenticationRequired") == "disabledForLocalAddresses" and logins.opens_without_login(url))
+                continue
             self.t.check(f"{name} → login required", host.get("authenticationMethod") == "forms" and host.get("authenticationRequired") == "enabled")
             self.t.check(f"{name} → config.toml login works", logins.arr(url, user, pw))
         if self.keys.sabnzbd:
-            self.t.check("SABnzbd → config.toml login works", logins.sabnzbd(self.urls.sabnzbd, user, pw))
+            if local:
+                self.t.check("SABnzbd → opens without a login on this Mac", logins.opens_without_login(self.urls.sabnzbd))
+            else:
+                self.t.check("SABnzbd → config.toml login works", logins.sabnzbd(self.urls.sabnzbd, user, pw))
         yaml = next((f for f in (self.paths.config / "bazarr/config/config/config.yaml", self.paths.config / "bazarr/config/config.yaml") if f.exists()), None)
         if yaml:
             auth = bazarr_auth_section(yaml.read_text())
             kind, name = auth.get("type", ""), auth.get("username", "")
             # type null means no login at all, even with a username set
-            self.t.check(f"Bazarr → login required ({kind})", bool(name) and name != "''" and kind in ("form", "basic"))
-            self.t.check("Bazarr → config.toml login works", logins.bazarr(self.urls.bazarr, user, pw))
+            if local:
+                self.t.check(f"Bazarr → opens without a login on this Mac ({kind or 'null'})", kind in ("", "null", "~"))
+            else:
+                self.t.check(f"Bazarr → login required ({kind})", bool(name) and name != "''" and kind in ("form", "basic"))
+                self.t.check("Bazarr → config.toml login works", logins.bazarr(self.urls.bazarr, user, pw))
             settings = c.try_json(f"{self.urls.bazarr}/api/system/settings", {"X-API-KEY": auth.get("apikey", "")}, {}) or {}
             providers = len(((settings.get("general") or {}).get("enabled_providers")) or [])
             self.t.check(f"Bazarr → subtitle providers enabled ({providers})", providers > 0)

@@ -11,22 +11,25 @@ from mediaserver.ui import ok, warn
 
 
 def set_login(cfg: Config, label: str, url: str, key: str, version: str, service: str) -> None:
-    """The web login (forms, required) as config.toml's Jellyfin login. The
-    API key allows setting it without the old password. Applied when the
-    record or the app's settings differ, then checked by logging in; only a
-    working login is recorded."""
+    """The web login (forms) as config.toml's Jellyfin login: required, or
+    not asked on this Mac when the admin pages answer only there
+    (network.admin_bind = "127.0.0.1"). The API key allows setting it
+    without the old password. Applied when the record or the app's settings
+    differ, then checked by logging in; only a working login is recorded."""
     h = {"X-Api-Key": key}
     user, password = cfg.jellyfin_user, cfg.jellyfin_pass
+    required = "disabledForLocalAddresses" if cfg.admin_local_only else "enabled"
+    how = " (not asked on this Mac)" if cfg.admin_local_only else ""
     try:
         host = api.get(f"{url}/api/{version}/config/host", h)
     except ApiError:
         warn(f"{label}: could not read its login settings")
         return
     if creds.match(cfg.paths.state, service, user, password) and host.get("username") == user \
-            and host.get("authenticationMethod") == "forms":
-        ok(f"{label} login: {user}")
+            and host.get("authenticationMethod") == "forms" and host.get("authenticationRequired") == required:
+        ok(f"{label} login: {user}{how}")
         return
-    body = dict(host, authenticationMethod="forms", authenticationRequired="enabled", username=user,
+    body = dict(host, authenticationMethod="forms", authenticationRequired=required, username=user,
                 password=password, passwordConfirmation=password)
     try:
         api.call("PUT", f"{url}/api/{version}/config/host/{host['id']}", h, body=body)
@@ -35,7 +38,7 @@ def set_login(cfg: Config, label: str, url: str, key: str, version: str, service
         return
     if logins.arr(url, user, password):
         creds.record(cfg.paths.state, service, user, password)
-        ok(f"{label} login set: {user}")
+        ok(f"{label} login set: {user}{how}")
     else:
         warn(f"{label}: the new login doesn't work yet (retried next run)")
 

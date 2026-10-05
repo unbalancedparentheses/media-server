@@ -105,7 +105,7 @@ def seed_arr(cfg: Config, name: str, port: int) -> None:
   <LaunchBrowser>False</LaunchBrowser>
   <UpdateMechanism>External</UpdateMechanism>
   <AuthenticationMethod>Forms</AuthenticationMethod>
-  <AuthenticationRequired>Enabled</AuthenticationRequired>
+  <AuthenticationRequired>{"DisabledForLocalAddresses" if cfg.admin_local_only else "Enabled"}</AuthenticationRequired>
 </Config>
 """, 0o600)
         ok(f"{name}: config.xml (port {port})")

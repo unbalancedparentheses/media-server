@@ -268,6 +268,16 @@ def sabnzbd_login(cfg: Config) -> None:
     if not key:
         return
     user, password, url = cfg.jellyfin_user, cfg.jellyfin_pass, cfg.urls.sabnzbd
+    if cfg.admin_local_only:
+        # It answers on this Mac only: no login (set again if that changes)
+        s = Sabnzbd(cfg, key)
+        if logins.opens_without_login(url) or (s.set("misc", "username", "") and s.set("misc", "password", "")
+                                                and logins.opens_without_login(url)):
+            creds.forget(cfg.paths.state, "sabnzbd")
+            ok("SABnzbd: no login (it answers on this Mac only)")
+        else:
+            warn(f"Could not turn off SABnzbd's login (retried next run; see {cfg.paths.logs}/sabnzbd.log)")
+        return
     if creds.match(cfg.paths.state, "sabnzbd", user, password) and logins.sabnzbd(url, user, password):
         ok(f"SABnzbd login: {user}")
         return

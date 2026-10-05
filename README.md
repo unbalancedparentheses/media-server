@@ -298,7 +298,7 @@ Setup re-applies these on every install. Intro Skipper is always on for the TV a
 
 | Setting | Default | What it does |
 |---|---|---|
-| `admin_bind` | `"0.0.0.0"` | Where the admin pages listen: `"0.0.0.0"` (every interface) or `"127.0.0.1"` (this Mac only). Moonfin and Seerr are always reachable; the dashboard only on this Mac. |
+| `admin_bind` | `"0.0.0.0"` | Where the admin pages listen: `"0.0.0.0"` (every interface) or `"127.0.0.1"` (this Mac only). With `"127.0.0.1"` they don't ask for a login (Sonarr, Radarr and Prowlarr skip it for this Mac, Bazarr and SABnzbd have none; qBittorrent never asks this Mac), since nothing else can reach them; back on `"0.0.0.0"`, setup sets the logins again. Moonfin and Seerr are always reachable, with their login; the dashboard only on this Mac. |
 | `dashboard_port` | `80` | The dashboard's port |
 | `tailscale_https` | `true` | If Tailscale is signed in, publish Moonfin and Seerr over HTTPS on your tailnet; `false` takes them down |
 

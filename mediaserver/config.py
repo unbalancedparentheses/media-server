@@ -161,6 +161,11 @@ class Config:
     @property
     def jellyfin_pass(self) -> str: return self.get("jellyfin.password", "")
     @property
+    def admin_local_only(self) -> bool:
+        """The admin pages answer on this Mac only (network.admin_bind): then
+        they don't ask for a login there"""
+        return self.get("network.admin_bind", "0.0.0.0") == "127.0.0.1"
+    @property
     def qbit_user(self) -> str: return self.get("qbittorrent.username", "")
     @property
     def qbit_pass(self) -> str: return self.get("qbittorrent.password", "")

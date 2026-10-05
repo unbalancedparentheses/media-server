@@ -31,7 +31,7 @@ class Request:
         return json.loads(self.raw) if self.raw else None
 
     def form(self) -> dict:
-        return {k: v[-1] for k, v in parse_qs(self.raw.decode()).items()}
+        return {k: v[-1] for k, v in parse_qs(self.raw.decode(), keep_blank_values=True).items()}
 
     def form_all(self) -> dict:
         return parse_qs(self.raw.decode())
@@ -775,7 +775,8 @@ class FakeSabnzbd(FakeService):
 
         @self.route("GET", "/")
         def index(req):
-            return 303, None, {"Location": "/sabnzbd/"}
+            # Its login page while it has a login, else the app
+            return (303, None, {"Location": "/login/"}) if self.misc.get("username") else (200, b"sabnzbd", {"Content-Type": "text/html"})
 
         @self.route("POST", "/login")
         def login(req):

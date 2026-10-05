@@ -218,6 +218,34 @@ class ChangedConfig(Stack):
         self.assertEqual(self.stack.sonarr.host["password"], "new-admin-pass")
         self.assertIn("Jellyfin password changed", out)
 
+    def test_admin_pages_on_this_mac_only_ask_no_login(self):
+        import yaml
+        def bind(address):
+            data = json.loads(json.dumps(self.cfg.data))
+            data.setdefault("network", {})["admin_bind"] = address
+            self.cfg = Config(data, self.cfg.paths)
+            return self.run_steps()
+
+        def bazarr_auth():
+            f = next(self.cfg.paths.config.glob("bazarr/**/config.yaml"))
+            return (yaml.safe_load(f.read_text()) or {}).get("auth") or {}
+        self.run_steps()
+        s = self.stack
+        self.assertEqual(s.sonarr.host["authenticationRequired"], "enabled")
+        out = bind("127.0.0.1")
+        for app in (s.sonarr, s.radarr, s.prowlarr):
+            self.assertEqual((app.host["authenticationRequired"], app.host["username"]), ("disabledForLocalAddresses", "admin"))
+        self.assertIn("login set: admin (not asked on this Mac)", out)
+        self.assertIsNone(bazarr_auth()["type"])
+        self.assertEqual(bazarr_auth()["username"], "admin")   # kept for when it's needed again
+        self.assertEqual(s.sabnzbd.misc["username"], "")
+        self.assertIn("SABnzbd: no login", out)
+        # Back on the network: the logins again
+        bind("0.0.0.0")
+        self.assertEqual(s.sonarr.host["authenticationRequired"], "enabled")
+        self.assertEqual(bazarr_auth()["type"], "form")
+        self.assertEqual(s.sabnzbd.misc["username"], "admin")
+
 
 if __name__ == "__main__":
     unittest.main()
