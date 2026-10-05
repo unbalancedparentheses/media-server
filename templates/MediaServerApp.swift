@@ -48,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         window.setFrameAutosaveName("MediaServerWindow")
         window.contentView = container
         window.isReleasedWhenClosed = false
+        // Dark like the pages (the dashboard's background), not a white toolbar over them
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = NSColor(red: 0x09 / 255.0, green: 0x09 / 255.0, blue: 0x0f / 255.0, alpha: 1)
 
         picker.segmentCount = services.count
         for (i, s) in services.enumerated() { picker.setLabel(s.name, forSegment: i) }
@@ -105,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         v.autoresizingMask = [.width, .height]
         v.allowsBackForwardNavigationGestures = true
         v.allowsMagnification = true
+        v.underPageBackgroundColor = window.backgroundColor   // no white flash while a page loads
         v.navigationDelegate = self
         v.uiDelegate = self
         if let url = URL(string: services[i].url) { v.load(URLRequest(url: url)) }
