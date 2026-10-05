@@ -12,7 +12,7 @@ from mediaserver.ui import warn
 
 # Names match flake.nix `services`
 SERVICE_NAMES = ["jellyfin", "sonarr", "radarr", "prowlarr", "bazarr", "qbittorrent", "sabnzbd", "unpackerr",
-                 "cleanuparr", "seerr", "byparr", "nginx", "diskwatch", "netwatch", "dashstatus", "postimport"]
+                 "cleanuparr", "seerr", "byparr", "nginx", "diskwatch", "netwatch", "dashstatus", "postimport", "awake"]
 LABEL_PREFIX = os.environ.get("MEDIA_LABEL_PREFIX", "org.media-server")
 
 

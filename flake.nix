@@ -258,6 +258,12 @@
                 DISK_MIN_GB = "@DISK_MIN_GB@";
               };
             };
+            # Keeps the Mac from sleeping while it's plugged in (-s holds only
+            # on AC power: on battery it sleeps as usual; the display still can)
+            awake.args = [
+              "/usr/bin/caffeinate"
+              "-s"
+            ];
             nginx.args = [
               (exe pkgs.nginx)
               "-p"
