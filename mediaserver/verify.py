@@ -445,7 +445,11 @@ class Verifier:
         from mediaserver.steps import macapp
         app = macapp.app_path()
         exe = app / "Contents/MacOS/media-server"
-        opens = exe.is_file() and bool(exe.stat().st_mode & 0o111) and f"URL='{self.urls.dashboard}'" in exe.read_text(errors="replace")
+        try:
+            first = json.loads((app / "Contents/Resources/services.json").read_text())[0]["url"]
+        except (OSError, ValueError, LookupError, TypeError):
+            first = ""
+        opens = exe.is_file() and bool(exe.stat().st_mode & 0o111) and first == self.urls.dashboard
         self.t.check(f"Mac app opens the dashboard ({app})", opens)
 
     def services(self) -> None:

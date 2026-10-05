@@ -69,7 +69,7 @@ You can run `nix run .#install` again at any time: it only changes what differs 
 2. **Request something.** Search for a movie or show in Moonfin (or in Seerr at `http://<mac-ip>:5055`) and press Request. It usually appears in the library within minutes to an hour, depending on how many people are sharing the release.
 3. **Install the apps.** Get **Moonfin** from the App Store, Google Play or Amazon on your TV, phone or tablet, enter `http://<mac-ip>:8096` as the server, and log in. LG and Samsung TVs can sideload Moonfin, or use Litefin.
 4. **Add your family.** In Jellyfin (`http://<mac-ip>:8096` → Dashboard → Users), create a user per person. Moonfin shows them as profiles, each with its own watch history. They can request too, and their requests download right away (`[requests] auto_approve`; set it to `false` to approve them yourself in Seerr). The playback defaults (subtitles on, Japanese audio for anime) are set for your user only; others choose theirs in the player.
-5. **Look around the dashboard**: open **Media Server** from the Dock (setup puts it there; it's in `~/Applications`), or `http://localhost` on the Mac (only there: it has no login and can delete titles). The app opens the dashboard in a window of its own, without tabs or an address bar (Brave, Chrome or Edge's app mode; with none of them, your default browser). On one page:
+5. **Look around the dashboard**: open **Media Server** from the Dock (setup puts it there; it's in `~/Applications`), or `http://localhost` on the Mac (only there: it has no login and can delete titles). The app has the dashboard, Moonfin, Seerr and every admin page in one window: switch from its toolbar or with Cmd+1…9; each keeps its place while you're on another, with Back/Forward (Cmd+[ and Cmd+]) and Reload (Cmd+R). Links to other sites open in your browser. (It's built on your Mac with Xcode's Command Line Tools; without them, `xcode-select --install`, it opens just the dashboard in a browser window.) On one page:
    - **Search** (press `/`): your library ("watch") and anything else to request, in one box.
    - **What needs attention**, with what to do, or "Everything is working"; an offline banner when the Mac has no connection.
    - **At a glance**: now playing, transfer speeds, library size, requests, missing items, missing subtitles, indexer health (with the last 24 hours of searches and grabs), CPU and memory, disk, Tailscale.
@@ -306,7 +306,7 @@ Setup re-applies these on every install. Intro Skipper is always on for the TV a
 
 | Setting | Default | What it does |
 |---|---|---|
-| `enabled` | `true` | `~/Applications/Media Server.app`: the dashboard in a window of its own. Setup writes it (built on this Mac, so it needs no signing); `false` removes it |
+| `enabled` | `true` | `~/Applications/Media Server.app`: the dashboard, Moonfin, Seerr and the admin pages in one window. Setup builds it on this Mac (so it needs no signing); `false` removes it |
 | `dock` | `true` | Put it in the Dock, once: if you take it out, setup leaves it out |
 
 There's no built-in VPN. If you use one, run its Mac app; torrent traffic follows the system connection.

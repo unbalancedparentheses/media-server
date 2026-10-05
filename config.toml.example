@@ -101,8 +101,9 @@ dashboard_port = 80
 tailscale_https = true
 
 # ─── Mac app ───────────────────────────────────────────────────
-# enabled: ~/Applications/Media Server.app opens the dashboard in a window
-#   of its own (Brave/Chrome/Edge app mode, else your default browser).
+# enabled: ~/Applications/Media Server.app: the dashboard, Moonfin, Seerr
+#   and the admin pages in one window (built with Xcode's Command Line
+#   Tools; without them it opens the dashboard in a browser window).
 # dock: put it in the Dock (once: if you take it out, it stays out).
 
 [app]

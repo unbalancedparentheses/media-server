@@ -6,6 +6,7 @@ Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
 from __future__ import annotations
 
+import json
 import plistlib
 import struct
 import subprocess
@@ -49,6 +50,7 @@ class MacApp(unittest.TestCase):
         self.enterContext(mock.patch("pathlib.Path.home", return_value=self.home))
         self.enterContext(mock.patch.object(macapp, "icns", return_value=b"icns"))
         self.enterContext(mock.patch.object(macapp, "LSREGISTER", "/nonexistent"))
+        self.compiler = self.enterContext(mock.patch.object(macapp, "swiftc", return_value=None))
         self.dock = FakeDock()
         self.enterContext(mock.patch.object(macapp.subprocess, "run", self.dock))
         self.app = self.home / "Applications/Media Server.app"
@@ -114,11 +116,54 @@ class MacApp(unittest.TestCase):
         quiet(macapp.remove, self.cfg)
         self.assertTrue(self.app.exists())
 
+    def test_native_app_with_every_page(self):
+        def compile_app(compiler, out):
+            out.write_bytes(b"\xcf\xfa\xed\xfe program")
+            return ""
+        self.compiler.return_value = ["swiftc"]
+        with mock.patch.object(macapp, "compile_app", side_effect=compile_app) as built:
+            out = self.setup()
+            self.assertIn("in one window", out)
+            info = plistlib.loads((self.app / "Contents/Info.plist").read_bytes())
+            self.assertFalse(info["LSUIElement"])   # a real app, with its Dock icon
+            pages = json.loads((self.app / "Contents/Resources/services.json").read_text())
+            self.assertEqual([p["name"] for p in pages][:3], ["Home", "Watch", "Requests"])
+            self.assertEqual(pages[0]["url"], "http://localhost")
+            self.assertEqual(pages[1]["url"], "http://localhost:8096/Moonfin/Web/")
+            self.assertEqual(len(pages), 9)
+            self.setup()   # unchanged: not rebuilt
+            self.assertEqual(built.call_count, 1)
+
+    def test_failed_build_falls_back_and_tries_again(self):
+        self.compiler.return_value = ["swiftc"]
+        with mock.patch.object(macapp, "compile_app", return_value="error: no SDK") as built:
+            out = self.setup()
+            self.assertIn("Couldn't build the native app (error: no SDK)", out)
+            self.assertIn("exec open", (self.app / "Contents/MacOS/media-server").read_text())   # the browser launcher
+            self.setup()
+            self.assertEqual(built.call_count, 2)
+
     def test_launcher_prefers_an_app_mode_browser(self):
         script = macapp.launcher("http://localhost")
         self.assertIn('exec open -na "$d/$b.app" --args --app="$URL"', script)
         self.assertTrue(script.rstrip().endswith('exec open "$URL"'))
         self.assertEqual(subprocess.run(["sh", "-n"], input=script, text=True, check=False).returncode, 0)
+
+
+class Compiler(unittest.TestCase):
+    def test_not_there(self):
+        with mock.patch.object(macapp.subprocess, "run", return_value=mock.Mock(returncode=2, stdout="")):
+            self.assertIsNone(macapp.swiftc())
+        with mock.patch.object(macapp.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="/nonexistent/dev\n")):
+            self.assertIsNone(macapp.swiftc())
+
+    @unittest.skipUnless(macapp.swiftc(), "Xcode or its Command Line Tools")
+    def test_the_app_source_compiles(self):
+        compiler = macapp.swiftc()
+        assert compiler
+        r = subprocess.run([*compiler, "-typecheck", str(macapp.SOURCE)], capture_output=True, text=True, env=macapp.apple_env(),
+                           check=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
 
 
 class Icon(unittest.TestCase):

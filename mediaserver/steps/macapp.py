@@ -1,10 +1,14 @@
-"""The dashboard as a Mac app: ~/Applications/Media Server.app opens it in a
-window of its own (a Chromium browser's app mode: Brave, Chrome, Edge…;
-else the default browser), and setup keeps it in the Dock.
+"""The Mac app: ~/Applications/Media Server.app, kept in the Dock.
 
-The app is a plain bundle setup writes (Info.plist, a shell script, an icon
-drawn here), built on this Mac, so macOS runs it without signing. It's
-rewritten only when what it would contain changes.
+With the Swift compiler (Xcode or its Command Line Tools), it's a native
+app (templates/MediaServerApp.swift): the dashboard, Moonfin, Seerr and the
+admin pages in one window, switched from its toolbar or with Cmd+1…9.
+Without it, the app opens the dashboard in a window of its own (a Chromium
+browser's app mode: Brave, Chrome, Edge…; else the default browser).
+
+It's built on this Mac (Info.plist, the program, an icon drawn here), so
+macOS runs it without signing, and rewritten only when what it would
+contain changes.
 
 The Dock: added once ([app] dock). If you take it out of the Dock, setup
 leaves it out (.state/app-in-dock records that it was added). Uninstall
@@ -12,6 +16,7 @@ removes the app and its Dock tile."""
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import plistlib
 import shutil
@@ -21,7 +26,7 @@ import tempfile
 import zlib
 from pathlib import Path
 
-from mediaserver.config import Config
+from mediaserver.config import Config, Urls
 from mediaserver.ui import info, ok, warn
 
 NAME = "Media Server"
@@ -30,6 +35,43 @@ ICON_VERSION = "1"
 LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 # Browsers with an app mode (--app=URL: a window without tabs or address bar), in order of preference
 BROWSERS = ("Brave Browser", "Google Chrome", "Microsoft Edge", "Chromium", "Vivaldi")
+
+
+SOURCE = Path(__file__).resolve().parents[2] / "templates/MediaServerApp.swift"
+
+
+def pages(urls: Urls) -> list[dict]:
+    """The app's toolbar, in order (Cmd+1…9)"""
+    return [{"name": "Home", "url": urls.dashboard}, {"name": "Watch", "url": f"{urls.jellyfin}/Moonfin/Web/"},
+            {"name": "Requests", "url": urls.seerr}, {"name": "Sonarr", "url": urls.sonarr},
+            {"name": "Radarr", "url": urls.radarr}, {"name": "Prowlarr", "url": urls.prowlarr},
+            {"name": "qBittorrent", "url": urls.qbittorrent}, {"name": "SABnzbd", "url": urls.sabnzbd},
+            {"name": "Bazarr", "url": urls.bazarr}]
+
+
+def apple_env() -> dict:
+    """Apple's own toolchain, not Nix's (whose shells set DEVELOPER_DIR and SDKROOT)"""
+    return {"HOME": str(Path.home()), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+
+
+def swiftc() -> list[str] | None:
+    """The Swift compiler, when Xcode or its Command Line Tools are there
+    (asked without xcrun's offer to install them)"""
+    r = subprocess.run(["/usr/bin/xcode-select", "-p"], capture_output=True, text=True, env=apple_env(), check=False)
+    dev = Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+    if not dev or not any((dev / p).exists() for p in ("usr/bin/swiftc", "Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc")):
+        return None
+    return ["/usr/bin/xcrun", "swiftc"]
+
+
+def compile_app(compiler: list[str], out: Path) -> str:
+    """"" when it built; else the compiler's complaint"""
+    try:
+        r = subprocess.run([*compiler, "-O", "-o", str(out), str(SOURCE)], capture_output=True, text=True, env=apple_env(),
+                           timeout=600, check=False)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return str(e)
+    return "" if r.returncode == 0 and out.is_file() else (r.stderr or r.stdout).strip()[-300:] or "failed"
 
 
 def app_path() -> Path:
@@ -50,13 +92,14 @@ exec open "$URL"
 """
 
 
-def info_plist() -> bytes:
+def info_plist(native: bool) -> bytes:
     return plistlib.dumps({
         "CFBundleName": NAME, "CFBundleDisplayName": NAME, "CFBundleIdentifier": BUNDLE_ID,
         "CFBundleExecutable": "media-server", "CFBundleIconFile": "icon", "CFBundlePackageType": "APPL",
         "CFBundleShortVersionString": "1.0", "CFBundleVersion": "1",
-        # It only hands the page to a browser: no Dock icon of its own while it does
-        "LSUIElement": True,
+        "NSHighResolutionCapable": True, "LSMinimumSystemVersion": "13.0",
+        # The launcher only hands the page to a browser: no Dock icon of its own while it does
+        "LSUIElement": not native,
     })
 
 
@@ -129,37 +172,49 @@ def icns(png: bytes) -> bytes | None:
 
 # ─── The app ─────────────────────────────────────────────────────
 
-def stamp(url: str) -> str:
+def stamp(services: list[dict], native: bool) -> str:
     """What the app contains, to tell when it needs rewriting"""
-    return hashlib.sha256((launcher(url) + info_plist().decode() + ICON_VERSION).encode()).hexdigest()
+    what = json.dumps(services) + info_plist(native).decode() + ICON_VERSION
+    what += SOURCE.read_text() if native else launcher(services[0]["url"])
+    return hashlib.sha256(what.encode()).hexdigest()
 
 
-def build(url: str, app: Path | None = None) -> bool:
-    """Writes the app if it's missing or different; True when it was written"""
+def build(services: list[dict], app: Path | None = None) -> str:
+    """Writes the app if it's missing or different: "native", "launcher"
+    (the browser fallback) or "" when it was already right"""
     app = app or app_path()
+    compiler = swiftc()
     marker = app / "Contents/Resources/setup-stamp"
-    want = stamp(url)
-    if marker.is_file() and marker.read_text().strip() == want:
-        return False
+    if marker.is_file() and marker.read_text().strip() == stamp(services, bool(compiler)):
+        return ""
     app.parent.mkdir(parents=True, exist_ok=True)
     new = app.with_name(f".{app.name}.new")
     shutil.rmtree(new, ignore_errors=True)
     (new / "Contents/MacOS").mkdir(parents=True)
     (new / "Contents/Resources").mkdir()
-    (new / "Contents/Info.plist").write_bytes(info_plist())
     exe = new / "Contents/MacOS/media-server"
-    exe.write_text(launcher(url))
+    native = bool(compiler)
+    if compiler:
+        trouble = compile_app(compiler, exe)
+        if trouble:
+            warn(f"Couldn't build the native app ({trouble.splitlines()[-1]}); it opens the dashboard in your browser instead")
+            native = False
+    if not native:
+        exe.write_text(launcher(services[0]["url"]))
     exe.chmod(0o755)
+    (new / "Contents/Info.plist").write_bytes(info_plist(native))
+    (new / "Contents/Resources/services.json").write_text(json.dumps(services, indent=1) + "\n")
     icon = icns(icon_png())
     if icon:
         (new / "Contents/Resources/icon.icns").write_bytes(icon)
-    (new / "Contents/Resources/setup-stamp").write_text(want + "\n")
+    # A fallback isn't recorded as done: the next run tries the native app again
+    (new / "Contents/Resources/setup-stamp").write_text((stamp(services, native) if native == bool(compiler) else "retry") + "\n")
     shutil.rmtree(app, ignore_errors=True)
     new.rename(app)
     # So Finder and the Dock show the new icon
     if Path(LSREGISTER).exists():
         subprocess.run([LSREGISTER, "-f", str(app)], capture_output=True, check=False)
-    return True
+    return "native" if native else "launcher"
 
 
 # ─── The Dock ────────────────────────────────────────────────────
@@ -227,8 +282,12 @@ def run(cfg: Config) -> None:
     if cfg.get("app.enabled", True) is not True:
         remove(cfg)
         return
-    if build(cfg.urls.dashboard, app):
-        ok(f"{NAME} app written ({app})")
+    built = build(pages(cfg.urls), app)
+    if built == "native":
+        ok(f"{NAME} app built: the dashboard, Moonfin, Seerr and the admin pages in one window ({app})")
+    elif built == "launcher":
+        ok(f"{NAME} app written: opens the dashboard in a window of its own ({app}; install Xcode's "
+           "Command Line Tools with 'xcode-select --install' for the app with every page in it)")
     else:
         ok(f"{NAME} app ({app})")
     marker = cfg.paths.state / "app-in-dock"

@@ -489,16 +489,6 @@
     window.addEventListener('hashchange',function(){applyView();window.scrollTo(0,0);});
     // The title goes Home (and to the top when already there)
     document.querySelector('.home-link').addEventListener('click',function(){if(currentView()==='home')window.scrollTo({top:0,behavior:'smooth'});});
-    // Links that leave the dashboard (Jellyfin, Seerr, the admin pages) open
-    // in a tab of their own: in the Media Server app, which has no address
-    // bar or back button, the dashboard stays where it is
-    document.addEventListener('click',function(e){
-      var a=e.target.closest('a[href]');
-      if(!a||a.target)return;
-      var u;try{u=new URL(a.href,location.href);}catch(_){return;}
-      if(u.protocol.indexOf('http')!==0)return;
-      if(u.origin!==location.origin||u.pathname!==location.pathname){a.target='_blank';a.rel='noopener';}
-    },true);
 
     // ── Speed limits: qBittorrent's alternative limits and SABnzbd's limit,
     // through /api/control/speed ──
