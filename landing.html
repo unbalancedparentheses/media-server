@@ -562,8 +562,8 @@
     // ── Manage → Library: everything with its size, biggest first, each
     // with a Delete button (the same dialog) ──
     function renderLibrary(){
-      if(!lastStatus||!lastStatus.library)return;
-      var q=(document.getElementById('library-filter').value||'').trim().toLowerCase(),all=lastStatus.library;
+      if(!lastStatus||!lastStatus.library_titles)return;
+      var q=(document.getElementById('library-filter').value||'').trim().toLowerCase(),all=lastStatus.library_titles;
       var rows=all.filter(function(x){return!q||(x.title||'').toLowerCase().indexOf(q)>=0;});
       var total=all.reduce(function(t,x){return t+(x.size||0);},0);
       document.getElementById('library-sub').innerHTML='<span>'+plural(all.length,'title')+' · '+gb(total)+'</span>';

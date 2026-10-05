@@ -135,6 +135,11 @@ class DashboardTests(Library):
         self.assertEqual(status["indexer_stats"], {"queries": 10, "grabs": 2, "failed": 1})
         self.assertEqual(status["downloads"]["stalled"], 1)
         self.assertIn("requests_live", status)
+        # The live part and the media part don't overwrite each other's keys
+        # (the library's counts and its list of titles once shared "library")
+        self.assertEqual(set(col.slow_data()) & set(dashmedia.MEDIA_PARTS), set())
+        self.assertIsInstance(status["library"], dict)
+        self.assertIsInstance(status["library_titles"], list)
 
 
 class FullChecks(Library):

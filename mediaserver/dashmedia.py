@@ -848,7 +848,7 @@ def health():
     return out
 
 
-MEDIA_PARTS = ("continue", "tonight", "because", "latest", "requests_live", "upcoming", "health", "recommended", "library", "abandoned")
+MEDIA_PARTS = ("continue", "tonight", "because", "latest", "requests_live", "upcoming", "health", "recommended", "library_titles", "abandoned")
 
 
 def carry_over(previous: dict | None, new: dict) -> dict:
@@ -870,7 +870,7 @@ def carry_over(previous: dict | None, new: dict) -> dict:
 def collect() -> dict:
     result, failed = {}, []
     for name, part in (("continue", continue_watching), ("tonight", tonight), ("because", because), ("latest", latest), ("requests_live", requests),
-                       ("upcoming", upcoming), ("health", health), ("recommended", recommended), ("library", library_sizes),
+                       ("upcoming", upcoming), ("health", health), ("recommended", recommended), ("library_titles", library_sizes),
                        ("abandoned", abandoned)):
         try:
             result[name] = part()
