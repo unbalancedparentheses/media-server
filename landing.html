@@ -375,11 +375,8 @@
     </div>
   </div>
 
-  <script src="/settings.js"></script>
   <script>
     var h=location.hostname,secure=location.protocol==='https:';
-    // settings.js (written by setup) says whether the admin UIs listen on this Mac only
-    var adminOffHere=!!(window.MEDIA_SETTINGS&&window.MEDIA_SETTINGS.adminLocalOnly)&&!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(h);
     // Over HTTPS (Tailscale), Jellyfin and Seerr are published on HTTPS too
     var jfBase=(secure?'https://':'http://')+h+':8096';
     var seerrBase=(secure?'https://':'http://')+h+':5055';
@@ -390,10 +387,10 @@
     var ADMIN_PORTS={radarr:7878,sonarr:8989,bazarr:6767,prowlarr:9696,qbittorrent:8081};
     // "radarr:/movie/x" → the admin UI's URL, or null when it can't be opened from here
     function adminUrl(ref){
-      if(!ref||adminOffHere)return null;
+      if(!ref)return null;
       var i=ref.indexOf(':');return 'http://'+h+':'+ADMIN_PORTS[ref.slice(0,i)]+ref.slice(i+1);
     }
-    function admin(port,path){return adminOffHere?null:'http://'+h+':'+port+(path||'');}
+    function admin(port,path){return'http://'+h+':'+port+(path||'');}
     // Moonfin drops the route it starts with; its start page (patched by
     // setup) opens ?open=<route> once Moonfin is up
     function watchUrl(id){return id?moonfin+'?open=item/'+id:moonfin;}

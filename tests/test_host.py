@@ -127,7 +127,7 @@ class ConfigFiles(Base):
         self.assertIn("if ($dashboard_proxied) {\n            return 403;", conf)   # nor relayed by a proxy
         self.assertNotIn("allow 192.168", (self.cfg.paths.config / "nginx/api-proxy.conf").read_text())
         www = self.cfg.paths.config / "nginx/www"
-        self.assertEqual((www / "settings.js").read_text(), 'window.MEDIA_SETTINGS={"adminLocalOnly":false};\n')
+        self.assertFalse((www / "settings.js").exists())
         self.assertEqual((www / "index.html").read_text(), (host.REPO / "landing.html").read_text())
         self.assertTrue((self.cfg.paths.config / "nginx/api-proxy.conf").exists())
         # A first install has nothing to restart
@@ -136,7 +136,6 @@ class ConfigFiles(Base):
         self.with_config(dashboard_port=8088, admin_bind="127.0.0.1")
         quiet(host.service_configs, self.cfg)
         self.assertIn("listen 8088 default_server;", (self.cfg.paths.config / "nginx/nginx.conf").read_text())
-        self.assertEqual((www / "settings.js").read_text(), 'window.MEDIA_SETTINGS={"adminLocalOnly":true};\n')
         self.assertEqual(self.changed(), ["nginx", "prowlarr", "radarr", "sonarr"])
 
     def test_render_escapes_for_nginx_strings(self):

@@ -12,6 +12,7 @@
 // Written by setup (mediaserver/steps/macapp.py), compiled on this Mac;
 // the services and their addresses come from services.json beside it.
 import AppKit
+import ServiceManagement
 import UserNotifications
 import WebKit
 
@@ -30,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
     let container = NSView()
     let back = NSButton()
     let forward = NSButton()
+    let finder = NSSearchField()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if let file = Bundle.main.url(forResource: "services", withExtension: "json"),
@@ -65,6 +67,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
             button.target = self
             button.action = action
         }
+
+        finder.placeholderString = "Find on page"
+        finder.sendsWholeSearchString = true
+        finder.target = self
+        finder.action = #selector(find(_:))
+        finder.widthAnchor.constraint(equalToConstant: 180).isActive = true
 
         let toolbar = NSToolbar(identifier: "main")
         toolbar.delegate = self
@@ -111,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         v.underPageBackgroundColor = window.backgroundColor   // no white flash while a page loads
         v.navigationDelegate = self
         v.uiDelegate = self
+        v.pageZoom = zoom(i)
         if let url = URL(string: services[i].url) { v.load(URLRequest(url: url)) }
         container.addSubview(v)
         views[i] = v
@@ -332,11 +341,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
     // ─── Toolbar ─────────────────────────────────────────────────
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.navigation, .services, .reload, .flexibleSpace]
+        [.navigation, .services, .reload, .find, .flexibleSpace]
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.navigation, .flexibleSpace, .services, .flexibleSpace, .reload]
+        [.navigation, .flexibleSpace, .services, .flexibleSpace, .find, .reload]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier,
@@ -351,6 +360,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
             stack.spacing = 2
             item.view = stack
             item.label = "Back/Forward"
+        case .find:
+            item.view = finder
+            item.label = "Find"
         case .reload:
             let button = NSButton(image: NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Reload")!,
                                   target: self, action: #selector(reload(_:)))
@@ -371,6 +383,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
     @objc func goBack(_ sender: Any?) { views[current]?.goBack() }
     @objc func goForward(_ sender: Any?) { views[current]?.goForward() }
     @objc func reload(_ sender: Any?) { views[current]?.reload() }
+    // ─── Zoom (remembered per page) and Find ─────────────────────
+
+    func zoom(_ i: Int) -> CGFloat {
+        let z = defaults.double(forKey: "zoom." + services[i].name)
+        return z > 0 ? CGFloat(z) : 1
+    }
+
+    func setZoom(_ z: CGFloat) {
+        guard let v = views[current] else { return }
+        let clamped = min(max(z, 0.5), 3)
+        v.pageZoom = clamped
+        defaults.set(Double(clamped), forKey: "zoom." + services[current].name)
+    }
+
+    @objc func zoomIn(_ sender: Any?) { setZoom((views[current]?.pageZoom ?? 1) + 0.1) }
+    @objc func zoomOut(_ sender: Any?) { setZoom((views[current]?.pageZoom ?? 1) - 0.1) }
+    @objc func actualSize(_ sender: Any?) { setZoom(1) }
+
+    @objc func showFind(_ sender: Any?) { window.makeFirstResponder(finder) }
+    @objc func find(_ sender: Any?) { findNext(backwards: NSEvent.modifierFlags.contains(.shift)) }
+    @objc func findNextItem(_ sender: Any?) { findNext(backwards: false) }
+    @objc func findPreviousItem(_ sender: Any?) { findNext(backwards: true) }
+
+    func findNext(backwards: Bool) {
+        let text = finder.stringValue
+        guard !text.isEmpty, let v = views[current] else { return }
+        let config = WKFindConfiguration()
+        config.backwards = backwards
+        config.wraps = true
+        v.find(text, configuration: config) { [weak self] result in
+            if !result.matchFound { self?.finder.textColor = .systemRed } else { self?.finder.textColor = .labelColor }
+        }
+    }
+
+    // ─── Open at Login (so the badge and notifications keep going) ──
+
+    @objc func toggleLogin(_ sender: NSMenuItem) {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled { try service.unregister() } else { try service.register() }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't change Open at Login"
+            alert.informativeText = "\(error.localizedDescription)\n\nYou can add Media Server in System Settings → General → Login Items."
+            alert.beginSheetModal(for: window)
+        }
+        if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleLogin(_:)) {
+            item.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        }
+        return true
+    }
+
     @objc func goHome(_ sender: Any?) {
         // The page's own start (the dashboard's Home, Sonarr's series list…)
         if let url = URL(string: services[current].url) { views[current]?.load(URLRequest(url: url)) }
@@ -395,6 +463,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         add("Media Server", [
             item("About Media Server", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
             .separator(),
+            item("Open at Login", #selector(toggleLogin(_:)), "", target: self),
+            .separator(),
             item("Hide Media Server", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
             .separator(),
@@ -408,6 +478,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
             item("Copy", #selector(NSText.copy(_:)), "c"),
             item("Paste", #selector(NSText.paste(_:)), "v"),
             item("Select All", #selector(NSText.selectAll(_:)), "a"),
+            .separator(),
+            item("Find…", #selector(showFind(_:)), "f", target: self),
+            item("Find Next", #selector(findNextItem(_:)), "g", target: self),
+            item("Find Previous", #selector(findPreviousItem(_:)), "g", [.command, .shift], target: self),
         ])
         var go = [
             item("Back", #selector(goBack(_:)), "[", target: self),
@@ -423,6 +497,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         }
         add("Go", go)
         add("View", [
+            item("Actual Size", #selector(actualSize(_:)), "0", target: self),
+            item("Zoom In", #selector(zoomIn(_:)), "=", target: self),
+            item("Zoom Out", #selector(zoomOut(_:)), "-", target: self),
+            .separator(),
             item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
         ])
         add("Window", [
@@ -437,6 +515,7 @@ extension NSToolbarItem.Identifier {
     static let services = NSToolbarItem.Identifier("services")
     static let navigation = NSToolbarItem.Identifier("navigation")
     static let reload = NSToolbarItem.Identifier("reload")
+    static let find = NSToolbarItem.Identifier("find")
 }
 
 let app = NSApplication.shared

@@ -147,12 +147,13 @@ def nginx(cfg: Config, mime_types: str) -> None:
     proxy = cfg.paths.config / "nginx/api-proxy.conf"
     if not proxy.exists():
         proxy.touch()
-    # classic.html: the homepage before the Home/Manage split, kept until
-    # the new one has been checked on desktop and phone
-    for page, target in (("landing.html", "index.html"), ("admin.html", "admin.html"), ("landing-classic.html", "classic.html")):
+    for page, target in (("landing.html", "index.html"), ("admin.html", "admin.html")):
         c.write_atomic(www / target, (REPO / page).read_text(), 0o644)
-    settings = {"adminLocalOnly": admin_bind(cfg) == "127.0.0.1"}
-    c.write_atomic(www / "settings.js", f"window.MEDIA_SETTINGS={json.dumps(settings, separators=(',', ':'))};\n", 0o644)
+    # Left by earlier versions: the homepage before Home/Manage, and the
+    # setting for admin pages seen from another device (the dashboard is
+    # this Mac's only now)
+    for old in ("classic.html", "settings.js"):
+        (www / old).unlink(missing_ok=True)
 
 
 def service_configs(cfg: Config) -> None:
