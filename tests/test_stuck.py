@@ -228,6 +228,13 @@ class Recovery(unittest.TestCase):
         self.assertNotIn("diagnosis", self.state["items"]["radarr:1"])
         self.assertTrue(any("next look in 24 h" in line or "next look in 12 h" in line for line in self.logs))
 
+    def test_an_old_season_added_lately_is_missing_since_it_was_added(self):
+        for e in self.episodes:
+            e["airDateUtc"] = "2011-10-01T00:00:00Z"
+            e["series"] = dict(e.get("series") or {}, added="2026-09-27T00:00:00Z")   # requested last week
+        missing = stuck.Stuck([self.sonarr, self.radarr], self.settings, self.state, now=stuck.timestamp("2026-10-05T00:00:00Z")).missing()
+        self.assertEqual(missing["sonarr:9:1"]["added"], stuck.timestamp("2026-09-27T00:00:00Z"))
+
     def test_missing_since_it_was_added_not_since_first_seen(self):
         self.movies[0]["added"] = "1970-01-01T00:00:00Z"   # long ago
         self.releases["release?movieId=1"] = [release()]

@@ -240,9 +240,14 @@ class Stuck:
                                             "query": f"release?seriesId={sid}&seasonNumber={season}",
                                             "search": {"name": "SeasonSearch", "seriesId": sid, "seasonNumber": season}})
                 item["episodes"] += 1
+                # Missing since it aired, or since the series was added if
+                # that's later (a 2011 season requested last week has been
+                # missing a week, not since 2011)
                 aired = timestamp(e.get("airDateUtc"))
-                if aired and (item.get("added") is None or aired < item["added"]):
-                    item["added"] = aired
+                added = timestamp((e.get("series") or {}).get("added"))
+                since = max(t for t in (aired, added) if t is not None) if aired or added else None
+                if since and (item.get("added") is None or since < item["added"]):
+                    item["added"] = since
         return out
 
     def indexers_down(self, app) -> bool:
@@ -280,6 +285,8 @@ class Stuck:
             added = m.get("added")
             since = min(self.now, added if added is not None else self.now)
             item = items.setdefault(key, {"since": since, "searches": 0, "next_search": self.now})
+            if added is not None:
+                item["since"] = since   # follows the data (an earlier version counted from the air date)
             item.update(title=m["title"], app=m["app"], **{k: m[k] for k in ("movie", "series", "season", "episodes") if k in m})
         self.search(missing)
         self.diagnose(missing)
