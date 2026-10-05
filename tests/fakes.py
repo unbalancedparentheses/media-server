@@ -189,6 +189,8 @@ class FakeArr(FakeService):
         self.version = "v1" if name == "Prowlarr" else "v3"
         v = f"/api/{self.version}"
         self.host = {"id": 1, "username": "", "password": "", "authenticationMethod": "none", "authenticationRequired": "disabledForLocalAddresses"}
+        if name != "Sonarr":   # newer versions (Radarr, Prowlarr here) have it
+            self.host["allowedHosts"] = ""
         self.naming = {"id": 1, "renameEpisodes": False, "renameMovies": False}
         self.mediamanagement = {"id": 1, "minimumFreeSpaceWhenImporting": 100}
         self.commands: list[dict] = []
@@ -308,7 +310,11 @@ class FakeArr(FakeService):
 
         @self.route("PUT", path + r"/(\d+)")
         def write_id(req, _id):
-            setattr(self, attr, dict(req.json() or {}, id=1))
+            new = req.json() or {}
+            # Newer *arr versions: no login without the host names it answers to
+            if attr == "host" and "allowedHosts" in new and new.get("authenticationRequired") != "enabled" and not new["allowedHosts"]:
+                return 400, [{"propertyName": "AllowedHosts", "errorMessage": "Allowed Hosts is required"}]
+            setattr(self, attr, dict(new, id=1))
             return 202, getattr(self, attr)
 
         @self.route("PUT", path)

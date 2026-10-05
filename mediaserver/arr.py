@@ -10,6 +10,9 @@ from mediaserver.config import Config
 from mediaserver.ui import ok, warn
 
 
+ALLOWED_HOSTS = "localhost,127.0.0.1"
+
+
 def set_login(cfg: Config, label: str, url: str, key: str, version: str, service: str) -> None:
     """The web login (forms) as config.toml's Jellyfin login: required, or
     not asked on this Mac when the admin pages answer only there
@@ -20,17 +23,21 @@ def set_login(cfg: Config, label: str, url: str, key: str, version: str, service
     user, password = cfg.jellyfin_user, cfg.jellyfin_pass
     required = "disabledForLocalAddresses" if cfg.admin_local_only else "enabled"
     how = " (not asked on this Mac)" if cfg.admin_local_only else ""
+    # Newer versions want the host names they answer to when the login can
+    # be skipped (which also refuses a page that renamed itself localhost)
+    hosts = {"allowedHosts": ALLOWED_HOSTS} if cfg.admin_local_only else {}
     try:
         host = api.get(f"{url}/api/{version}/config/host", h)
     except ApiError:
         warn(f"{label}: could not read its login settings")
         return
     if creds.match(cfg.paths.state, service, user, password) and host.get("username") == user \
-            and host.get("authenticationMethod") == "forms" and host.get("authenticationRequired") == required:
+            and host.get("authenticationMethod") == "forms" and host.get("authenticationRequired") == required \
+            and all(host.get(k) == v for k, v in hosts.items() if k in host):
         ok(f"{label} login: {user}{how}")
         return
     body = dict(host, authenticationMethod="forms", authenticationRequired=required, username=user,
-                password=password, passwordConfirmation=password)
+                password=password, passwordConfirmation=password, **{k: v for k, v in hosts.items() if k in host})
     try:
         api.call("PUT", f"{url}/api/{version}/config/host/{host['id']}", h, body=body)
     except ApiError:

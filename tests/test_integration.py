@@ -236,6 +236,8 @@ class ChangedConfig(Stack):
         for app in (s.sonarr, s.radarr, s.prowlarr):
             self.assertEqual((app.host["authenticationRequired"], app.host["username"]), ("disabledForLocalAddresses", "admin"))
         self.assertIn("login set: admin (not asked on this Mac)", out)
+        self.assertEqual(s.radarr.host["allowedHosts"], "localhost,127.0.0.1")
+        self.assertNotIn("allowedHosts", s.sonarr.host)   # an older version without it
         self.assertIsNone(bazarr_auth()["type"])
         self.assertEqual(bazarr_auth()["username"], "admin")   # kept for when it's needed again
         self.assertEqual(s.sabnzbd.misc["username"], "")
