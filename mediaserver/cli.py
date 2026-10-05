@@ -298,8 +298,8 @@ def summary(cfg: Config, hostname: str, took: float, times: list[tuple[float, st
               "    Request → library → subtitles:  nix run .#e2e", "",
               f"  Setup took {int(took)}s; slowest: {slowest}", "",
               "  Manage: nix run .#status | .#logs -- <service> | .#restart | .#uninstall",
-              "  Keep the Mac awake while serving: System Settings → Energy → Prevent",
-              "  automatic sleeping when the display is off.", ""]
+              "  While it's plugged in, the Mac stays awake to serve (the awake service);",
+              "  closing the lid still sleeps it unless an external display is connected.", ""]
     print("\n".join(lines))
 
 

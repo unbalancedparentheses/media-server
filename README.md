@@ -57,7 +57,7 @@ It needs [Nix](https://determinate.systems/nix-installer/) first (see [Install](
 
    If the macOS firewall asks whether a service may accept connections, allow at least Jellyfin and Seerr.
 
-5. **Keep the Mac awake:** System Settings → Energy → turn on "Prevent automatic sleeping when the display is off".
+5. **Keep it plugged in:** while it is, the Mac doesn't sleep (the awake service), so downloads and playback keep going; on battery it sleeps as usual. Closing the lid still sleeps it unless an external display is connected.
 
 You can run `nix run .#install` again at any time: it only changes what differs from `config.toml`.
 
