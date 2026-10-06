@@ -20,6 +20,7 @@ from mediaserver.config import Config
 MIN_LENGTH = 8
 # The control endpoints' reads (POSTs change things: not asked)
 CONTROL = ("/api/control/speed", "/api/control/pause", "/api/control/delete?item=0")
+POST_ONLY = ("/api/control/replace",)   # nothing to read there
 
 
 @dataclass
@@ -51,7 +52,7 @@ def served(cfg: Config) -> list[str]:
     www = cfg.paths.config / "nginx/www"
     files = sorted("/" + f.relative_to(www).as_posix() for f in www.rglob("*") if f.is_file()) if www.is_dir() else []
     proxy = c.read_text(cfg.paths.config / "nginx/api-proxy.conf")
-    apis = sorted(set(re.findall(r"^location\s*=\s*(/api/\S+)\s*\{", proxy, re.M)) - {p.split("?")[0] for p in CONTROL})
+    apis = sorted(set(re.findall(r"^location\s*=\s*(/api/\S+)\s*\{", proxy, re.M)) - {p.split("?")[0] for p in CONTROL} - set(POST_ONLY))
     apis = [a + ("?mode=queue&output=json" if a.endswith("/sabnzbd/") else "") for a in apis]
     return ["/", *files, *apis, *CONTROL]
 

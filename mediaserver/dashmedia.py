@@ -845,6 +845,8 @@ def health():
         elif any(e.get("status") == "error" for e in seasons):
             d["status"] = "Couldn't look for a Japanese release last time (Sonarr or the indexers didn't answer); trying again later"
     out["dubs"] = sorted(dubs.values(), key=lambda d: d["title"])
+    # Library files a night-time re-check found damaged (Replace on the page)
+    out["damaged"] = [{"title": d.get("title"), "problem": d.get("problem"), "path": d.get("path")} for d in status.get("damaged") or []]
     return out
 
 

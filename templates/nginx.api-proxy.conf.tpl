@@ -96,3 +96,17 @@ location = /api/control/pause {
     set $upstream_pause http://127.0.0.1:8099/pause;
     proxy_pass $upstream_pause;
 }
+
+# Replacing a file the night-time re-check found damaged (only those).
+# Same guards.
+location = /api/control/replace {
+    limit_except POST { deny all; }
+    allow 127.0.0.1;
+    allow ::1;
+    deny all;
+    limit_req zone=api burst=5 nodelay;
+    client_max_body_size 4k;
+    set $upstream_replace http://127.0.0.1:8099/replace;
+    proxy_pass $upstream_replace;
+    proxy_read_timeout 60s;
+}

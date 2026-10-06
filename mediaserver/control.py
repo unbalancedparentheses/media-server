@@ -336,6 +336,42 @@ class Library:
         elif name == "refresh":
             c.request(f"{local('jellyfin')}/Library/Refresh", "POST", c.jellyfin_auth(self.state), body=b"", timeout=20)
 
+    # ─── Replacing a damaged file ────────────────────────────────
+
+    def damaged(self) -> dict:
+        """path → details, for the files postimport's re-check found damaged
+        (only those can be replaced from the dashboard)"""
+        status = c.read_json(self.state / "postimport/status.json", {}) or {}
+        return {d.get("path"): d for d in status.get("damaged") or [] if d.get("path")}
+
+    def replace(self, path: str) -> dict:
+        """The file deleted through Radarr/Sonarr (so they know it's gone)
+        and a search for a new copy; LookupError when it isn't one they have"""
+        if path not in self.damaged():
+            raise LookupError("only a file the re-check found damaged can be replaced here")
+        for m in self.arr("radarr", "GET", "movie") or []:
+            f = m.get("movieFile") or {}
+            if f.get("path") == path:
+                self.arr("radarr", "DELETE", f"moviefile/{f['id']}")
+                self.arr("radarr", "POST", "command", {"name": "MoviesSearch", "movieIds": [m["id"]]})
+                c.log(f"replacing from the dashboard (damaged): {path}")
+                return {"replacing": f"{m.get('title')} ({m.get('year')})"}
+        for series in self.arr("sonarr", "GET", "series") or []:
+            folder = (series.get("path") or "").rstrip("/") + "/"
+            if not path.startswith(folder):
+                continue
+            files = [f for f in self.arr("sonarr", "GET", f"episodefile?seriesId={series['id']}") or [] if f.get("path") == path]
+            if not files:
+                continue
+            episodes = [e["id"] for e in self.arr("sonarr", "GET", f"episode?seriesId={series['id']}") or []
+                        if e.get("episodeFileId") == files[0]["id"]]
+            self.arr("sonarr", "DELETE", f"episodefile/{files[0]['id']}")
+            if episodes:
+                self.arr("sonarr", "POST", "command", {"name": "EpisodeSearch", "episodeIds": episodes})
+            c.log(f"replacing from the dashboard (damaged): {path}")
+            return {"replacing": f"{series.get('title')} ({len(episodes)} episode{'s' if len(episodes) != 1 else ''})"}
+        raise LookupError("neither Radarr nor Sonarr has this file")
+
     def pending(self, item_id: str) -> dict | None:
         return self.plans().get(item_id)
 
@@ -489,7 +525,7 @@ def handler(speed: Speed, library: Library | None = None):
             return None
 
         def do_POST(self):
-            if self.path not in ("/speed", "/delete", "/pause"):
+            if self.path not in ("/speed", "/delete", "/pause", "/replace"):
                 return self.answer(404, {"error": "not found"})
             if not from_this_mac(self.headers):
                 return self.answer(403, {"error": "only on the Mac running the server"})
@@ -500,6 +536,8 @@ def handler(speed: Speed, library: Library | None = None):
             body = self.rfile.read(min(length, 10_000))
             if self.path == "/delete":
                 return self.delete(body)
+            if self.path == "/replace":
+                return self.replace(body)
             if self.path == "/pause":
                 from mediaserver import pause
                 parsed_pause = parse_pause(body)
@@ -513,6 +551,30 @@ def handler(speed: Speed, library: Library | None = None):
             result = speed.set(*parsed)
             self.answer(502 if "error" in result else 200, result)
             return None
+
+        def replace(self, body: bytes) -> None:
+            try:
+                data = json.loads(body or b"{}")
+            except ValueError:
+                return self.answer(400, {"error": "not JSON"})
+            path = data.get("path") if isinstance(data, dict) else None
+            if not isinstance(path, str) or not path.startswith("/"):
+                return self.answer(400, {"error": '"path" must be a file path'})
+            from mediaserver import lock
+            from mediaserver.ui import SetupError
+            with LOCK:
+                try:
+                    lock.acquire(lib.state, wait_workers=0)
+                except SetupError:
+                    return self.answer(409, {"error": "Busy (an install or the checks); try again in a minute"})
+                try:
+                    return self.answer(200, lib.replace(path))
+                except LookupError as e:
+                    return self.answer(404, {"error": f"Can't replace it here: {e}"})
+                except (ApiError, *c.HTTP_ERRORS) as e:
+                    return self.answer(502, {"error": f"Radarr/Sonarr didn't answer ({e})"})
+                finally:
+                    lock.release(lib.state)
 
         def delete(self, body: bytes) -> None:
             parsed = parse_delete(body)

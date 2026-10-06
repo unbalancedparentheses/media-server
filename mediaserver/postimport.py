@@ -120,6 +120,8 @@ IMPORT_TRIES = 10
 FIX_TRIES = 3
 RETRY_FIX_AFTER = 3600
 SWEEP_PER_ROUND = 3
+RECHECK_EVERY = 30 * 86400      # each library file re-checked at most this often…
+RECHECK_PER_ROUND = 2           # …a couple a round, at night
 
 # ISO 639-1 → the ISO 639-2 codes files are tagged with (B and T forms)
 LANGUAGES = {
@@ -1119,6 +1121,54 @@ class Worker:
         self.state["seen"] = {p: v for p, v in seen.items() if os.path.exists(p)}
         self.state["failures"] = {p: v for p, v in self.state["failures"].items() if os.path.exists(p)}
 
+    # ─── Re-checking old files, overnight ────────────────────────
+
+    def recheck(self, now: float | None = None) -> None:
+        """A few library files a round, at night, each at most every
+        RECHECK_EVERY: readable, with video and audio, and decoding at the
+        start, middle and end (the checks a new download gets). A damaged
+        one is listed for the dashboard (Replace) and the doctor; nothing
+        is deleted here."""
+        now = time.time() if now is None else now
+        if not rp.night(now) or pause.paused(STATE.parent, "repairs"):
+            return
+        checked = self.state.setdefault("rechecked", {})
+        damaged = self.state.setdefault("damaged", {})
+        done = 0
+        for root in self.settings["library_dirs"]:
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                for name in sorted(filenames):
+                    path = Path(dirpath) / name
+                    if name.startswith(".") or path.suffix.lower() not in VIDEO_EXTENSIONS:
+                        continue
+                    try:
+                        mark = seen_mark(path)
+                    except OSError:
+                        continue
+                    last = checked.get(str(path)) or {}
+                    if last.get("mark") == mark and now - last.get("at", 0) < RECHECK_EVERY:
+                        continue
+                    if done >= RECHECK_PER_ROUND or operation_running():
+                        return
+                    self.working(path, display_name(path), "re-checking it plays")
+                    try:
+                        problem = problem_with(probe(path), path, None, False)
+                    finally:
+                        self.working(path, display_name(path), None)
+                    done += 1
+                    checked[str(path)] = {"mark": mark, "at": int(now)}
+                    if problem:
+                        if str(path) not in damaged:
+                            self.remember(display_name(path), f"found damaged on a re-check: {problem} (Replace on the dashboard)")
+                        damaged[str(path)] = {"title": display_name(path), "problem": problem, "since": damaged.get(str(path), {}).get("since", int(now))}
+                    else:
+                        damaged.pop(str(path), None)
+                    save(self.state)
+        # Gone (replaced or deleted): forgotten
+        self.state["rechecked"] = {p: v for p, v in checked.items() if os.path.exists(p)}
+        self.state["damaged"] = {p: v for p, v in damaged.items() if os.path.exists(p)}
+
     # ─── MKV → MP4, overnight (repackage.py) ─────────────────────
 
     def repackage(self, now: float | None = None) -> None:
@@ -1370,6 +1420,8 @@ class Worker:
             # separate from imported
             "playback": self.state["playback"][:50],
             "playback_waiting": len(self.state["playback_pending"]),
+            # Library files a re-check found damaged (dashboard: Replace)
+            "damaged": [dict(v, path=p) for p, v in (self.state.get("damaged") or {}).items() if os.path.exists(p)],
         }
 
 
@@ -1506,6 +1558,7 @@ class Rounds:
                 worker.check_rejections()
                 worker.sweep()
                 worker.repackage()
+                worker.recheck()
                 playback.run(worker.state, STATE.parent)
                 # What isn't arriving: searched again, and why (hourly)
                 offline = c.read_text(STATE.parent / "netwatch/connection") == "offline"

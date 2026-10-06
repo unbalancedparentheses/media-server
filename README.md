@@ -102,6 +102,7 @@ Run `nix run .#install` again whenever you like: it only changes what differs fr
   - Each new file is renamed (`Show - S01E01 - Title`, `Movie (Year)`), checked and added to Jellyfin. One that won't play, is far too short or is a dub of Japanese anime is replaced; you're told only if nothing better turns up.
   - Files are made to play directly in browsers: a stereo track is added when the audio is only Dolby/DTS, and picture subtitles are read into text. Files already in the library get the same, a few at a time.
   - Overnight, MKV files nobody has started are repackaged as MP4 (nothing re-encoded) when they fit whole, so the app and Apple devices play them directly.
+  - Overnight, library files are re-checked, each about once a month: readable, with video and audio, and the picture decoding at the start, middle and end. A damaged one shows under Library health with a **Replace** button (it's deleted through Sonarr/Radarr and a new copy searched for) and in `nix run .#doctor`; nothing is deleted without you.
   - Bazarr fetches subtitles, and new episodes of followed shows are grabbed as they air.
 - **A file is bad in a way the checks missed** (wrong edition, poor quality): in Sonarr or Radarr, open the title, use the interactive search (the person icon) and pick another release.
 - **Running out of space:** a notification comes below 50 GB free, and imports stop below 10 GB. Delete things from the dashboard.

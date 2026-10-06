@@ -44,7 +44,7 @@ class Doctor:
     def run(self) -> int:
         info("Doctor (read-only)")
         for part in (self.services, self.connection, self.indexers, self.downloads, self.subtitles,
-                     self.library, self.postimport, self.disk, self.orphans, self.secrets, self.records):
+                     self.library, self.postimport, self.disk, self.orphans, self.damaged, self.secrets, self.records):
             try:
                 part()
             except (KeyError, IndexError, TypeError, ValueError, AttributeError, *c.HTTP_ERRORS) as e:
@@ -220,6 +220,14 @@ class Doctor:
             self.note(f"Kept although no better release was found: {kept}", "Sonarr/Radarr → the title → Interactive Search, to pick one by hand")
         recent = sum(1 for r in status.get("recent") or [] if r.get("time", 0) > time.time() - 86400)
         self.good(f"Checks after each download: running ({recent} fixes in the last day)")
+
+    def damaged(self) -> None:
+        """Library files the night-time re-check found damaged"""
+        status = c.read_json(self.paths.state / "postimport/status.json", {}) or {}
+        bad = status.get("damaged") or []
+        if bad:
+            names = ", ".join(f"{d.get('title')} ({d.get('problem')})" for d in bad[:3]) + (f" and {len(bad) - 3} more" if len(bad) > 3 else "")
+            self.need(f"Damaged in your library: {names}", "Replace them on the dashboard's Manage page (Library health)")
 
     def secrets(self) -> None:
         """Nothing the dashboard serves carries an API key or password"""
