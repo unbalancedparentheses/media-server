@@ -293,6 +293,31 @@ class RealFile(unittest.TestCase):
         self.assertTrue(self.video.exists())
         self.assertEqual(self.state["repackage_pending"], {})
 
+    def test_resuming_when_the_mp4_changed_in_place_keeps_the_mkv(self):
+        new, _ = self.interrupted(publish_subtitles=True, publish_mp4=True)
+        with open(new, "r+b") as f:   # damaged where it lies: same inode
+            f.truncate(new.stat().st_size // 2)
+        self.worker.finish_repackage(str(new))
+        self.assertTrue(self.video.exists())
+        self.assertFalse(new.exists())   # ours, damaged: removed
+        self.assertEqual(self.state["repackage_pending"], {})
+
+    def test_a_failed_undo_keeps_its_record(self):
+        new, sub = self.interrupted(publish_subtitles=True, publish_mp4=False)
+        real_unlink = Path.unlink
+
+        def failing(path, missing_ok=False):
+            if path == sub:
+                raise PermissionError("operation not permitted")
+            return real_unlink(path, missing_ok=missing_ok)
+        with mock.patch.object(Path, "unlink", failing):
+            self.worker.finish_repackage(str(new))
+        self.assertIn(str(new), self.state["repackage_pending"])   # kept: retried
+        self.assertTrue(sub.exists())
+        self.worker.finish_repackage(str(new))   # it works now
+        self.assertFalse(sub.exists())
+        self.assertEqual(self.state["repackage_pending"], {})
+
     def test_resuming_waits_while_jellyfin_isnt_answering(self):
         new, _ = self.interrupted(publish_subtitles=True, publish_mp4=True)
         self.checks = None

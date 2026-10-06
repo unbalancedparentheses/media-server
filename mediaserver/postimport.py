@@ -1230,7 +1230,8 @@ class Worker:
             # files that are provably ours
             os.chmod(out, st.st_mode & 0o777)
             self.state.setdefault("repackage_pending", {})[str(new)] = {
-                "old": str(path), "old_id": list(before), "new_ino": out.stat().st_ino, "title": title,
+                "old": str(path), "old_id": list(before), "new_ino": out.stat().st_ino,
+                "new_id": [out.stat().st_ino, out.stat().st_size, out.stat().st_mtime], "title": title,
                 "subtitles": [{"path": str(final), "ino": tmp.stat().st_ino} for tmp, final in planned],
                 "temps": [str(f) for f in temps], "steps": ["switch", "rescan", "jellyfin", "playback"]}
             save(self.state)
@@ -1260,17 +1261,24 @@ class Worker:
 
     def abandon_repackage(self, key: str, reason: str) -> None:
         """Undone: the subtitles and the MP4 this published go (only those:
-        checked by inode), its temporary files too; the MKV stays"""
-        entry = self.state.get("repackage_pending", {}).pop(key, None)
+        checked by inode), its temporary files too; the MKV stays. The record
+        goes only once all of that is done: a deletion that fails is retried
+        next round."""
+        entry = self.state.get("repackage_pending", {}).get(key)
         if not entry:
             return
-        for sub in entry.get("subtitles", []):
-            if self.ours(sub["path"], sub["ino"]):
-                Path(sub["path"]).unlink(missing_ok=True)
-        if Path(entry["old"]).exists() and self.ours(key, entry.get("new_ino")):
-            Path(key).unlink(missing_ok=True)
-        for f in entry.get("temps", []):
-            Path(f).unlink(missing_ok=True)
+        try:
+            for sub in entry.get("subtitles", []):
+                if self.ours(sub["path"], sub["ino"]):
+                    Path(sub["path"]).unlink(missing_ok=True)
+            if Path(entry["old"]).exists() and self.ours(key, entry.get("new_ino")):
+                Path(key).unlink(missing_ok=True)
+            for f in entry.get("temps", []):
+                Path(f).unlink(missing_ok=True)
+        except OSError as e:
+            log(f"{entry.get('title', key)}: couldn't undo the repackaging yet ({e}); retried next round")
+            return
+        self.state["repackage_pending"].pop(key, None)
         save(self.state)
         log(f"{entry.get('title', key)}: repackaging undone ({reason}); the MKV stays")
 
@@ -1305,6 +1313,10 @@ class Worker:
                 if old.exists():
                     if not rp.same(old, tuple(entry.get("old_id") or ())):
                         return self.abandon_repackage(key, "the MKV changed")
+                    # The MP4 as it was published (a change in place keeps its
+                    # inode), and still a whole copy of the MKV
+                    if not rp.same(new, tuple(entry.get("new_id") or ())) or not rp.checks_out(probe(old) or {}, probe(new)):
+                        return self.abandon_repackage(key, "the MP4 changed or doesn't check out")
                     checks = self.watch_checks()
                     if checks is None:
                         return   # Jellyfin isn't answering: checked next round
