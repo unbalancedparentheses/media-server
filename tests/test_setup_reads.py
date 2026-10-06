@@ -46,11 +46,13 @@ class BazarrPrivate(Scratch):
         path.parent.mkdir(parents=True)
         path.write_text("auth:\n  apikey: secret\n")
         path.chmod(0o644)
-        with mock.patch.object(bazarr, "configure", create=True), redirect_stdout(io.StringIO()):
-            try:
-                bazarr.run(cfg)
-            except Exception:
-                pass   # the rest needs a Bazarr; only the file's mode matters here
+        class Stop(Exception):
+            pass
+        # Stopped where the settings are read (right after the mode is set):
+        # nothing past it runs, so no real Bazarr is asked or restarted
+        with mock.patch.object(bazarr, "read_yaml", side_effect=Stop), redirect_stdout(io.StringIO()), \
+                self.assertRaises(Stop):
+            bazarr.run(cfg)
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
 
