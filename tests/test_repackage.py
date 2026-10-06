@@ -143,7 +143,7 @@ class RealFile(unittest.TestCase):
                         "-c:v", "libx264", "-c:a", "aac", "-c:s", "srt", "-metadata:s:s:0", "language=eng", str(self.video)], check=True)
         self.radarr = FakeApp("Radarr", "movie", [{"id": 7, "path": str(folder)}])
         self.state: dict = {}
-        pi.Worker.checks = (lambda p: True, lambda p: False)
+        self.checks: object = (lambda p: True, lambda p: False)
         settings: dict = dict(pi.DEFAULTS, library_dirs=[str(self.movies)])
         self.worker = pi.Worker([self.radarr], settings, self.state)
         self.updates: list = []
@@ -151,7 +151,7 @@ class RealFile(unittest.TestCase):
                         mock.patch.object(pi, "jellyfin_updated", lambda p, changes=None: self.updates.append(changes) or True),
                         mock.patch.object(pi, "operation_running", return_value=False),
                         # Jellyfin's view when resuming: nobody started it, nothing playing
-                        mock.patch.object(pi.Worker, "watch_checks", lambda self: self.checks)):
+                        mock.patch.object(pi.Worker, "watch_checks", lambda worker: self.checks)):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -264,14 +264,14 @@ class RealFile(unittest.TestCase):
 
     def test_resuming_when_someone_started_it_undoes(self):
         new, sub = self.interrupted(publish_subtitles=True, publish_mp4=True)
-        self.worker.checks = (lambda p: False, lambda p: False)   # started meanwhile
+        self.checks = (lambda p: False, lambda p: False)   # started meanwhile
         self.worker.finish_repackage(str(new))
         self.assertTrue(self.video.exists())
         self.assertFalse(new.exists() or sub.exists())
 
     def test_resuming_when_its_playing_undoes(self):
         new, _ = self.interrupted(publish_subtitles=True, publish_mp4=True)
-        self.worker.checks = (lambda p: True, lambda p: True)
+        self.checks = (lambda p: True, lambda p: True)
         self.worker.finish_repackage(str(new))
         self.assertTrue(self.video.exists())
         self.assertFalse(new.exists())
@@ -295,7 +295,7 @@ class RealFile(unittest.TestCase):
 
     def test_resuming_waits_while_jellyfin_isnt_answering(self):
         new, _ = self.interrupted(publish_subtitles=True, publish_mp4=True)
-        self.worker.checks = None
+        self.checks = None
         self.worker.finish_repackage(str(new))
         self.assertTrue(self.video.exists() and new.exists())
         self.assertEqual(self.state["repackage_pending"][str(new)]["steps"][0], "switch")
