@@ -182,6 +182,12 @@ def timestamp(iso: str | None) -> float | None:
         return None
 
 
+def timed_out(e: BaseException) -> bool:
+    """A request sent but not answered in time (urllib wraps the timeout)"""
+    reason = getattr(e, "reason", None)
+    return isinstance(e, TimeoutError) or isinstance(reason, TimeoutError) or "timed out" in str(e).lower()
+
+
 def wait_after(searches: int, missing_for: float = 0) -> int:
     longest = MAX_WAIT_LONG_MISSING if missing_for >= LONG_MISSING else MAX_WAIT
     return min(3600 * 2 ** max(searches - 1, 0), longest)
@@ -302,8 +308,12 @@ class Stuck:
             m, item = missing[key], items[key]
             try:
                 self.apps[m["app"]].call("POST", "command", m["search"])
-            except c.HTTP_ERRORS:
-                continue   # tried again next round
+            except c.HTTP_ERRORS as e:
+                if not timed_out(e):
+                    continue   # refused or not answering: tried again next round
+                # No answer in time, but Sonarr/Radarr may have queued it:
+                # counted, so it isn't asked again every round
+                c.log(f"{m['title']}: the search request timed out (it may still run); counted")
             item["searches"] += 1
             item["last_search"] = self.now
             wait = wait_after(item["searches"], self.now - item["since"])

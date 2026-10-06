@@ -75,6 +75,27 @@ class Fits(unittest.TestCase):
         (d / "Film (2010).en.srt").write_text("Bazarr's")   # one already there stays
         self.assertEqual(rp.sidecar_name(video, stream(3, "subtitle", "subrip"), "en", set()).name, "Film (2010).en.3.srt")
         self.assertEqual(rp.sidecar_name(video, stream(6, "subtitle", "subrip"), "", set()).name, "Film (2010).srt")
+        (d / "Film (2010).en.3.srt").write_text("also taken")   # so is the alternative: a name nothing has
+        self.assertEqual(rp.sidecar_name(video, stream(3, "subtitle", "subrip"), "en", set()).name, "Film (2010).en.3.2.srt")
+
+    def test_publish_never_replaces(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d)
+        tmp, final = d / ".x.postimport", d / "x.srt"
+        tmp.write_text("new")
+        final.write_text("Bazarr's")
+        with self.assertRaises(FileExistsError):
+            rp.publish(tmp, final)
+        self.assertEqual(final.read_text(), "Bazarr's")
+        final.unlink()
+        rp.publish(tmp, final)
+        self.assertEqual((final.read_text(), tmp.exists()), ("new", False))
+
+    def test_complete_subtitles(self):
+        self.assertTrue(rp.complete((120, 3500.0), (120, 3501.0)))
+        self.assertFalse(rp.complete((60, 1700.0), (120, 3501.0)))   # cut short
+        self.assertFalse(rp.complete((0, 0.0), (0, 0.0)))
+        self.assertFalse(rp.complete(None, (10, 5.0)))
 
     def test_night_only(self):
         def at(hour):
@@ -151,6 +172,69 @@ class RealFile(unittest.TestCase):
         self.assertTrue(self.video.exists())
         self.assertIn("started or watched", skip[str(self.video)]["reason"])
 
+    def test_existing_subtitles_are_never_touched(self):
+        bazarr = self.video.parent / "Film (2010).en.srt"
+        bazarr.write_text("Bazarr's own")
+        self.assertTrue(self.worker.repackage_one(self.video, pi.seen_mark(self.video), lambda p: True, {}))
+        self.assertEqual(bazarr.read_text(), "Bazarr's own")
+        self.assertIn("Hello", (self.video.parent / "Film (2010).en.2.srt").read_text())
+
+    def test_incomplete_subtitles_keep_the_mkv(self):
+        bazarr = self.video.parent / "Film (2010).en.srt"
+        bazarr.write_text("Bazarr's own")
+        skip: dict = {}
+        with mock.patch.object(pi, "stream_cues", return_value=(99, 3.0)):   # the track has more cues than were saved
+            self.assertFalse(self.worker.repackage_one(self.video, pi.seen_mark(self.video), lambda p: True, skip))
+        self.assertTrue(self.video.exists())
+        self.assertEqual(sorted(f.name for f in self.video.parent.iterdir()), ["Film (2010).en.srt", "Film (2010).mkv"])
+        self.assertEqual(bazarr.read_text(), "Bazarr's own")
+        self.assertIn("subtitles couldn't be saved", skip[str(self.video)]["reason"])
+
+    def test_started_while_being_copied_keeps_the_mkv(self):
+        answers = iter([True, False])   # unwatched before; watched by the time it's done
+        self.assertFalse(self.worker.repackage_one(self.video, pi.seen_mark(self.video), lambda p: next(answers), {}))
+        self.assertEqual(sorted(f.name for f in self.video.parent.iterdir()), ["Film (2010).mkv"])
+        self.assertNotIn(str(self.video.with_suffix(".mp4")), self.state.get("repackage_pending", {}))
+
+    def test_playing_right_now_keeps_the_mkv(self):
+        self.assertFalse(self.worker.repackage_one(self.video, pi.seen_mark(self.video), lambda p: True, {}, busy=lambda p: True))
+        self.assertTrue(self.video.exists())
+        self.assertFalse(self.video.with_suffix(".mp4").exists())
+
+    def test_a_failed_rescan_is_finished_next_round(self):
+        self.radarr.call = mock.Mock(side_effect=OSError("Radarr isn't answering"))
+        self.assertTrue(self.worker.repackage_one(self.video, pi.seen_mark(self.video), lambda p: True, {}))
+        new = str(self.video.with_suffix(".mp4"))
+        self.assertFalse(self.video.exists())   # the switch is done…
+        self.assertEqual(self.state["repackage_pending"][new]["steps"], ["rescan", "jellyfin", "playback"])   # …the rest waits
+        self.radarr.call = lambda method, path, body=None: self.radarr.items
+        self.worker.repackage(now=time.mktime((2026, 10, 6, 15, 0, 0, 0, 0, -1)))   # any hour
+        self.assertEqual(self.radarr.rescans, [{"movieId": 7}])
+        self.assertNotIn(new, self.state["repackage_pending"])
+        self.assertIn(new, self.state["playback_pending"])
+
+    def test_a_crash_after_the_switch_is_finished(self):
+        new = self.video.with_suffix(".mp4")
+        shutil.copy(self.video, new)   # published, then the service stopped
+        self.state["repackage_pending"] = {str(new): {"old": str(self.video), "title": "Film (2010)", "subtitles": [],
+                                                      "steps": ["switch", "rescan", "jellyfin", "playback"]}}
+        self.worker.finish_repackage(str(new))
+        self.assertFalse(self.video.exists())
+        self.assertEqual(self.radarr.rescans, [{"movieId": 7}])
+        self.assertEqual(self.state["repackage_pending"], {})
+
+    def test_a_crash_before_the_switch_is_undone(self):
+        sub = self.video.parent / "Film (2010).en.srt"
+        sub.write_text("published before the crash")
+        new = self.video.with_suffix(".mp4")
+        self.state["repackage_pending"] = {str(new): {"old": str(self.video), "title": "Film (2010)", "subtitles": [str(sub)],
+                                                      "steps": ["switch", "rescan", "jellyfin", "playback"]}}
+        self.worker.finish_repackage(str(new))
+        self.assertTrue(self.video.exists())
+        self.assertFalse(sub.exists())
+        self.assertEqual(self.state["repackage_pending"], {})
+        self.assertEqual(self.radarr.rescans, [])
+
     def test_failed_remux_keeps_the_mkv_and_no_stray_subtitles(self):
         with mock.patch.object(rp, "checks_out", return_value=False):
             self.assertFalse(self.worker.repackage_one(self.video, pi.seen_mark(self.video), lambda p: True, {}))
@@ -161,6 +245,7 @@ class RealFile(unittest.TestCase):
         jf = mock.Mock()
         jf.items.return_value = {str(self.video): "item"}
         jf.user_data.return_value = [{"Played": False}]
+        jf.now_playing.return_value = set()
         night = time.mktime((2026, 10, 6, 3, 0, 0, 0, 0, -1))
         with mock.patch.object(pi.playback, "Jellyfin", return_value=jf):
             self.worker.repackage(now=night + 12 * 3600)   # afternoon: nothing

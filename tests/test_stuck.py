@@ -204,6 +204,31 @@ class Recovery(unittest.TestCase):
         self.assertEqual(self.state["items"]["radarr:1"]["diagnosis"]["code"], "quality")
         self.assertIn("Releases found, but none in a quality", stuck.explain(self.state["items"]["radarr:1"], now=36 * 3600))
 
+    def test_a_search_that_times_out_counts(self):
+        def slow(method, path, body):
+            if path == "command":
+                raise urllib.error.URLError(TimeoutError("timed out"))
+            return self.radarr_answers(method, path, body)
+        self.radarr.answers = slow
+        for hour in range(0, 3):
+            self.round(hour * 3600)
+        asked = [b for m, p, b in self.radarr.calls if p == "command" and b["movieIds"] == [1]]
+        # Radarr may have queued each: every one counted, so the waits grow
+        # (1 h, then 2 h) instead of asking every round
+        self.assertEqual(self.state["items"]["radarr:1"]["searches"], len(asked))
+        item = self.state["items"]["radarr:1"]
+        self.assertGreaterEqual(item["searches"], 1)
+        self.assertEqual(item["next_search"], item["last_search"] + stuck.wait_after(item["searches"]))
+
+    def test_a_refused_search_is_retried(self):
+        def refused(method, path, body):
+            if path == "command":
+                raise urllib.error.URLError(ConnectionRefusedError("refused"))
+            return self.radarr_answers(method, path, body)
+        self.radarr.answers = refused
+        self.round(0)
+        self.assertEqual(self.state["items"]["radarr:1"]["searches"], 0)
+
     def test_looks_that_find_nothing_come_less_often(self):
         # Nothing found each time: 12 h, then a day, two days, four, up to a week
         for hour in range(0, 24 * 40):

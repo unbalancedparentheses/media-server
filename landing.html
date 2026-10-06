@@ -377,7 +377,7 @@
     <div class="modal-box">
       <div class="sp-title" id="del-title">Delete</div>
       <div class="del-body" id="del-body">Looking it up…</div>
-      <div class="sp-hint">This deletes the files for good, with their seeding copy in qBittorrent.</div>
+      <div class="sp-hint" id="del-hint">This deletes the files for good, with their seeding copy in qBittorrent.</div>
       <div class="sp-foot"><span class="sp-msg" id="del-msg"></span><span><button class="btn" id="del-cancel">Cancel</button> <button class="btn danger" id="del-go">Delete</button></span></div>
     </div>
   </div>
@@ -584,19 +584,22 @@
         return'<div class="lib-row"><div class="i-info"><div>'+esc(x.title)+'</div>'
           +'<div class="i-sub">missing '+(weeks>=2?weeks+' weeks':x.days+' days')+' · searched '+plural(x.searches,'time')+' · '+esc(x.why||'')+'</div></div>'
           +'<span>'+(u?'<a class="i-link" href="'+u+'">Pick a release in '+esc(x.app)+' →</a> ':'')
-          +'<button class="btn danger-outline" data-delete="'+esc(x.item)+'"'+(season?' data-season="'+x.season+'"':'')+'>'+(season?'Stop looking':'Delete')+'</button></span></div>';
+          +'<button class="btn danger-outline" data-delete="'+esc(x.item)+'"'+(season?' data-season="'+x.season+'" data-stop="1"':'')+'>'+(season?'Stop looking':'Delete')+'</button></span></div>';
       }).join('');
     }
     // Any Delete button (Library, search) opens the dialog
-    document.addEventListener('click',function(e){var b=e.target.closest('[data-delete]');if(b){e.preventDefault();sr.style.display='none';openDelete(b.getAttribute('data-delete'),b.getAttribute('data-season'));}});
+    document.addEventListener('click',function(e){var b=e.target.closest('[data-delete]');if(b){e.preventDefault();sr.style.display='none';openDelete(b.getAttribute('data-delete'),b.getAttribute('data-season'),b.hasAttribute('data-stop'));}});
 
     // ── Deleting a title: through Radarr/Sonarr (Jellyfin alone would get
     // it downloaded again), with its torrents ──
-    var delItem=null,delInfo=null;
+    var delItem=null,delInfo=null,delStop=false,delSeason=null;
     function gb(b){return b>=1073741824?(b/1073741824).toFixed(1)+' GB':Math.max(1,Math.round(b/1048576))+' MB';}
     function closeDelete(){show('del-modal',false);delItem=delInfo=null;}
-    function openDelete(item,preselect){
-      delItem=item;delInfo=null;show('del-modal',true);
+    function openDelete(item,preselect,stop){
+      delItem=item;delInfo=null;delStop=!!stop;show('del-modal',true);
+      document.getElementById('del-go').textContent=delStop?'Stop looking':'Delete';
+      document.getElementById('del-go').className='btn '+(delStop?'primary':'danger');
+      show('del-hint',!delStop);
       document.getElementById('del-title').textContent='Delete';
       document.getElementById('del-body').textContent='Looking it up…';
       document.getElementById('del-msg').textContent='';
@@ -605,13 +608,17 @@
         if(delItem!==item)return;
         if(!res.ok){document.getElementById('del-body').textContent=res.j.error||'Can\'t delete it here';return;}
         delInfo=res.j;
-        document.getElementById('del-title').textContent=(delInfo.unfinished?'Finish deleting ':'Delete ')+delInfo.title+'?';
-        var html=delInfo.unfinished?'<p>Deleting it didn\'t finish last time; still to do: '+esc(delInfo.unfinished.join(', '))+'.</p>'
+        document.getElementById('del-title').textContent=delStop?'Stop looking for '+delInfo.title+(preselect!=null?' season '+preselect:'')+'?'
+          :(delInfo.unfinished?'Finish deleting ':'Delete ')+delInfo.title+'?';
+        var html=delStop?'<p>'+(delInfo.kind==='movie'?'Radarr stops searching for it.':'Sonarr stops searching for this season\'s missing episodes.')
+            +' Nothing is deleted: anything already downloaded stays. Turn monitoring back on in '+(delInfo.kind==='movie'?'Radarr':'Sonarr')+' to look again.</p>'
+          :delInfo.unfinished?'<p>Deleting it didn\'t finish last time; still to do: '+esc(delInfo.unfinished.join(', '))+'.</p>'
           :delInfo.kind==='movie'?'<p>The film and its files (about '+gb(delInfo.size)+').</p>'
           :'<label class="del-opt"><input type="radio" name="del-what" value="" checked> The whole series (about '+gb(delInfo.size)+')</label>'
             +delInfo.seasons.map(function(x){return'<label class="del-opt"><input type="radio" name="del-what" value="'+x.number+'"> Only season '+x.number+' ('+(x.size?gb(x.size):'nothing downloaded: stops looking for it')+'; the rest stays)</label>';}).join('');
         document.getElementById('del-body').innerHTML=html;
         if(preselect!=null){var r=document.querySelector('input[name="del-what"][value="'+preselect+'"]');if(r)r.checked=true;}
+        delSeason=preselect!=null?+preselect:null;
         document.getElementById('del-go').disabled=false;
         document.getElementById('del-go').focus();
       }).catch(function(){document.getElementById('del-body').textContent='Not available: the dashboard couldn\'t reach it';});
@@ -623,12 +630,13 @@
     document.getElementById('del-go').addEventListener('click',function(){
       if(!delInfo)return;
       var msg=document.getElementById('del-msg');
-      var picked=document.querySelector('input[name="del-what"]:checked'),season=picked&&picked.value!==''?+picked.value:null;
-      msg.textContent='Deleting…';document.getElementById('del-go').disabled=true;
+      var picked=document.querySelector('input[name="del-what"]:checked'),season=delStop?delSeason:(picked&&picked.value!==''?+picked.value:null);
+      msg.textContent=delStop?'Stopping…':'Deleting…';document.getElementById('del-go').disabled=true;
       fetch('/api/control/delete',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'media-server'},
-        body:JSON.stringify({item:delItem,season:season})})
+        body:JSON.stringify(delStop?{item:delItem,season:season,stop:true}:{item:delItem,season:season})})
         .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j};});}).then(function(res){
           if(!res.ok){msg.textContent=res.j.error||'Not deleted';document.getElementById('del-go').disabled=false;return;}
+          if(res.j.stopped){msg.textContent='Stopped looking for '+res.j.stopped;setTimeout(function(){closeDelete();refreshStatus();},2000);return;}
           // What was removed is an estimate (Sonarr/Radarr's sizes); the
           // disk's free space is measured (and can lag behind qBittorrent)
           var j=res.j,parts=['Deleted '+j.deleted,'about '+gb(j.files_removed)+' of files removed'];

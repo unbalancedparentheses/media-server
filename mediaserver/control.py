@@ -263,8 +263,17 @@ class Library:
             plans[item_id] = plan
         c.write_json(self.plans_file, plans, mode=0o600)
 
-    def plan(self, item_id: str, season: int | None, exclude: bool) -> dict:
+    def plan(self, item_id: str, season: int | None, exclude: bool, stop: bool = False) -> dict:
         title = self.resolve(item_id)
+        if stop:
+            # Stop looking: no longer monitored, nothing deleted (what's
+            # already downloaded of the season stays)
+            if title["kind"] == "series" and season is None:
+                raise LookupError("say which season to stop looking for")
+            return {"title": title["title"] + (f" season {season}" if season is not None else ""), "kind": title["kind"],
+                    "id": title["id"], "tmdb": title.get("tmdb"), "season": season, "exclude": False, "hashes": [], "kept": [],
+                    "files": [], "bytes": 0, "warnings": [], "stop": True, "started": int(__import__("time").time()),
+                    "steps": ["unmonitor_movie"] if title["kind"] == "movie" else ["unmonitor"]}
         hashes, kept = self.torrents(title, season)
         plan = {"title": title["title"], "kind": title["kind"], "id": title["id"], "tmdb": title.get("tmdb"),
                 "season": season, "exclude": exclude, "hashes": hashes, "kept": kept, "files": [], "bytes": title["size"],
@@ -295,6 +304,9 @@ class Library:
             r = c.request(f"{local(app)}/api/v3/{path}", "DELETE", {"X-Api-Key": c.arr_key(self.config, app)}, timeout=60)
             if not (r.ok or r.status == 404):   # 404: gone already (a resumed plan)
                 raise ApiError(f"{app} didn't delete it (HTTP {r.status or 'no answer'})")
+        elif name == "unmonitor_movie":
+            movie = self.arr("radarr", "GET", f"movie/{plan['id']}")
+            self.arr("radarr", "PUT", f"movie/{plan['id']}", dict(movie, monitored=False))
         elif name == "unmonitor":
             series = self.arr("sonarr", "GET", f"series/{plan['id']}")
             series["seasons"] = [dict(x, monitored=False) if x.get("seasonNumber") == plan["season"] else x
@@ -329,12 +341,12 @@ class Library:
     def pending(self, item_id: str) -> dict | None:
         return self.plans().get(item_id)
 
-    def delete(self, item_id: str, season: int | None, exclude: bool) -> dict:
+    def delete(self, item_id: str, season: int | None, exclude: bool, stop: bool = False) -> dict:
         import shutil
         plan = self.pending(item_id)
         resumed = plan is not None
         if plan is None:
-            plan = self.plan(item_id, season, exclude)
+            plan = self.plan(item_id, season, exclude, stop)
             self.save_plan(item_id, plan)   # before anything is deleted
         free_before = shutil.disk_usage(self.config.parent).free
         while plan["steps"]:
@@ -342,6 +354,9 @@ class Library:
             plan["steps"].pop(0)
             self.save_plan(item_id, plan)
         self.save_plan(item_id, None)
+        if plan.get("stop"):
+            c.log(f"stopped looking from the dashboard: {plan['title']}")
+            return {"stopped": plan["title"], "resumed": resumed, "warnings": plan["warnings"]}
         measured = shutil.disk_usage(self.config.parent).free - free_before
         c.log(f"deleted from the dashboard: {plan['title']} (about {plan['bytes'] // 1024 ** 2} MB of files, "
               f"{len(plan['hashes'])} torrents{', kept ' + str(len(plan['kept'])) if plan['kept'] else ''})")
@@ -355,21 +370,23 @@ class PlanTrouble(Exception):
     """The record of unfinished deletions can't be read"""
 
 
-def parse_delete(body: bytes) -> tuple[str, int | None, bool] | str:
+def parse_delete(body: bytes) -> tuple[str, int | None, bool, bool] | str:
     try:
         data = json.loads(body or b"{}")
     except ValueError:
         return "not JSON"
     if not isinstance(data, dict):
         return "the request must be a JSON object"
-    item, season, exclude = data.get("item"), data.get("season"), data.get("exclude", False)
+    item, season, exclude, stop = data.get("item"), data.get("season"), data.get("exclude", False), data.get("stop", False)
     if not isinstance(item, str) or not item.isalnum() or len(item) > 64:
         return '"item" must be a library item id'
     if season is not None and (not isinstance(season, int) or isinstance(season, bool) or not 0 <= season <= 1000):
         return '"season" must be a season number'
     if not isinstance(exclude, bool):
         return '"exclude" must be true or false'
-    return item, season, exclude
+    if not isinstance(stop, bool):
+        return '"stop" must be true or false'
+    return item, season, exclude, stop
 
 
 def parse(body: bytes) -> tuple[bool, int, int] | str:
@@ -468,7 +485,7 @@ def handler(speed: Speed, library: "Library | None" = None):
             parsed = parse_delete(body)
             if isinstance(parsed, str):
                 return self.answer(400, {"error": parsed})
-            item, season, exclude = parsed
+            item, season, exclude, stop = parsed
             from mediaserver import lock
             from mediaserver.ui import SetupError
             with LOCK:
@@ -480,7 +497,7 @@ def handler(speed: Speed, library: "Library | None" = None):
                     busy = "post-import" in e.message
                     return self.answer(409, {"error": e.message if busy else "An install or other operation is running; try again when it's done"})
                 try:
-                    result = lib.delete(item, season, exclude)
+                    result = lib.delete(item, season, exclude, stop)
                 except LookupError as e:
                     return self.answer(404, {"error": f"Can't delete it here: {e}"})
                 except PlanTrouble as e:

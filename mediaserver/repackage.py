@@ -71,18 +71,36 @@ def fits(info: dict) -> tuple[list, str]:
 
 
 def sidecar_name(path: Path, stream: dict, language: str, taken: set) -> Path:
-    """Movie.en.srt, Movie.en.forced.srt, Movie.en.sdh.srt; Movie.en.3.srt
-    when that name is taken (a subtitle Bazarr already put there stays)"""
+    """Movie.en.srt, Movie.en.forced.srt, Movie.en.sdh.srt; when that name
+    is taken (a subtitle Bazarr already put there stays), Movie.en.3.srt,
+    then Movie.en.3.2.srt and so on: a name nothing has yet"""
     d = stream.get("disposition") or {}
     parts = [language] if language else []
     if d.get("forced"):
         parts.append("forced")
     elif d.get("hearing_impaired"):
         parts.append("sdh")
-    name = path.with_name(".".join([path.stem, *parts, "srt"]))
-    if name in taken or name.exists():
-        name = path.with_name(".".join([path.stem, *parts, str(stream["index"]), "srt"]))
-    return name
+    candidates = [[*parts], [*parts, str(stream["index"])]] + [[*parts, str(stream["index"]), str(n)] for n in range(2, 1000)]
+    for extra in candidates:
+        name = path.with_name(".".join([path.stem, *extra, "srt"]))
+        if name not in taken and not name.exists() and not os.path.lexists(name):
+            return name
+    raise FileExistsError(f"no free subtitle name next to {path.name}")
+
+
+def complete(saved: tuple | None, source: tuple | None) -> bool:
+    """The saved .srt has every cue the track has, to its last one"""
+    if not saved or not source:
+        return False
+    (cues, last), (packets, source_last) = saved, source
+    return packets > 0 and cues >= packets and abs(last - source_last) <= 2
+
+
+def publish(tmp: Path, final: Path) -> None:
+    """tmp → final without ever replacing a file already there (a hard link
+    fails if final exists), then tmp goes"""
+    os.link(tmp, final)
+    tmp.unlink()
 
 
 def extract_command(path: Path, stream: dict, out: Path) -> list:

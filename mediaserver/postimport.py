@@ -1124,8 +1124,11 @@ class Worker:
     def repackage(self, now: float | None = None) -> None:
         """A few MKV files a round, between repackage.NIGHT hours; files that
         don't fit (or were started) are remembered by their mark, so they're
-        not looked at again until they change"""
+        not looked at again until they change. Conversions a crash or a
+        failed rescan left unfinished are finished first, at any hour."""
         from mediaserver import repackage as rp
+        for key in list(self.state.get("repackage_pending", {})):
+            self.finish_repackage(key)
         if not self.settings.get("repackage_mp4", True) or not rp.night(now):
             return
         skip = self.state.setdefault("repackage_skip", {})
@@ -1135,6 +1138,10 @@ class Worker:
         except c.HTTP_ERRORS:
             return   # Jellyfin isn't answering: not tonight
         unwatched = rp.unwatched(items, jf.user_data)
+
+        def busy(path) -> bool:
+            playing = jf.now_playing()
+            return playing is None or str(path) in playing   # unknown counts as busy
         done = 0
         for root in self.settings["library_dirs"]:
             for dirpath, dirnames, filenames in os.walk(root):
@@ -1151,13 +1158,16 @@ class Worker:
                         continue
                     if done >= rp.PER_ROUND or operation_running():
                         return
-                    if self.repackage_one(path, mark, unwatched, skip):
+                    if self.repackage_one(path, mark, unwatched, skip, busy):
                         done += 1
                         save(self.state)
         self.state["repackage_skip"] = {p: v for p, v in skip.items() if os.path.exists(p)}
 
-    def repackage_one(self, path: Path, mark: list, unwatched, skip: dict) -> bool:
-        """True when it was repackaged"""
+    def repackage_one(self, path: Path, mark: list, unwatched, skip: dict, busy=lambda p: False) -> bool:
+        """True when it was repackaged. Nothing next to the file is ever
+        overwritten: subtitles and the MP4 are written to temporary files,
+        checked, and published under names nothing has yet. Watch state is
+        checked again just before the switch."""
         from mediaserver import repackage as rp
         title = display_name(path)
 
@@ -1176,59 +1186,119 @@ class Worker:
         if not watched:
             return not_now("started or watched (its progress would be lost)")
         new = path.with_suffix(".mp4")
-        if new.exists():
+        if os.path.lexists(new):
             return not_now(f"{new.name} is already there")
         if not room_for(path, self.settings):
             return False
         st = path.stat()
         before = (st.st_ino, st.st_size, st.st_mtime)
         self.working(path, title, "repackaging as MP4 for Apple devices")
-        written: list = []
+        temps: list[Path] = []
+        planned: list[tuple[Path, Path]] = []   # (temporary, final) subtitle files
         out = path.with_name(f".{path.stem}.mp4.postimport")
+        temps.append(out)
+        committed = False
         try:
+            taken: set = set()
             for stream in subtitles:
-                sidecar = rp.sidecar_name(path, stream, stream_language(stream), set(written))
-                code, errors = run_ffmpeg(rp.extract_command(path, stream, sidecar), 0)
-                if code != 0 or not sidecar.exists():
-                    log(f"couldn't save the subtitles of {path.name} as {sidecar.name}: {errors.strip()[-200:]}")
-                    return False
-                written.append(sidecar)
+                final = rp.sidecar_name(path, stream, stream_language(stream), taken)
+                taken.add(final)
+                tmp = final.with_name(f".{final.stem}.postimport.srt")   # hidden; .srt so its cues can be counted
+                temps.append(tmp)
+                code, errors = run_ffmpeg(rp.extract_command(path, stream, tmp), 0)
+                if code != 0 or not rp.complete(sidecar_cues(tmp), stream_cues(path, stream["index"])):
+                    log(f"couldn't save all the subtitles of {path.name} as {final.name} {errors.strip()[-200:]}; kept it as it is")
+                    return not_now("its subtitles couldn't be saved whole")
+                planned.append((tmp, final))
             code, errors = run_ffmpeg(rp.remux_command(path, out, info), duration(info), self.progress)
             if code != 0 or not rp.checks_out(info, probe(out)):
                 why = errors.strip()[-200:] or "the new file didn't check out"
                 log(f"couldn't repackage {path.name} as MP4 ({why}); kept it")
                 return not_now("repackaging failed")
+            # The last look before anything changes: someone may have started
+            # it while it was being copied
+            if busy(path) or unwatched(path) is not True:
+                log(f"{path.name} was started while being repackaged; kept the MKV")
+                return not_now("started or watched (its progress would be lost)")
             if not rp.same(path, before):
                 log(f"{path.name} changed while being repackaged; kept it")
                 return False
+            # Recorded before any name changes: a crash from here on is
+            # finished (or undone) next round
+            self.state.setdefault("repackage_pending", {})[str(new)] = {
+                "old": str(path), "title": title, "subtitles": [], "steps": ["switch", "rescan", "jellyfin", "playback"]}
+            save(self.state)
             os.chmod(out, st.st_mode & 0o777)
-            os.replace(out, new)
-            path.unlink()
-            written = []   # kept: they go with the new file
+            for tmp, final in planned:
+                rp.publish(tmp, final)
+                # Listed once it's ours: an undo removes only what was published here
+                self.state["repackage_pending"][str(new)]["subtitles"].append(str(final))
+                save(self.state)
+            rp.publish(out, new)
+            committed = True
+        except OSError as e:
+            log(f"couldn't repackage {path.name}: {e}; kept it")
+            return False
         finally:
-            out.unlink(missing_ok=True)
-            for f in written:   # it didn't happen: no stray copies of its subtitles
+            for f in temps:
                 f.unlink(missing_ok=True)
+            if not committed:
+                # Undone: the record, and any subtitle already published
+                entry = self.state.get("repackage_pending", {}).pop(str(new), None)
+                for f in (entry or {}).get("subtitles", []):
+                    Path(f).unlink(missing_ok=True)
+                if entry:
+                    save(self.state)
             self.working(path, title, None)
-        self.remember(title, "repackaged as MP4 so Apple devices and the app play it directly (nothing re-encoded)")
-        self.rescan_owner(new)
-        jellyfin_updated(new, [(path, "Deleted"), (new, "Created")])
-        playback.queue(self.state, new, title)
+        self.finish_repackage(str(new))
         return True
 
-    def rescan_owner(self, path: Path) -> None:
+    def finish_repackage(self, key: str) -> None:
+        """The steps of a conversion left: the MKV removed once the MP4 is in
+        place, Sonarr/Radarr's rescan, Jellyfin told, the stream check. Each
+        is saved when done, so a crash or a failed rescan resumes here."""
+        entry = self.state.get("repackage_pending", {}).get(key)
+        if not entry:
+            return
+        new, old = Path(key), Path(entry["old"])
+        if not new.exists():
+            # Interrupted before the MP4 was published: undone (the
+            # subtitles published here go), MKV kept
+            for f in entry.get("subtitles", []):
+                Path(f).unlink(missing_ok=True)
+            self.state["repackage_pending"].pop(key, None)
+            save(self.state)
+            return
+        while entry["steps"]:
+            step = entry["steps"][0]
+            if step == "switch":
+                old.unlink(missing_ok=True)
+                self.remember(entry["title"], "repackaged as MP4 so Apple devices and the app play it directly (nothing re-encoded)")
+            elif step == "rescan" and not self.rescan_owner(new):
+                return   # Sonarr/Radarr didn't answer: next round
+            elif step == "jellyfin":
+                jellyfin_updated(new, [(old, "Deleted"), (new, "Created")])
+            elif step == "playback":
+                playback.queue(self.state, new, entry["title"])
+            entry["steps"].pop(0)
+            save(self.state)
+        self.state["repackage_pending"].pop(key, None)
+        save(self.state)
+
+    def rescan_owner(self, path: Path) -> bool:
         """Sonarr/Radarr rescan the title whose folder holds <path>, so they
-        track the new file"""
+        track the new file; False when they couldn't be asked"""
         for app in self.apps:
             try:
                 for item in app.call("GET", "series" if app.kind == "series" else "movie") or []:
                     folder = item.get("path")
                     if folder and str(path).startswith(folder.rstrip("/") + "/"):
-                        record = {"seriesId": item["id"]} if app.kind == "series" else {"movieId": item["id"]}
-                        app.rescan(record)
-                        return
+                        app.rescan({"seriesId": item["id"]} if app.kind == "series" else {"movieId": item["id"]})
+                        return True
             except (OSError, urllib.error.URLError, ValueError) as e:
-                log(f"couldn't ask {app.name} to rescan after repackaging {path.name}: {e}")
+                log(f"couldn't ask {app.name} to rescan after repackaging {path.name}: {e}; retried next round")
+                return False
+        return True   # neither has it (added by hand): nothing to rescan
 
     def status(self):
         rejections = self.state["rejections"].values()

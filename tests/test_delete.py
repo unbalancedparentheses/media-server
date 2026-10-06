@@ -222,11 +222,27 @@ class Delete(Stack):
         with self.assertRaises(LookupError):
             self.library.resolve("radarr999")
 
-    def test_stop_looking_for_a_season(self):
-        self.library.delete(f"sonarr{self.series['id']}", 2, False)
+    def test_stop_looking_for_a_season_deletes_nothing(self):
+        deletes = []
+
+        @first(self.stack.sonarr, "DELETE", r"/api/v3/episodefile/(\d+)")
+        def gone(req, fid):
+            deletes.append(fid)
+            return {}
+        result = self.library.delete(f"sonarr{self.series['id']}", 2, False, stop=True)
+        self.assertEqual(result["stopped"], "Kaiji season 2")
         series = self.stack.sonarr.resources["series"].items[0]
         self.assertFalse(next(x for x in series["seasons"] if x["seasonNumber"] == 2)["monitored"])
         self.assertTrue(next(x for x in series["seasons"] if x["seasonNumber"] == 1)["monitored"])
+        self.assertEqual(deletes, [])   # the season's downloaded episode (file 60) stays
+        self.assertEqual(self.deleted_hashes, [])
+
+    def test_stop_looking_for_a_film_keeps_it(self):
+        self.library.delete(f"radarr{self.movie['id']}", None, False, stop=True)
+        movie = self.stack.radarr.resources["movie"].items[0]
+        self.assertFalse(movie["monitored"])
+        with self.assertRaises(LookupError):   # a series needs the season
+            self.library.plan(f"sonarr{self.series['id']}", None, False, stop=True)
 
     def test_an_episode_card_means_its_series(self):
         self.stack.jellyfin.items.append({"Id": "jfep", "Type": "Episode", "SeriesId": "jfseries"})
@@ -269,7 +285,8 @@ class Endpoint(Delete):
         status, data = self.ask("GET", "/delete?item=jfmovie")
         self.assertEqual((status, data["kind"]), (200, "movie"))
         self.assertEqual(self.ask("GET", "/delete?item=nope")[0], 404)
-        for bad in ({"item": "../x"}, {}, {"item": "jfmovie", "season": "1"}, {"item": "jfmovie", "exclude": "yes"}, [], "x"):
+        for bad in ({"item": "../x"}, {}, {"item": "jfmovie", "season": "1"}, {"item": "jfmovie", "exclude": "yes"},
+                    {"item": "jfmovie", "stop": "yes"}, [], "x"):
             self.assertEqual(self.post(bad)[0], 400, bad)
         # Not the dashboard's own request
         self.assertEqual(self.ask("POST", "/delete", json.dumps({"item": "jfmovie"}),

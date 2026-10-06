@@ -49,6 +49,13 @@ class Jellyfin:
             self._user = (self.get("Users") or [{}])[0].get("Id", "")
         return self._user
 
+    def now_playing(self) -> set | None:
+        """Paths being played right now; None when Jellyfin didn't answer"""
+        try:
+            return {(s.get("NowPlayingItem") or {}).get("Path") for s in self.get("Sessions") or [] if s.get("NowPlayingItem")}
+        except c.HTTP_ERRORS:
+            return None
+
     def user_data(self, item: str) -> list | None:
         """Every user's watch state of <item> (played, position); None when
         Jellyfin didn't answer"""
