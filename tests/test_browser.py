@@ -162,6 +162,17 @@ class Dashboard(unittest.TestCase):
         self.assertEqual(out[2], ["In your library", "Not in your library"])
         self.assertEqual(out[3][0], "true:Sintel 2")   # one row for Sintel, with Play (matched by TMDB id)
 
+    def test_clicking_a_result_row_opens_it(self):
+        out = self.run_steps([
+            {"js": "var s=document.getElementById('search'); s.value='bunny'; s.dispatchEvent(new Event('input')); return true", "wait": 0},
+            {"until": "document.querySelectorAll('.sr-item').length > 1"},
+            # Where each row's link goes, swapped for a mark this page can see
+            {"js": "document.querySelectorAll('.sr-act').forEach((a,i)=>{if(a.href) a.href='#opened-'+i}); return true"},
+            {"js": "[...document.querySelectorAll('.sr-item')].find(r=>r.textContent.includes('Big Buck Bunny')).querySelector('span').click(); return true", "wait": 300},
+            {"js": "return location.hash"},
+        ])
+        self.assertTrue(out[4].startswith("#opened-"), out[4])   # the title, not just the Request link
+
     def test_delete_and_stop_looking_dialogs_send_the_right_request(self):
         out = self.run_steps([
             {"js": "document.querySelector('[data-delete=\"jf1\"]').click(); return true", "wait": 0},

@@ -39,7 +39,7 @@
   .lib-filter input:focus{border-color:var(--gold-med)}
   .search-results{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--surface2);border:1px solid var(--border);border-radius:10px;max-height:420px;overflow:auto;z-index:50;display:none}
   .sr-group{font-size:0.62rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--text3);padding:0.6rem 0.9rem 0.3rem}
-  .sr-item{display:flex;justify-content:space-between;gap:0.8rem;padding:0.5rem 0.9rem;font-size:0.85rem}
+  .sr-item{display:flex;justify-content:space-between;gap:0.8rem;padding:0.5rem 0.9rem;font-size:0.85rem;cursor:pointer;user-select:none}
   .sr-item:hover{background:var(--surface)}
   .tag{font-size:0.7rem;color:var(--text2);white-space:nowrap}
   .actions{display:flex;gap:0.5rem;flex-shrink:0}
@@ -1026,6 +1026,14 @@
       cancelSearch();clearTimeout(stimer);
       if(sq.value.trim().length<2){sr.style.display='none';return;}
       stimer=setTimeout(search,300);
+    });
+    // The whole row opens it: Play when it's in your library, else its page
+    // in Requests; the buttons on the right keep their own actions
+    sr.addEventListener('click',function(e){
+      if(e.target.closest('a,button'))return;
+      var row=e.target.closest('.sr-item');if(!row)return;
+      var go=row.querySelector('a.sr-act.play')||row.querySelector('a.sr-act');
+      if(go){sr.style.display='none';go.click();}   // a link click: the app opens it on the right page
     });
     sq.addEventListener('keydown',function(e){if(e.key==='Escape'){cancelSearch();clearTimeout(stimer);sr.style.display='none';sq.blur();}});
     document.addEventListener('click',function(e){if(!e.target.closest('.search-wrap')){cancelSearch();clearTimeout(stimer);sr.style.display='none';}});
