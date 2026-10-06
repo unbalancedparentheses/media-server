@@ -38,10 +38,12 @@ class Fits(unittest.TestCase):
         cover = info(stream(0, "video", "h264"), stream(1, "video", "mjpeg", disposition={"attached_pic": 1}),
                      stream(2, "audio", "ac3"), stream(3, "attachment", "png", tags={"mimetype": "image/png"}))
         self.assertEqual(rp.fits(cover)[1], "")
+        self.assertEqual(rp.fits(info(stream(0, "video", "av1"), stream(1, "audio", "flac")))[1], "")   # converted where unsupported anyway
 
     def test_what_stays_mkv(self):
         cases = {
             "video in vp9": info(stream(0, "video", "vp9"), stream(1, "audio", "aac")),
+            "audio in opus": info(stream(0, "video", "av1"), stream(1, "audio", "opus")),
             "audio in dts": info(stream(0, "video", "hevc"), stream(1, "audio", "dts"), stream(2, "audio", "aac")),
             "audio in truehd": info(stream(0, "video", "h264"), stream(1, "audio", "truehd")),
             "subtitles in ass": info(stream(0, "video", "h264"), stream(1, "audio", "aac"), stream(2, "subtitle", "ass")),

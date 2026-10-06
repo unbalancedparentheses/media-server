@@ -4,10 +4,9 @@ Jellyfin repacking them on the fly while you watch. The picture and sound
 are copied as they are: nothing is re-encoded.
 
 Only a file that fits MP4 whole, so nothing is lost:
-- video H.264 or HEVC (HEVC tagged hvc1, which Apple's players want);
-- every audio track in a format MP4 holds and Apple plays (AAC, AC-3,
-  E-AC-3, MP3, ALAC): one with DTS or TrueHD stays MKV, since dropping
-  that track would lose the surround sound;
+- video H.264, HEVC (tagged hvc1, which Apple's players want) or AV1;
+- every audio track in a format MP4 holds well (AAC, AC-3, E-AC-3, MP3,
+  ALAC, FLAC): one with DTS or TrueHD stays MKV;
 - subtitles only as plain text, saved first as .srt files next to the
   video (Jellyfin shows those the same way). Styled subtitles (ASS, with
   their fonts) and picture subtitles stay MKV;
@@ -28,8 +27,12 @@ from typing import Callable
 
 NIGHT = range(1, 7)            # local hours it runs in (1:00 to 6:59)
 PER_ROUND = 2
-VIDEO = {"h264", "hevc"}
-AUDIO = {"aac", "ac3", "eac3", "mp3", "alac"}
+# AV1 and FLAC too: a device that can't decode them has Jellyfin convert
+# that track whatever the container, so MP4 costs nothing there. DTS and
+# TrueHD stay MKV: MP4 can carry them, but players that pass them through
+# to a receiver handle them less well in MP4
+VIDEO = {"h264", "hevc", "av1"}
+AUDIO = {"aac", "ac3", "eac3", "mp3", "alac", "flac"}
 PLAIN_TEXT = {"subrip", "webvtt", "mov_text", "text"}
 
 
@@ -51,11 +54,11 @@ def fits(info: dict) -> tuple[list, str]:
     if not video:
         return [], "no video track"
     if any(s.get("codec_name") not in VIDEO for s in video):
-        return [], f"video in {video[0].get('codec_name')}, not H.264 or HEVC"
+        return [], f"video in {video[0].get('codec_name')}, not H.264, HEVC or AV1"
     audio = [s for s in streams if s.get("codec_type") == "audio"]
     other = sorted({s.get("codec_name") or "?" for s in audio if s.get("codec_name") not in AUDIO})
     if other:
-        return [], f"audio in {', '.join(other)}, which MP4 can't carry for Apple's players"
+        return [], f"audio in {', '.join(other)}, which players handle less well in MP4"
     subtitles = [s for s in streams if s.get("codec_type") == "subtitle"]
     kept = sorted({s.get("codec_name") or "?" for s in subtitles if s.get("codec_name") not in PLAIN_TEXT})
     if kept:
