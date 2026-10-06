@@ -26,6 +26,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
     var window: NSWindow!
     var services: [Service] = []
     var views: [Int: WKWebView] = [:]
+    // Where a page was going when it sent you to its login (Seerr drops it):
+    // taken up once you're past the login
+    var afterLogin: [Int: URL] = [:]
+    var lastAsked: [Int: URL] = [:]
+    var watchers: [NSKeyValueObservation] = []
     var current = 0
     let picker = NSSegmentedControl()
     let container = NSView()
@@ -122,6 +127,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         v.uiDelegate = self
         v.pageZoom = zoom(i)
         if let url = URL(string: services[i].url) { v.load(URLRequest(url: url)) }
+        // Page changes without a reload too (Seerr after its login)
+        watchers.append(v.observe(\.url, options: [.new]) { [weak self] view, _ in
+            DispatchQueue.main.async { self?.landed(i, view.url) }
+        })
         container.addSubview(v)
         views[i] = v
         return v
@@ -134,10 +143,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         let v = page(i)
         for (j, other) in views { other.isHidden = j != i }
         v.frame = container.bounds
-        if let url = url { v.load(URLRequest(url: url)) }
+        if let url = url {
+            lastAsked[i] = url
+            v.load(URLRequest(url: url))
+        }
         window.title = i == 0 ? "Media Server" : "Media Server · \(services[i].name)"
         window.makeFirstResponder(v)
         updateButtons()
+    }
+
+    static func isLogin(_ url: URL?) -> Bool {
+        let path = url?.path.lowercased() ?? ""
+        return path.hasPrefix("/login") || path.hasPrefix("/signin") || path.hasPrefix("/auth")
+    }
+
+    func landed(_ i: Int, _ url: URL?) {
+        guard let url = url else { return }
+        if AppDelegate.isLogin(url) {
+            // Sent to the login: remember where it was going (not the front page)
+            if let wanted = lastAsked[i], !AppDelegate.isLogin(wanted), wanted.path != "/" { afterLogin[i] = wanted }
+        } else if let wanted = afterLogin.removeValue(forKey: i), url != wanted {
+            views[i]?.load(URLRequest(url: wanted))
+        }
     }
 
     func updateButtons() {
@@ -171,6 +198,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
             // Off this Mac: your browser (but a page's own redirects stay)
             if action.navigationType == .linkActivated { NSWorkspace.shared.open(url); return decisionHandler(.cancel) }
             return decisionHandler(.allow)
+        }
+        if action.navigationType == .linkActivated, let from = views.first(where: { $0.value === webView })?.key,
+           !AppDelegate.isLogin(url) {
+            lastAsked[from] = url
         }
         if action.navigationType == .linkActivated, let target = service(for: url),
            let from = views.first(where: { $0.value === webView })?.key, target != from {
