@@ -91,7 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         poll()
-        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.poll() }
+        refreshServerStatus()
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.poll(); self?.refreshServerStatus() }
     }
 
     // Closing the window keeps it running (the badge and notifications);
@@ -338,6 +339,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         done([.banner, .sound])
     }
 
+    // ─── The services: stop, start, restart everything ───────────
+    // The launchd agents setup installed (~/Library/LaunchAgents/
+    // org.media-server.*.plist), driven with launchctl as the user they
+    // belong to. Stopped ones start again at the next login.
+
+    let serverStatus = NSMenuItem(title: "Checking the services…", action: nil, keyEquivalent: "")
+
+    func agents() -> [(label: String, plist: String)] {
+        let dir = NSHomeDirectory() + "/Library/LaunchAgents"
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        return names.filter { $0.hasPrefix("org.media-server.") && $0.hasSuffix(".plist") }.sorted()
+            .map { (String($0.dropLast(".plist".count)), dir + "/" + $0) }
+    }
+
+    @discardableResult
+    func launchctl(_ args: [String]) -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        p.arguments = args
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return -1 }
+        p.waitUntilExit()
+        return p.terminationStatus
+    }
+
+    var domain: String { "gui/\(getuid())" }
+
+    func loaded(_ label: String) -> Bool { launchctl(["print", "\(domain)/\(label)"]) == 0 }
+
+    func refreshServerStatus() {
+        DispatchQueue.global().async { [self] in
+            let all = agents()
+            let up = all.filter { loaded($0.label) }.count
+            DispatchQueue.main.async {
+                self.serverStatus.title = all.isEmpty ? "No services installed"
+                    : up == all.count ? "All \(all.count) services running"
+                    : up == 0 ? "All services stopped" : "\(up) of \(all.count) services running"
+            }
+        }
+    }
+
+    func confirm(_ title: String, _ text: String, _ button: String, then action: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = text
+        alert.addButton(withTitle: button)
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { if $0 == .alertFirstButtonReturn { action() } }
+    }
+
+    // Runs off the main thread (stopping waits for each service), then says
+    // how it went and reloads the page once things are back
+    func serverAction(_ doing: String, _ done: String, reload: Bool, _ work: @escaping ((label: String, plist: String)) -> Bool) {
+        serverStatus.title = doing
+        window.title = "Media Server · \(doing)"
+        DispatchQueue.global().async { [self] in
+            let failed = agents().filter { !work($0) }.map { $0.label.replacingOccurrences(of: "org.media-server.", with: "") }
+            DispatchQueue.main.async {
+                self.window.title = self.current == 0 ? "Media Server" : "Media Server · \(self.services[self.current].name)"
+                self.refreshServerStatus()
+                if !failed.isEmpty {
+                    let alert = NSAlert()
+                    alert.messageText = "Some services didn't respond"
+                    alert.informativeText = failed.joined(separator: ", ") + "\n\nTry again, or run nix run .#status in the media-server folder."
+                    alert.beginSheetModal(for: self.window)
+                } else {
+                    self.notify(done, "", open: self.services[0].url)
+                }
+                if reload {
+                    // The services take a moment to answer again
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 15) { self.views.values.forEach { $0.reload() } }
+                }
+            }
+        }
+    }
+
+    @objc func restartAll(_ sender: Any?) {
+        confirm("Restart everything?", "Every service restarts: what's playing stops for a moment, and downloads resume on their own.",
+                "Restart") { [self] in
+            serverAction("Restarting…", "Everything restarted", reload: true) { agent in
+                self.loaded(agent.label) ? self.launchctl(["kickstart", "-k", "\(self.domain)/\(agent.label)"]) == 0
+                    : self.launchctl(["bootstrap", self.domain, agent.plist]) == 0
+            }
+        }
+    }
+
+    @objc func stopAll(_ sender: Any?) {
+        confirm("Stop everything?", "Nothing plays, downloads or answers until you start it again (Server → Start Everything) or log in again. The Mac may sleep.",
+                "Stop") { [self] in
+            serverAction("Stopping…", "Everything stopped", reload: false) { agent in
+                !self.loaded(agent.label) || self.launchctl(["bootout", "\(self.domain)/\(agent.label)"]) == 0
+            }
+        }
+    }
+
+    @objc func startAll(_ sender: Any?) {
+        serverAction("Starting…", "Everything started", reload: true) { agent in
+            self.loaded(agent.label) || self.launchctl(["bootstrap", self.domain, agent.plist]) == 0
+        }
+    }
+
     // ─── Toolbar ─────────────────────────────────────────────────
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -496,6 +599,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
             go.append(m)
         }
         add("Go", go)
+        serverStatus.isEnabled = false
+        add("Server", [
+            serverStatus,
+            .separator(),
+            item("Restart Everything…", #selector(restartAll(_:)), "r", [.command, .shift], target: self),
+            item("Stop Everything…", #selector(stopAll(_:)), "", target: self),
+            item("Start Everything", #selector(startAll(_:)), "", target: self),
+        ])
         add("View", [
             item("Actual Size", #selector(actualSize(_:)), "0", target: self),
             item("Zoom In", #selector(zoomIn(_:)), "=", target: self),
