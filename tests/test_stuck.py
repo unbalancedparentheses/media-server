@@ -270,6 +270,17 @@ class Recovery(unittest.TestCase):
         self.assertNotIn("upgrades", self.state)
         self.assertFalse(any(p.startswith("wanted/cutoff") for m, p, b in self.radarr.calls))
 
+    def test_a_blocked_release_says_which_rules_scored_it(self):
+        releases = [release(rejections=["Custom Formats Upscaled, LQ with score of -20000 is below minimum"]),
+                    release(rejections=["Custom Formats score of -10000 is below minimum"])]
+        releases[0].update(title="Film.2020.1080p.Upscaled-BAD", seeders=40, customFormatScore=-20000,
+                           customFormats=[{"name": "Upscaled"}, {"name": "LQ"}])
+        releases[1].update(title="Film.2020.720p-X", seeders=3, customFormatScore=-10000, customFormats=[{"name": "LQ"}])
+        d = stuck.classify(releases, False)
+        self.assertEqual(d["code"], "filters")
+        self.assertIn("best-shared: Film.2020.1080p.Upscaled-BAD scored -20000 (Upscaled, LQ)", d["text"])
+        self.assertEqual([e["title"] for e in d["examples"]], ["Film.2020.1080p.Upscaled-BAD", "Film.2020.720p-X"])
+
     def test_looks_that_find_nothing_come_less_often(self):
         # Nothing found each time: 12 h, then a day, two days, four, up to a week
         for hour in range(24 * 40):

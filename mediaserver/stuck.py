@@ -144,6 +144,21 @@ def kind_of(reason: str) -> str:
     return next((k for k, words in REASONS if any(w in low for w in words)), "other")
 
 
+def scored(releases: list, limit: int = 3) -> list:
+    """The most-shared releases with their score and the custom formats that
+    made it, and why each was turned down: [{"title", "score", "formats", "rejections"}]"""
+    top = sorted(releases, key=lambda r: -(r.get("seeders") or 0))[:limit]
+    return [{"title": r.get("title", "?"), "score": r.get("customFormatScore", 0),
+             "formats": [f.get("name") for f in r.get("customFormats") or [] if f.get("name")],
+             "rejections": list(r.get("rejections") or [])[:3]} for r in top]
+
+
+def score_note(example: dict) -> str:
+    """ "best-shared: Title scored -10000 (Upscaled, LQ)" """
+    formats = ", ".join(example["formats"][:3])
+    return f"best-shared: {example['title'][:70]} scored {example['score']}" + (f" ({formats})" if formats else "")
+
+
 def classify(releases: list, indexers_down: bool) -> dict:
     """{"code", "text", "action", "found", …} from an interactive search's results"""
     if not releases:
@@ -162,7 +177,8 @@ def classify(releases: list, indexers_down: bool) -> dict:
         for k in kinds:
             counts[k] = counts.get(k, 0) + 1
     code = max(counts, key=lambda k: (counts[k], k != "other"))
-    out = {"found": len(releases), "kinds": counts}
+    examples = scored(releases)
+    out = {"found": len(releases), "kinds": counts, "examples": examples}
     if code == "other":
         reason = next((x for r in releases for x in r.get("rejections") or []), "turned down")
         out.update(code="other", text=f"{len(releases)} releases found, none suitable: {reason}",
@@ -173,8 +189,11 @@ def classify(releases: list, indexers_down: bool) -> dict:
         qualities = sorted({((r.get("quality") or {}).get("quality") or {}).get("name", "") for r in releases} - {""})
         if qualities:
             text += f" (found: {', '.join(qualities[:4])})"
-    out.update(code=code, text=f"{text} ({len(releases)} found)" if code != "quality" else text, action=action,
-               only_quality=set(counts) == {"quality"})
+    text = f"{text} ({len(releases)} found)" if code != "quality" else text
+    if code == "filters" and examples:
+        # Which rules did it: the release with the most seeders, scored
+        text += "; " + score_note(examples[0])
+    out.update(code=code, text=text, action=action, only_quality=set(counts) == {"quality"})
     return out
 
 

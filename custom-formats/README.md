@@ -42,6 +42,8 @@ Ours:
   ANi, …), common with anime. Releases marked English or multi-sub, or not
   marked at all, are unaffected.
 
-To update the TRaSH ones, copy newer versions of those files from the TRaSH
-repo. Any other JSON file in the TRaSH custom-format format dropped here is
+To update the TRaSH ones: `nix run .#trash-sync` (in the checkout) takes
+each rule from TRaSH's latest commit by its `trash_id`, keeping our scores,
+profiles and names; a weekly GitHub job runs it and opens a pull request
+when something changed. Any other JSON file in the TRaSH custom-format format dropped here is
 applied the same way on the next `nix run .#install`.

@@ -1,0 +1,28 @@
+name: TRaSH sync
+
+# Weekly: refresh custom-formats/ from TRaSH Guides; a pull request (tested
+# by CI) when a rule changed
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Sync
+        run: nix run .#trash-sync
+      - name: Pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: trash-sync
+          title: "Custom formats: TRaSH Guides update"
+          commit-message: "Custom formats: TRaSH Guides update (nix run .#trash-sync)"
+          body: "The release rules TRaSH Guides changed since the last sync. Our scores, profiles and names are kept."

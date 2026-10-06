@@ -364,6 +364,20 @@
         backup = app pkgs [ "--backup" ];
         restore = app pkgs [ "--restore" ];
         update = app pkgs [ "--update" ];
+        # Refresh custom-formats/ from TRaSH Guides (run in the checkout; a
+        # weekly GitHub job opens a pull request with it)
+        trash-sync = {
+          type = "app";
+          program = nixpkgs.lib.getExe (
+            pkgs.writeShellApplication {
+              name = "media-server-trash-sync";
+              runtimeInputs = [ pkgs.python3 ];
+              text = ''
+                PYTHONPATH="${self}" PYTHONDONTWRITEBYTECODE=1 python3 -m mediaserver.trash "$@"
+              '';
+            }
+          );
+        };
         # --check FILE / --fix FILE: the post-import checks and fixes by hand
         postimport = {
           type = "app";

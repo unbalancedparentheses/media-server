@@ -287,6 +287,8 @@ Picture-based subtitles inside files (Blu-ray PGS, DVD VobSub) don't count: brow
 | `fallback_resolution` | `""` | Off unless set (`"720p"` or `"480p"`): a title stuck for a week whose releases are all turned down only for their quality gets a copy of its profile that also allows this resolution; nothing else in the profile changes (Sonarr sets profiles per series, so for a series it's the whole series) |
 | `rename_files` | `true` | Name imports `Show - S01E01 - Title` and `Movie (Year)`, so Jellyfin always gets season and episode numbers. Turning it on renames the existing library once; library files are hard links, so seeding is unaffected. |
 
+The rules come from [TRaSH Guides](https://trash-guides.info); `nix run .#trash-sync` refreshes them (a weekly GitHub job opens a pull request when TRaSH changed one), keeping our scores. When releases are turned down by the rules, the dashboard says which ones scored the best-shared release down (e.g. "scored -10000 (Upscaled, LQ)").
+
 Always on: BR-DISK images, known-bad groups, upscales, extras-only, 3D, and releases tagged with non-English subtitles (VOSTFR, BIG5, CHS, …) are scored -10000, so they're never grabbed; for anime, raw releases without subtitles and low-quality groups too. See [`custom-formats/`](custom-formats/README.md). Release names and groups make Japanese audio and full subtitles very likely for anime, not certain.
 
 </details>
