@@ -333,6 +333,16 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 </details>
 
 <details>
+<summary><b><code>[vpn]</code>: optional kill switch for downloads</b></summary>
+
+| Setting | Default | What it does |
+|---|---|---|
+| `enabled` | `false` | Keep your VPN app; when it's connected, qBittorrent is bound to its interface, so torrents only go through the VPN and stop at once if it drops (qBittorrent has no network then), and SABnzbd is paused while it's down. netwatch checks every minute and follows a VPN that reconnects under another interface; the dashboard and a notification say when downloads are blocked |
+| `interface` | `""` | `""` finds the VPN's interface (the tunnel internet traffic leaves through: `utun…`, `ipsec…`); or a fixed name such as `"utun4"` |
+
+</details>
+
+<details>
 <summary><b><code>[app]</code></b></summary>
 
 | Setting | Default | What it does |

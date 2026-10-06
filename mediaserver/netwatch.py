@@ -153,6 +153,11 @@ class Netwatch:
             self.changes()
 
     def changes(self) -> None:
+        from mediaserver import vpn
+        try:
+            vpn.keep(self.state_dir, vpn.Clients(self.config))   # [vpn]: the kill switch, at every round
+        except (OSError, ValueError) as e:
+            c.log(f"couldn't check the VPN: {e}")
         if self.state == "offline":
             if not self.set_cleaner(False):
                 c.log("couldn't pause Cleanuparr's queue cleaner (retrying)")

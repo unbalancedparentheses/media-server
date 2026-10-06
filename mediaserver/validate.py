@@ -126,6 +126,7 @@ SCHEMA = {
         "tailscale_https": boolean,
     },
     "app": {"enabled": boolean, "dock": boolean},
+    "vpn": {"enabled": boolean, "interface": string(nonempty=False)},
     "disk": {"warn_free_gb": integer(lo=0), "min_free_gb": integer(lo=0), "pause_downloads": boolean, "reserve_gb": integer(lo=0)},
     "cleanuparr": {"enabled": boolean, "stalled_strikes": integer(lo=3)},
     "library": {

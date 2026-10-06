@@ -181,7 +181,8 @@ class Doctor:
                     dubs[item["SeriesName"]] = dubs.get(item["SeriesName"], 0) + 1
             if dubs:
                 self.note("Anime with no Japanese audio track: " + ", ".join(f"{t} ({n} episodes)" for t, n in sorted(dubs.items())),
-                          "If you want Japanese audio, Sonarr → the series → Interactive Search for a Dual Audio or Japanese release (delete the current files first)")
+                          "Replaced on its own when a Japanese or Dual Audio release is found (nothing is deleted first); "
+                          "to pick one now, Sonarr → the series → Interactive Search")
             else:
                 self.good("Anime made in Japanese: every episode has Japanese audio")
         # Preferred-language subtitles only as pictures: browsers can't show

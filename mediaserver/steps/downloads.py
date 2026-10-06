@@ -114,6 +114,7 @@ def qbittorrent(cfg: Config) -> None:
     else:
         warn("Could not set qBittorrent's preferences (retried next run)")
     set_qbittorrent_password(cfg, q)
+    vpn_settings(cfg)
     # A new listen address only takes effect after a restart
     if old_address and old_address != prefs["web_ui_address"] \
             and launchd.restart(cfg.paths.config, "qbittorrent") and api.wait_for("qBittorrent", q.url):
@@ -259,6 +260,16 @@ def usenet_providers(cfg: Config) -> None:
             ok(f"{name} ({p.get('host')}:{p.get('port')})")
         else:
             warn(f"Could not add {name} to SABnzbd ({answer.get('error') or 'no answer'})")
+
+
+def vpn_settings(cfg: Config) -> None:
+    """[vpn] for netwatch, which keeps the kill switch (mediaserver/vpn.py)"""
+    want = {"enabled": cfg.flag("vpn.enabled", False), "interface": cfg.get("vpn.interface", "") or ""}
+    path = cfg.paths.state / "netwatch/vpn.json"
+    if c.read_json(path, None) != want:
+        c.write_json(path, want, mode=0o644)
+    if want["enabled"]:
+        ok("VPN kill switch on: qBittorrent bound to the VPN, SABnzbd paused while it's down (netwatch, every minute)")
 
 
 def sabnzbd_login(cfg: Config) -> None:

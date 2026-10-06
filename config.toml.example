@@ -102,6 +102,19 @@ admin_bind = "0.0.0.0"
 dashboard_port = 80
 tailscale_https = true
 
+# ─── VPN (optional) ────────────────────────────────────────────
+# enabled: a kill switch for downloads. Your VPN app stays as it is; when
+#   it's connected, qBittorrent is bound to its interface (traffic only
+#   through the VPN, none at all if it drops), and SABnzbd is paused while
+#   it's down. Checked every minute by netwatch; the dashboard says when
+#   downloads are blocked.
+# interface: "" finds it (the tunnel internet traffic goes through:
+#   utun…); or a name, such as "utun4", if yours is fixed.
+
+[vpn]
+enabled = false
+interface = ""
+
 # ─── Mac app ───────────────────────────────────────────────────
 # enabled: ~/Applications/Media Server.app: the dashboard, Moonfin, Seerr
 #   and the admin pages in one window (built with Xcode's Command Line

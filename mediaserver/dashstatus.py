@@ -288,6 +288,10 @@ class Collector:
         if conn == "offline":
             out.append({"level": "warn", "text": "The Mac is offline: nothing can download, and Cleanuparr is paused",
                         "action": "It resumes on its own when the connection is back"})
+        vpn = c.read_json(self.state / "netwatch/vpn-status.json", None)
+        if vpn and vpn.get("up") is False:
+            out.append({"level": "error", "text": "The VPN is down: downloads are blocked until it reconnects",
+                        "action": "Reconnect your VPN app; or set enabled = false under [vpn] in config.toml"})
         paused = c.read_json(self.state / "diskwatch/paused.json", None)
         if paused:
             out.append({"level": "error", "text": f"Downloads paused for space: {free} GB free",
