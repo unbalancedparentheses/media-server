@@ -138,6 +138,8 @@
   .btn.danger-outline:hover{background:var(--red);color:#111}
   .lib-filter{padding:0.6rem 1.2rem 0}
   .lib-filter input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:0.5rem 0.7rem;font:inherit;font-size:0.8rem}
+  .auto-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:0.7rem 1.2rem;border-top:1px solid #12121a}
+  .unf-head{padding:0.8rem 1.2rem 0.2rem;font-size:0.72rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--text3, #7a7a9a)}
   .lib-list{max-height:32rem;overflow-y:auto;padding:0.4rem 0}
   .lib-row{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:0.55rem 1.2rem;border-top:1px solid #12121a}
   .sr-act.del{background:none;border:none;color:var(--red);font:inherit;font-size:0.72rem;cursor:pointer;padding:0.2rem 0}
@@ -341,6 +343,17 @@
 
     <div id="view-manage" class="hidden">
     <div class="section" id="attention-manage"></div>
+
+    <div class="section">
+      <div class="panel">
+        <div class="p-head"><div class="p-head-title">Automation</div><div class="p-head-sub" id="auto-sub"></div></div>
+        <div class="auto-row"><div><b>Searches</b> <span class="i-sub" id="pause-searches"></span><div class="i-sub">for missing titles, why they're stuck, Japanese audio and upgrades (new releases still arrive)</div></div>
+          <span><button class="btn" data-pause="searches" data-for="24h">Pause 24 h</button> <button class="btn hidden" data-pause="searches" data-for="resume">Resume</button></span></div>
+        <div class="auto-row"><div><b>Repairs</b> <span class="i-sub" id="pause-repairs"></span><div class="i-sub">file fixes and MP4 repackaging (new downloads are still checked)</div></div>
+          <span><button class="btn" data-pause="repairs" data-for="morning">Pause until morning</button> <button class="btn hidden" data-pause="repairs" data-for="resume">Resume</button></span></div>
+        <div id="unfinished"></div>
+      </div>
+    </div>
 
     <div class="section">
       <div class="panel">
@@ -574,6 +587,29 @@
       }).join(''):'<div class="empty">Nothing matches</div>';
     }
     document.getElementById('library-filter').addEventListener('input',renderLibrary);
+    // Pausing searches or repairs for a while, and work left unfinished
+    function renderAutomation(s){
+      var paused=s.paused||{};
+      ['searches','repairs'].forEach(function(k){
+        var until=paused[k],label=document.getElementById('pause-'+k);
+        label.textContent=until?'· paused until '+new Date(until*1000).toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'}):'· running';
+        document.querySelectorAll('[data-pause="'+k+'"]').forEach(function(b){b.classList.toggle('hidden',(b.getAttribute('data-for')==='resume')!==!!until);});
+      });
+      var list=s.unfinished||[];
+      document.getElementById('auto-sub').textContent=list.length?plural(list.length,'thing')+' unfinished':'nothing unfinished';
+      document.getElementById('unfinished').innerHTML=list.length?'<div class="unf-head">Unfinished</div>'+list.map(function(u){
+        return'<div class="lib-row"><div class="i-info"><div>'+esc(u.what)+'</div><div class="i-sub">left: '+esc(u.left)+(u.error?' · '+esc(u.error):'')+'</div></div><span class="i-sub">'+esc(u.retry)+'</span></div>';
+      }).join(''):'';
+    }
+    document.addEventListener('click',function(e){
+      var b=e.target.closest('[data-pause]');if(!b)return;
+      b.disabled=true;
+      fetch('/api/control/pause',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'media-server'},
+        body:JSON.stringify({what:b.getAttribute('data-pause'),for:b.getAttribute('data-for')})})
+        .then(function(r){return r.json();}).then(function(j){b.disabled=false;if(lastStatus){lastStatus.paused=j.paused||{};renderAutomation(lastStatus);}})
+        .catch(function(){b.disabled=false;});
+    });
+
     // Missing for weeks with nothing usable found: delete the film / stop
     // looking for the season, or pick a release in Sonarr/Radarr
     function renderAbandoned(){
@@ -768,6 +804,7 @@
       renderSpeed(s.speed_limit,false);
       renderLibrary();
       renderAbandoned();
+      renderAutomation(s);
 
       if(s.because){
         show('because-sec',s.because.length>0);

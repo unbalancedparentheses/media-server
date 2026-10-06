@@ -239,6 +239,13 @@ class Doctor:
         if (self.paths.config / "sonarr-anime/sonarr.db").exists() and not (state / "sonarr-anime-migrated").exists():
             self.need("The old anime Sonarr's series were never merged into Sonarr",
                       "nix run .#install explains how (with the last version that merges them)")
+        from mediaserver import pause, unfinished
+        for item in unfinished.collect(state):
+            self.note(f"Unfinished: {item['what']} (left: {item['left']}{'; ' + item['error'] if item['error'] else ''})",
+                      f"Tried again {item['retry']}" if not item["retry"].startswith(("do ", "run ")) else item["retry"].capitalize())
+        for what, when in pause.status(state).items():
+            self.note(f"{what.capitalize()} are paused until {time.strftime('%a %H:%M', time.localtime(when))}",
+                      "Resume them on the dashboard's Manage page")
         owner = c.read_text(state / "lock/pid")
         if owner:
             if c.operation_running(state / "lock"):

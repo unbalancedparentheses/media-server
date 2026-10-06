@@ -387,6 +387,29 @@ def parse_delete(body: bytes) -> tuple[str, int | None, bool, bool] | str:
     return item, season, exclude, stop
 
 
+def parse_pause(body: bytes, now: float | None = None) -> tuple[str, float] | str:
+    """{"what": "searches"|"repairs", "for": "24h"|"morning"|"resume"} →
+    (what, when it resumes; 0 = now)"""
+    import time
+
+    from mediaserver import pause
+    try:
+        data = json.loads(body or b"{}")
+    except ValueError:
+        return "not JSON"
+    if not isinstance(data, dict) or data.get("what") not in pause.KINDS:
+        return '"what" must be "searches" or "repairs"'
+    now = time.time() if now is None else now
+    length = data.get("for")
+    if length == "resume":
+        return data["what"], 0
+    if length == "24h":
+        return data["what"], now + 86400
+    if length == "morning":
+        return data["what"], pause.next_morning(now)
+    return '"for" must be "24h", "morning" or "resume"'
+
+
 def parse(body: bytes) -> tuple[bool, int, int] | str:
     """(limited, down, up) from a request, or what's wrong with it"""
     try:
@@ -441,6 +464,9 @@ def handler(speed: Speed, library: Library | None = None):
                 return self.answer(403, {"error": "only on the Mac running the server"})
             if self.path == "/speed":
                 return self.answer(200, speed.state())
+            if self.path == "/pause":
+                from mediaserver import pause
+                return self.answer(200, {"paused": pause.status(lib.state)})
             if self.path.startswith("/delete?item="):
                 # What deleting would remove, for the confirmation
                 item = self.path.split("=", 1)[1]
@@ -463,7 +489,7 @@ def handler(speed: Speed, library: Library | None = None):
             return None
 
         def do_POST(self):
-            if self.path not in ("/speed", "/delete"):
+            if self.path not in ("/speed", "/delete", "/pause"):
                 return self.answer(404, {"error": "not found"})
             if not from_this_mac(self.headers):
                 return self.answer(403, {"error": "only on the Mac running the server"})
@@ -474,6 +500,13 @@ def handler(speed: Speed, library: Library | None = None):
             body = self.rfile.read(min(length, 10_000))
             if self.path == "/delete":
                 return self.delete(body)
+            if self.path == "/pause":
+                from mediaserver import pause
+                parsed_pause = parse_pause(body)
+                if isinstance(parsed_pause, str):
+                    return self.answer(400, {"error": parsed_pause})
+                pause.set_pause(lib.state, *parsed_pause)
+                return self.answer(200, {"paused": pause.status(lib.state)})
             parsed = parse(body)
             if isinstance(parsed, str):
                 return self.answer(400, {"error": parsed})

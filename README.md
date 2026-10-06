@@ -86,7 +86,7 @@ Run `nix run .#install` again whenever you like: it only changes what differs fr
 **The dashboard** (Home, or `http://localhost` on the Mac; it answers nowhere else, since it has no login and can delete titles):
 
 - **Home:** search your library and everything you could request, in one box (press `/`). Below that: continue watching, *Watch tonight* (unstarted titles, filtered by type and length), *Because you watched* and *Worth watching* (well-rated new films, series and anime, each marked ▶ Play or ＋ Request), recently added, your requests with where each one is, and *Your library* with sizes and Delete.
-- **Manage:** what needs attention and what to do about it, downloads with a speed limit switch, library health (files fixed, rejected, waiting for a better release), titles *not found for weeks* (delete a film, stop looking for a season, which deletes nothing, or pick a release by hand), and the server: services, disk, indexers, CPU and memory, Tailscale.
+- **Manage:** what needs attention and what to do about it; **Automation**: pause the searches for 24 hours or the file repairs until morning (each resumes on its own), and any **unfinished** work (a conversion mid-way, a deletion not finished, a fix being retried, downloads paused for space) with what's left and when it's tried again (`nix run .#doctor` lists the same); downloads with a speed limit switch, library health (files fixed, rejected, waiting for a better release), titles *not found for weeks* (delete a film, stop looking for a season, which deletes nothing, or pick a release by hand), and the server: services, disk, indexers, CPU and memory, Tailscale.
 
 ![The Manage page: downloads, and the server's state at a glance](docs/manage.jpg)
 

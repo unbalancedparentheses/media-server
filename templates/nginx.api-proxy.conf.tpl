@@ -84,3 +84,15 @@ location = /api/control/delete {
     proxy_pass $upstream_delete;
     proxy_read_timeout 120s;
 }
+
+# Pausing searches or repairs for a while (mediaserver/pause.py). Same guards.
+location = /api/control/pause {
+    limit_except GET POST { deny all; }
+    allow 127.0.0.1;
+    allow ::1;
+    deny all;
+    limit_req zone=api burst=10 nodelay;
+    client_max_body_size 4k;
+    set $upstream_pause http://127.0.0.1:8099/pause;
+    proxy_pass $upstream_pause;
+}

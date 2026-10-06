@@ -69,7 +69,7 @@ from pathlib import Path
 from typing import Any
 
 from mediaserver import common as c
-from mediaserver import lock, playback, stuck
+from mediaserver import lock, pause, playback, stuck
 from mediaserver import repackage as rp
 from mediaserver.config import local
 from mediaserver.common import background, log, read_json
@@ -884,6 +884,8 @@ class Worker:
         while a fix couldn't run (no space) or failed: it's retried later
         (a failing fix FIX_TRIES times, at most every RETRY_FIX_AFTER)."""
         s = self.settings
+        if pause.paused(STATE.parent, "repairs"):
+            return False   # not marked done: fixed once repairs resume
         changed, done, failed = False, True, []
         audio_language = self.audio_language_for(path)
         if s["stereo_audio"] and path.suffix.lower() in VIDEO_EXTENSIONS:
@@ -1080,6 +1082,8 @@ class Worker:
 
     def sweep(self):
         """Steps 2 to 4 for files already in the library, a few per round"""
+        if pause.paused(STATE.parent, "repairs"):
+            return
         done = 0
         seen = self.state["seen"]
         for root in self.settings["library_dirs"]:
@@ -1124,7 +1128,7 @@ class Worker:
         failed rescan left unfinished are finished first, at any hour."""
         for key in list(self.state.get("repackage_pending", {})):
             self.finish_repackage(key)
-        if not self.settings.get("repackage_mp4", True) or not rp.night(now):
+        if not self.settings.get("repackage_mp4", True) or not rp.night(now) or pause.paused(STATE.parent, "repairs"):
             return
         skip = self.state.setdefault("repackage_skip", {})
         jf = playback.Jellyfin(STATE.parent)

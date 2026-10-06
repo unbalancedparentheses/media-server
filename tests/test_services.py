@@ -138,6 +138,7 @@ class DashboardTests(Library):
         self.assertEqual(set(col.slow_data()) & set(dashmedia.MEDIA_PARTS), set())
         self.assertIsInstance(status["library"], dict)
         self.assertIsInstance(status["library_titles"], list)
+        self.assertEqual((status["unfinished"], status["paused"]), ([], {}))
 
 
 class FullChecks(Library):

@@ -595,8 +595,11 @@ def explain(item: dict, now: float | None = None) -> str:
 
 def run(apps: list, settings: dict, state_file, offline: bool) -> Any:
     """One round from the postimport loop (it times itself: hourly)"""
-    if offline:
-        return None
+    from pathlib import Path
+
+    from mediaserver import pause
+    if offline or pause.paused(Path(state_file).parent.parent, "searches"):
+        return None   # offline, or searches paused from the dashboard
     state = c.read_json(state_file, {}) or {}
     if not isinstance(state, dict):
         state = {}

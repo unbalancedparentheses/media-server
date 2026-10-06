@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from mediaserver import common as c
-from mediaserver import control, dashmedia, launchd
+from mediaserver import control, dashmedia, launchd, pause, unfinished
 from mediaserver.config import PORTS, local
 
 
@@ -355,7 +355,8 @@ class Collector:
                 "connection": c.read_text(self.state / "netwatch/connection") or "unknown",
                 "jellyfin_up": 200 <= c.status_code(f"{local('jellyfin')}/health") < 400,
                 "speed_limit": control.Speed(self.config).state(),
-                "fixing": dashmedia.fixing_now(self.state)}
+                "fixing": dashmedia.fixing_now(self.state),
+                "unfinished": unfinished.collect(self.state), "paused": pause.status(self.state)}
         slow = self.slow or {}
         status = {**fast, **slow, **(self.media_data or {}), "attention": self.attention(fast, slow, torrents or []),
                   "updated": int(time.time()), "slow_updated": self.slow_at}
