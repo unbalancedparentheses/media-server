@@ -190,7 +190,9 @@ def services(cfg: Config) -> None:
     m = manifest()
     p = cfg.paths
     subst = {"@MEDIA@": str(p.media), "@CONFIG@": str(p.config), "@STATE@": str(p.state), "@ADMIN_BIND@": admin_bind(cfg),
-             "@DISK_WARN_GB@": str(cfg.disk_warn_gb), "@DISK_MIN_GB@": str(cfg.disk_min_gb)}
+             "@DISK_WARN_GB@": str(cfg.disk_warn_gb), "@DISK_MIN_GB@": str(cfg.disk_min_gb),
+             "@DISK_RESERVE_GB@": str(cfg.get("disk.reserve_gb", 20)),
+             "@DISK_PAUSE@": "true" if cfg.flag("disk.pause_downloads", True) else "false"}
     # Each restart is recorded before its agent is replaced: an install
     # interrupted from there on (while writing, a service that won't stop,
     # Ctrl-C) leaves agents that no longer look changed, and the next run

@@ -347,6 +347,8 @@ There's no built-in VPN. If you use one, run its Mac app; torrent traffic follow
 |---|---|---|
 | `warn_free_gb` | `50` | Show a macOS notification (at most every 6 hours) when free space drops below this |
 | `min_free_gb` | `10` | Sonarr and Radarr stop importing below this (downloads in progress can still use more space) |
+| `pause_downloads` | `true` | Below `min_free_gb` + `reserve_gb` free, pause the downloads in progress (qBittorrent's downloading torrents, not seeding ones, and SABnzbd), with a notification and a dashboard notice; they resume on their own once there's 10 GB more. Only what it paused is resumed. Checked every 2 minutes |
+| `reserve_gb` | `20` | Room kept free above `min_free_gb` for imports and the file fixes, which write a new copy before removing the old one |
 
 </details>
 

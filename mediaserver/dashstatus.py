@@ -288,6 +288,10 @@ class Collector:
         if conn == "offline":
             out.append({"level": "warn", "text": "The Mac is offline: nothing can download, and Cleanuparr is paused",
                         "action": "It resumes on its own when the connection is back"})
+        paused = c.read_json(self.state / "diskwatch/paused.json", None)
+        if paused:
+            out.append({"level": "error", "text": f"Downloads paused for space: {free} GB free",
+                        "action": f"They resume on their own above {paused.get('resume_gb', '?')} GB; delete something to free space"})
         if free < disk.get("min_gb", 10):
             out.append({"level": "error", "text": f"Only {free} GB free: imports have stopped", "action": "Delete something in Sonarr or Radarr"})
         elif free < disk.get("warn_gb", 50):

@@ -143,7 +143,7 @@
 
           # Placeholders filled in by setup.sh when it writes the launchd agents:
           # @MEDIA@ (~/media), @CONFIG@ (~/media/config), @STATE@ (~/media/.state),
-          # @ADMIN_BIND@, @DISK_WARN_GB@, @DISK_MIN_GB@
+          # @ADMIN_BIND@, @DISK_WARN_GB@, @DISK_MIN_GB@, @DISK_RESERVE_GB@, @DISK_PAUSE@
           services = {
             jellyfin.args = [
               (exe pkgs.jellyfin)
@@ -256,6 +256,8 @@
                 DISKWATCH_STATE = "@STATE@/diskwatch";
                 DISK_WARN_GB = "@DISK_WARN_GB@";
                 DISK_MIN_GB = "@DISK_MIN_GB@";
+                DISK_RESERVE_GB = "@DISK_RESERVE_GB@";
+                DISK_PAUSE = "@DISK_PAUSE@";
               };
             };
             # Keeps the Mac from sleeping while it's plugged in (-s holds only

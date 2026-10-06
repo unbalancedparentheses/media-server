@@ -120,6 +120,8 @@ dock = true
 [disk]
 warn_free_gb = 50
 min_free_gb = 10
+pause_downloads = true    # below min_free_gb + reserve_gb, pause the downloads in progress (resumed 10 GB above it)
+reserve_gb = 20           # room kept for imports and file fixes (they write a new copy before removing the old)
 
 # ─── Stuck downloads (Cleanuparr) ────────────────────────────────
 # Every 5 minutes Cleanuparr checks the download queue and removes public
