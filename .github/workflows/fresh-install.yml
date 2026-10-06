@@ -31,6 +31,17 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
 
+      # Uploads what this run builds (Seerr and SABnzbd are built from
+      # source on a Mac) to the binary cache new installs download from.
+      # Only once the repo has a CACHIX_CACHE variable and a
+      # CACHIX_AUTH_TOKEN secret (Settings → Secrets and variables → Actions)
+      - name: Binary cache
+        if: vars.CACHIX_CACHE != ''
+        uses: cachix/cachix-action@v15
+        with:
+          name: ${{ vars.CACHIX_CACHE }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
       # The previous run's Nix store. Keyed on what decides the builds; a
       # change restores the closest older store and rebuilds only what
       # changed. Before saving, garbage beyond 7 GB (build-only leftovers)

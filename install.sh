@@ -39,6 +39,23 @@ else
   ok "Cloned to $DEST"
 fi
 
+# Prebuilt services: when the repo names a binary cache (nix-cache.conf,
+# filled by CI), Nix is told about it once, so the first install downloads
+# what it would otherwise build (Seerr, SABnzbd) instead of taking half an hour
+if [ -f "$DEST/nix-cache.conf" ]; then
+  custom=/etc/nix/nix.custom.conf
+  [ -f "$custom" ] || custom=/etc/nix/nix.conf
+  substituter=$(sed -n 's/^extra-substituters *= *//p' "$DEST/nix-cache.conf")
+  if [ -n "$substituter" ] && ! grep -qF "$substituter" "$custom" 2>/dev/null; then
+    info "Adding the prebuilt services cache to Nix (asks for your Mac password)..."
+    if sudo sh -c "cat '$DEST/nix-cache.conf' >> '$custom'"; then
+      sudo launchctl kickstart -k system/systems.determinate.nix-daemon 2>/dev/null \
+        || sudo launchctl kickstart -k system/org.nixos.nix-daemon 2>/dev/null || true
+      ok "Prebuilt services from $substituter"
+    fi
+  fi
+fi
+
 info "Running setup (asks for your passwords)..."
 cd "$DEST"
 exec "${NIX[@]}" run .#install

@@ -443,6 +443,21 @@ Public torrents are often thinly shared; Usenet is faster and more reliable, but
 - **`nix run .#unit`** runs about 520 tests that need no real services: every setup step against fake versions of the services (a fresh install, a re-run that changes nothing, a changed config), the post-import checks on real media files, the dashboard's data, and the failure paths: interrupted password changes, backup and restore through `setup.sh`, an older install's unmerged anime Sonarr, Cleanuparr's login safeguard, Tailscale route removal, plugin repositories that can't be read, the operation lock, and the whole e2e test, including its cleanup and indexer restore when a service doesn't answer. The dashboard is also tested in a real browser engine (WebKit, as in Safari and the app; `tests/webcheck.swift`): it's loaded against a stand-in server and clicked through, checking that the rows and the library list render, that filters and search work, and that the delete, stop-looking and pause buttons send the right requests. It fails if test coverage drops below 85%. CI runs it on every push, with pyright (types) and ruff (lint; settings in `ruff.toml`). `nix develop` has all three, and the ffmpeg the media-file tests use.
 - **Fresh install** ([`.github/workflows/fresh-install.yml`](.github/workflows/fresh-install.yml)), on every push to main on a clean GitHub Mac (only the Nix store is reused between runs, so the services aren't rebuilt each time): install → checks → a re-run that must change nothing → a config change → an invalid config that must be rejected → e2e → doctor → backup and restore → uninstall, which must leave nothing behind.
 
+### Prebuilt services (binary cache)
+
+Seerr and SABnzbd have no prebuilt macOS version in Nix's own cache, so a first install builds them, which is most of its half hour. A binary cache that CI fills makes that a download:
+
+1. Create a free cache at [cachix.org](https://www.cachix.org) (open source is free), for example `media-server`.
+2. In the GitHub repo: Settings → Secrets and variables → Actions: a **variable** `CACHIX_CACHE` with its name, and a **secret** `CACHIX_AUTH_TOKEN` with a token from Cachix. The clean-Mac CI then uploads what it builds.
+3. Commit a `nix-cache.conf` with the cache's two lines from its Cachix page:
+
+   ```
+   extra-substituters = https://media-server.cachix.org
+   extra-trusted-public-keys = media-server.cachix.org-1:…
+   ```
+
+   `install.sh` adds them to Nix's settings once (it asks for the Mac password), so new installs download instead of building. If you install with `nix run .#install` directly, append the file to `/etc/nix/nix.custom.conf` yourself (`sudo`).
+
 ### Files
 
 ```
