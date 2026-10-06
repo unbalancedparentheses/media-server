@@ -56,6 +56,13 @@ from mediaserver.pins import fallback_name, profile_origin
 
 RUN_EVERY = 3600
 SEARCHES_PER_RUN = 3
+# One budget an hour for each app, shared by everything that asks its
+# indexers: searches for what's missing, the look-only diagnosis, the look
+# for Japanese audio and upgrade searches (in that order of priority)
+SEARCHES_PER_HOUR = 4
+QUEUE_BUSY = 8                  # with this many downloads queued, an app isn't asked to search
+UPGRADE_WAIT = 7 * 86400        # an upgrade search, then twice as long each time…
+MAX_UPGRADE_WAIT = 60 * 86400   # …up to two months
 DIAGNOSES_PER_RUN = 2           # look-only release searches an hour
 DIAGNOSE_AFTER = 86400          # missing this long before it's looked into
 DIAGNOSE_EVERY = 12 * 3600      # and not again sooner (it queries the indexers)
@@ -193,6 +200,10 @@ def wait_after(searches: int, missing_for: float = 0) -> int:
     return min(3600 * 2 ** max(searches - 1, 0), longest)
 
 
+def upgrade_wait(searches: int) -> int:
+    return min(UPGRADE_WAIT * 2 ** max(searches - 1, 0), MAX_UPGRADE_WAIT)
+
+
 def look_wait(looks: int) -> int:
     """Before the next look-only search, after <looks> that found nothing usable"""
     return min(DIAGNOSE_EVERY * 2 ** max(looks - 1, 0), MAX_LOOK_WAIT)
@@ -204,6 +215,18 @@ class Stuck:
         self.settings, self.state = settings, state
         self.now = time.time() if now is None else now
         state.setdefault("items", {})
+        per_hour = settings.get("searches_per_hour", SEARCHES_PER_HOUR)
+        self.budget = {name: per_hour for name in self.apps}
+        self.queued: dict[str, int] = {}
+
+    def spend(self, app: str) -> bool:
+        """One indexer search from <app>'s budget this hour; False when it's
+        used up, or the app has a full download queue (searching more then
+        only piles up downloads)"""
+        if self.queued.get(app, 0) >= QUEUE_BUSY or self.budget.get(app, 0) <= 0:
+            return False
+        self.budget[app] -= 1
+        return True
 
     # ─── What's missing ──────────────────────────────────────────
 
@@ -212,9 +235,12 @@ class Stuck:
         out: set = set()
         radarr, sonarr = self.apps.get("Radarr"), self.apps.get("Sonarr")
         if radarr:
-            out |= {f"radarr:{q.get('movieId')}" for q in (radarr.call("GET", "queue?pageSize=500") or {}).get("records") or []}
+            records = (radarr.call("GET", "queue?pageSize=500") or {}).get("records") or []
+            self.queued["Radarr"] = len(records)
+            out |= {f"radarr:{q.get('movieId')}" for q in records}
         if sonarr:
             records = (sonarr.call("GET", "queue?pageSize=500&includeEpisode=true") or {}).get("records") or []
+            self.queued["Sonarr"] = len(records)
             out |= {f"sonarr:{q.get('seriesId')}:{(q.get('episode') or {}).get('seasonNumber', q.get('seasonNumber'))}" for q in records}
         return out
 
@@ -298,14 +324,19 @@ class Stuck:
         self.diagnose(missing)
         if self.settings.get("block_dubs", True):
             self.replace_dubs(downloading)
+        self.upgrades()
         self.fallback(missing)
         self.retest_indexers()
 
     def search(self, missing: dict) -> None:
         items = self.state["items"]
         due = sorted((k for k in missing if items[k]["next_search"] <= self.now), key=lambda k: items[k]["next_search"])
-        for key in due[:SEARCHES_PER_RUN]:
+        asked = 0
+        for key in due:
             m, item = missing[key], items[key]
+            if asked >= SEARCHES_PER_RUN or not self.spend(m["app"]):
+                continue
+            asked += 1
             try:
                 self.apps[m["app"]].call("POST", "command", m["search"])
             except c.HTTP_ERRORS as e:
@@ -328,8 +359,12 @@ class Stuck:
                and ("diagnosed_at" not in items[k] and "look_tried" not in items[k]
                     or self.now - last_look(items[k]) >= look_wait(items[k].get("looks", 0)))]
         due.sort(key=lambda k: last_look(items[k]))
-        for key in due[:DIAGNOSES_PER_RUN]:
+        looked = 0
+        for key in due:
             m, item = missing[key], items[key]
+            if looked >= DIAGNOSES_PER_RUN or not self.spend(m["app"]):
+                continue
+            looked += 1
             app = self.apps[m["app"]]
             # Counted before asking: a look that doesn't finish still cost
             # the indexers (Sonarr goes on searching after we stop waiting)
@@ -346,6 +381,55 @@ class Stuck:
                 item["next_search"] = self.now   # it'd be grabbed: search now rather than wait
                 item["looks"] = 0
             c.log(f"{m['title']}: {item['diagnosis']['text']}")
+
+    # ─── Upgrades ────────────────────────────────────────────────
+
+    def cutoff_unmet(self) -> dict:
+        """key → {"app", "title", "search"}: films and seasons whose files are
+        below their profile's cutoff (Sonarr/Radarr's Wanted → Cutoff Unmet)"""
+        out: dict = {}
+        radarr, sonarr = self.apps.get("Radarr"), self.apps.get("Sonarr")
+        if radarr:
+            for m in (radarr.call("GET", "wanted/cutoff?page=1&pageSize=200&monitored=true") or {}).get("records") or []:
+                out[f"radarr:{m['id']}"] = {"app": "Radarr", "title": f"{m.get('title')} ({m.get('year')})",
+                                            "search": {"name": "MoviesSearch", "movieIds": [m["id"]]}}
+        if sonarr:
+            page = sonarr.call("GET", "wanted/cutoff?page=1&pageSize=500&monitored=true&includeSeries=true") or {}
+            for e in page.get("records") or []:
+                key = f"sonarr:{e.get('seriesId')}:{e.get('seasonNumber')}"
+                item = out.setdefault(key, {"app": "Sonarr", "search": {"name": "EpisodeSearch", "episodeIds": []},
+                                            "title": f"{(e.get('series') or {}).get('title', 'Series')} season {e.get('seasonNumber')}"})
+                item["search"]["episodeIds"].append(e["id"])
+        return out
+
+    def upgrades(self) -> None:
+        """library.search_upgrades: what's below its profile's cutoff is
+        searched for a better release with what's left of the hour's budget,
+        each title a week apart, then twice as long each time (Sonarr/Radarr
+        only take a release that's an upgrade)"""
+        if not self.settings.get("search_upgrades", True):
+            self.state.pop("upgrades", None)
+            return
+        try:
+            wanted = self.cutoff_unmet()
+        except c.HTTP_ERRORS:
+            return
+        ups = self.state.setdefault("upgrades", {})
+        for key in [k for k in ups if k not in wanted]:
+            ups.pop(key)   # upgraded, or no longer wanted
+        due = sorted((k for k in wanted if ups.get(k, {}).get("next", 0) <= self.now), key=lambda k: ups.get(k, {}).get("next", 0))
+        for key in due:
+            u = wanted[key]
+            if not self.spend(u["app"]):
+                continue
+            try:
+                self.apps[u["app"]].call("POST", "command", u["search"])
+            except c.HTTP_ERRORS as e:
+                if not timed_out(e):
+                    continue
+            done = ups.get(key, {}).get("searches", 0) + 1
+            ups[key] = {"title": u["title"], "searches": done, "last": self.now, "next": self.now + upgrade_wait(done)}
+            c.log(f"looking for a better release of {u['title']} (next in {upgrade_wait(done) // 86400} days)")
 
     def fallback(self, missing: dict) -> None:
         """quality.fallback_resolution: only when set, after a week of
@@ -422,6 +506,8 @@ class Stuck:
         due = [k for k in seasons if f"sonarr:{k[0]}:{k[1]}" not in downloading and not looked_lately(k)]
         due.sort(key=lambda k: dubs.get(f"{k[0]}:{k[1]}", {}).get("looked_at", 0))
         for sid, season in due[:1]:
+            if not self.spend("Sonarr"):
+                break
             entry = dubs.setdefault(f"{sid}:{season}", {"looks": 0})
             files = seasons[(sid, season)]["files"]
             entry.update(title=seasons[(sid, season)]["title"], episodes=len(files))

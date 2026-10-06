@@ -229,6 +229,47 @@ class Recovery(unittest.TestCase):
         self.round(0)
         self.assertEqual(self.state["items"]["radarr:1"]["searches"], 0)
 
+    def test_one_budget_an_hour_per_app(self):
+        self.settings["searches_per_hour"] = 2
+        self.movies[0]["added"] = "1970-01-01T00:00:00Z"   # missing long enough to be diagnosed too
+        self.releases["release?movieId=1"] = [release()]
+        self.round(5 * DAY)
+        radarr_asks = [p for m, p, b in self.radarr.calls if p == "command" or p.startswith("release")]
+        self.assertEqual(len(radarr_asks), 2)   # searches and looks share the 2
+
+    def test_nothing_searched_while_the_queue_is_full(self):
+        self.downloading = [101 + i for i in range(stuck.QUEUE_BUSY)]
+        self.round(0)
+        self.assertEqual(self.searches(self.radarr), [])
+        self.assertTrue(self.searches(self.sonarr))   # Sonarr's queue isn't full
+
+    def test_upgrades_with_the_budget_left_weekly_then_less_often(self):
+        self.movies = []   # nothing missing: the whole budget is free
+        self.episodes = []
+        cutoff = {"records": [{"id": 2, "title": "Have", "year": 2020}]}
+        answers = self.radarr.answers
+        self.radarr.answers = lambda m, p, b: cutoff if p.startswith("wanted/cutoff") else answers(m, p, b)
+        self.round(0)
+        self.assertEqual(self.searches(self.radarr), [{"name": "MoviesSearch", "movieIds": [2]}])
+        self.assertEqual(self.state["upgrades"]["radarr:2"]["next"], 7 * DAY)
+        for day in range(1, 7):
+            self.round(day * DAY)
+        self.assertEqual(len(self.searches(self.radarr)), 1)   # not again within the week
+        self.round(7 * DAY)
+        self.assertEqual(len(self.searches(self.radarr)), 2)
+        self.assertEqual(self.state["upgrades"]["radarr:2"]["next"], 7 * DAY + 14 * DAY)
+        cutoff["records"] = []   # upgraded
+        self.round(8 * DAY)
+        self.assertNotIn("radarr:2", self.state["upgrades"])
+        self.assertEqual([stuck.upgrade_wait(n) for n in (1, 2, 3, 4, 5)], [7 * DAY, 14 * DAY, 28 * DAY, 56 * DAY, 60 * DAY])
+
+    def test_upgrades_off(self):
+        self.settings["search_upgrades"] = False
+        self.state["upgrades"] = {"radarr:2": {"next": 0}}
+        self.round(0)
+        self.assertNotIn("upgrades", self.state)
+        self.assertFalse(any(p.startswith("wanted/cutoff") for m, p, b in self.radarr.calls))
+
     def test_looks_that_find_nothing_come_less_often(self):
         # Nothing found each time: 12 h, then a day, two days, four, up to a week
         for hour in range(24 * 40):

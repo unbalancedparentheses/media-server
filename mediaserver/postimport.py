@@ -97,6 +97,8 @@ DEFAULTS = {
     "search_missing": True,
     "fallback_resolution": "",
     "repackage_mp4": True,
+    "searches_per_hour": 4,
+    "search_upgrades": True,
 }
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".m4v"}
 # Audio every browser plays; anything else makes Jellyfin convert

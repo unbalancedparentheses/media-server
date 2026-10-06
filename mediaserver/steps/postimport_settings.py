@@ -28,6 +28,8 @@ def settings(cfg: Config) -> dict:
         "search_missing": cfg.flag("library.search_missing", True),
         "fallback_resolution": cfg.get("quality.fallback_resolution", ""),
         "repackage_mp4": cfg.flag("library.repackage_mp4", True),
+        "searches_per_hour": cfg.get("library.searches_per_hour", 4),
+        "search_upgrades": cfg.flag("library.search_upgrades", True),
     }
 
 

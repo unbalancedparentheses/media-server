@@ -136,6 +136,8 @@ SCHEMA = {
         "max_replacements": integer(lo=0, hi=20),
         "search_missing": boolean,
         "repackage_mp4": boolean,
+        "searches_per_hour": integer(lo=1, hi=30),
+        "search_upgrades": boolean,
     },
 }
 INDEXER = {
