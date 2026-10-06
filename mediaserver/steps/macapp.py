@@ -177,9 +177,19 @@ def icns(png: bytes) -> bytes | None:
 
 # ─── The app ─────────────────────────────────────────────────────
 
+def checkout() -> str:
+    """The media-server checkout setup runs from (where `nix run .#update`
+    works), for the app's Update item; "" when it can't tell"""
+    import os
+    for candidate in (os.environ.get("MEDIA_SERVER_REPO", ""), os.getcwd()):
+        if candidate and (Path(candidate) / "flake.nix").is_file() and (Path(candidate) / ".git").exists():
+            return str(Path(candidate).resolve())
+    return ""
+
+
 def stamp(services: list[dict], native: bool) -> str:
     """What the app contains, to tell when it needs rewriting"""
-    what = json.dumps(services) + info_plist(native).decode() + ICON_VERSION
+    what = json.dumps(services) + checkout() + info_plist(native).decode() + ICON_VERSION
     what += SOURCE.read_text() if native else launcher(services[0]["url"])
     return hashlib.sha256(what.encode()).hexdigest()
 
@@ -209,6 +219,7 @@ def build(services: list[dict], app: Path | None = None) -> str:
     exe.chmod(0o755)
     (new / "Contents/Info.plist").write_bytes(info_plist(native))
     (new / "Contents/Resources/services.json").write_text(json.dumps(services, indent=1) + "\n")
+    (new / "Contents/Resources/server.json").write_text(json.dumps({"repo": checkout()}) + "\n")
     icon = icns(icon_png())
     if icon:
         (new / "Contents/Resources/icon.icns").write_bytes(icon)

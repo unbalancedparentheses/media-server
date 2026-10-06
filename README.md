@@ -131,7 +131,7 @@ Every setting is explained in [`config.toml.example`](config.toml.example) and u
 
 ## Updates, backups, uninstall
 
-- **Update:** `nix run .#update` backs up, pulls the latest version and re-runs setup. Service versions are pinned in `flake.lock`; Renovate opens a pull request when there are updates, once the [Renovate app](https://github.com/apps/renovate) is installed on the repository.
+- **Update:** `nix run .#update` (or *Server → Update…* in the app) backs up, pulls the latest version and re-runs setup. If the new version fails its checks, it goes back on its own: the previous commit, the pre-update backup (a newer service may have upgraded its database) and setup again, and says so. With local changes in the checkout it doesn't pull, so there's nothing to roll back. Service versions are pinned in `flake.lock`; Renovate opens a pull request when there are updates, once the [Renovate app](https://github.com/apps/renovate) is installed on the repository.
 - **Back up:** `nix run .#backup` saves all settings, accounts and watch history (not the media) to `~/media/backups`, keeping the last 10. Backups contain passwords: keep a copy on another disk.
 - **Restore:** `nix run .#restore -- ~/media/backups/<file>.tar.gz`, then `nix run .#install`.
 - **Uninstall:** `nix run .#uninstall` removes every service, and the app with its Dock tile. `-- --purge` also deletes settings, logs and state. Your films, shows, downloads and backups are never deleted. Afterwards, `nix-collect-garbage` frees the space the apps used.

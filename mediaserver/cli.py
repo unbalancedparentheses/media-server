@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from mediaserver import common as c
 from mediaserver import doctor, e2e, lock, maintenance, tailscale, validate, verify
 from mediaserver.config import Config, default_paths, load_toml
 from mediaserver.steps import arrs
@@ -261,10 +262,18 @@ def install(o: Options) -> int:
     for name in INSTALL:
         timed(name, run_step, cfg, name)
     failed = verify.main(cfg)
+    rolled_back = os.environ.get("MEDIA_ROLLED_BACK")
+    if rolled_back:
+        warn(f"The update was rolled back: {rolled_back}")
+        c.notify("Media server: update rolled back", rolled_back)
     if failed:
+        # Right after an update: back to the previous version (doesn't return)
+        maintenance.roll_back(cfg, failed)
         print(f"\n\033[1;31m  Setup finished, but {failed} verification check(s) failed (see above).\033[0m")
         print("  Fix the cause and re-run 'nix run .#install', or check again with 'nix run .#test'.\n")
         return 1
+    if os.environ.get("MEDIA_UPDATE_ROLLBACK") == "1":
+        maintenance.rollback_file(cfg).unlink(missing_ok=True)   # the update checked out: nothing to go back to
     summary(cfg, hostname, time.time() - started, times)
     open_dashboard_once(cfg, o.yes)
     return 0

@@ -177,28 +177,79 @@ def restore(cfg: Config, file: str, yes: bool) -> None:
 
 # ─── Update ──────────────────────────────────────────────────────
 
+def git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, check=False)
+
+
+def rollback_file(cfg: Config) -> Path:
+    return cfg.paths.state / "update-rollback.json"
+
+
 def update(cfg: Config, yes: bool) -> None:
     """Versions are pinned in flake.lock, so updating means pulling this
     repo and re-running setup, which rewrites the agents to the new Nix
-    store paths"""
+    store paths. If the new version's checks fail, setup goes back to the
+    previous commit and the pre-update backup (roll_back)."""
     repo = Path(os.environ.get("MEDIA_SERVER_REPO") or os.getcwd())
     in_git = subprocess.run(["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"], capture_output=True, check=False)
     if not (repo / "flake.nix").exists() or in_git.returncode:
         raise err("Run this from your media-server checkout (or set MEDIA_SERVER_REPO)")
+    saved = None
     if cfg.paths.config.is_dir():
         info("Creating pre-update backup...")
-        backup(cfg)
+        saved = backup(cfg)
     info(f"Updating {repo}...")
-    if subprocess.run(["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
-                      capture_output=True, text=True, check=False).stdout.strip():
+    before = git(repo, "rev-parse", "HEAD").stdout.strip()
+    pulled = False
+    if git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip():
         warn(f"Local changes in {repo}; not pulling (commit or stash them to update)")
     elif subprocess.run(["git", "-C", str(repo), "pull", "--ff-only"], check=False).returncode:
         warn("git pull failed; continuing with the current version")
+    else:
+        pulled = True
+    after = git(repo, "rev-parse", "HEAD").stdout.strip()
+    env = dict(os.environ)
+    if pulled and before and after != before and saved:
+        # What to go back to if the new version's checks fail
+        c.write_json(rollback_file(cfg), {"repo": str(repo), "from": before, "to": after, "backup": str(saved)})
+        env["MEDIA_UPDATE_ROLLBACK"] = "1"
+        ok(f"Updated {before[:7]} → {after[:7]}; if its checks fail, setup goes back to {before[:7]}")
+    elif pulled:
+        ok("Already up to date")
     info("Re-running setup...")
     # The re-run takes the lock itself
     lock.release(cfg.paths.state)
-    os.execvp("nix", ["nix", "--extra-experimental-features", "nix-command flakes", "run", f"path:{repo}#install", "--",
-                      *(["--yes"] if yes else [])])
+    os.execvpe("nix", ["nix", "--extra-experimental-features", "nix-command flakes", "run", f"path:{repo}#install", "--",
+                       *(["--yes"] if yes else [])], env)
+
+
+def roll_back(cfg: Config, failed: int) -> bool:
+    """After an update whose checks failed: the previous commit, the
+    pre-update backup (a newer service may have upgraded its database), and
+    setup again on the old version. False when there's nothing to go back
+    to (it isn't an update, or the record is gone)."""
+    record = c.read_json(rollback_file(cfg), None)
+    if not record or os.environ.get("MEDIA_UPDATE_ROLLBACK") != "1":
+        return False
+    repo = Path(record["repo"])
+    print(f"\n\033[1;33m  The update to {record['to'][:7]} failed {failed} check(s): going back to {record['from'][:7]}\033[0m")
+    if git(repo, "status", "--porcelain", "--untracked-files=no").stdout.strip() or \
+            git(repo, "rev-parse", "HEAD").stdout.strip() != record["to"]:
+        warn(f"{repo} changed since the update; not rolling back (go back by hand: git reset --hard {record['from'][:7]}, "
+             f"then nix run .#restore -- {record['backup']})")
+        rollback_file(cfg).unlink(missing_ok=True)
+        return False
+    if git(repo, "reset", "--hard", record["from"]).returncode:
+        warn("Couldn't go back to the previous commit; nothing was changed")
+        return False
+    restore(cfg, record["backup"], True)
+    rollback_file(cfg).unlink(missing_ok=True)
+    info("Re-running setup on the previous version...")
+    env = {k: v for k, v in os.environ.items() if k != "MEDIA_UPDATE_ROLLBACK"}
+    env["MEDIA_ROLLED_BACK"] = f"{record['to'][:7]} failed {failed} check(s); back on {record['from'][:7]}"
+    lock.release(cfg.paths.state)
+    os.execvpe("nix", ["nix", "--extra-experimental-features", "nix-command flakes", "run", f"path:{repo}#install", "--", "--yes"], env)
+    return True
 
 
 # ─── Uninstall ───────────────────────────────────────────────────

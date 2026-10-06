@@ -435,6 +435,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         }
     }
 
+    // Update: in Terminal, so its progress (and a rollback, if the new
+    // version's checks fail) can be followed
+    @objc func updateServer(_ sender: Any?) {
+        guard let file = Bundle.main.url(forResource: "server", withExtension: "json"),
+              let data = try? Data(contentsOf: file),
+              let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let repo = info["repo"] as? String, !repo.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "Update from the media-server folder"
+            alert.informativeText = "Run nix run .#update in your media-server checkout."
+            alert.beginSheetModal(for: window)
+            return
+        }
+        confirm("Update Media Server?", "It backs up, gets the latest version and sets it up again, in Terminal. If the new version's checks fail, it goes back to this one on its own.",
+                "Update") {
+            let script = FileManager.default.temporaryDirectory.appendingPathComponent("media-server-update.command")
+            let quoted = "'" + repo.replacingOccurrences(of: "'", with: "'\\''") + "'"
+            let text = "#!/bin/zsh -l\ncd \(quoted) && nix run .#update\necho\nread -k1 '?Done. Press a key to close.'\n"
+            try? text.write(to: script, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+            NSWorkspace.shared.open(script)
+        }
+    }
+
     @objc func startAll(_ sender: Any?) {
         serverAction("Starting…", "Everything started", reload: true) { agent in
             self.loaded(agent.label) || self.launchctl(["bootstrap", self.domain, agent.plist]) == 0
@@ -606,6 +630,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
             item("Restart Everything…", #selector(restartAll(_:)), "r", [.command, .shift], target: self),
             item("Stop Everything…", #selector(stopAll(_:)), "", target: self),
             item("Start Everything", #selector(startAll(_:)), "", target: self),
+            .separator(),
+            item("Update…", #selector(updateServer(_:)), "", target: self),
         ])
         add("View", [
             item("Actual Size", #selector(actualSize(_:)), "0", target: self),
