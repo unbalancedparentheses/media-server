@@ -154,38 +154,43 @@ class Dashboard(unittest.TestCase):
 
     def test_search_merges_library_and_requests(self):
         out = self.run_steps([
-            {"js": "var s=document.getElementById('search'); s.value='sintel'; s.dispatchEvent(new Event('input')); return true", "wait": 900},
+            {"js": "var s=document.getElementById('search'); s.value='sintel'; s.dispatchEvent(new Event('input')); return true", "wait": 0},
+            {"until": "document.querySelectorAll('.sr-item').length > 0"},
             {"js": "return [...document.querySelectorAll('.sr-group')].map(g=>g.textContent)"},
             {"js": "return [...document.querySelectorAll('.sr-item')].map(i=>i.textContent.includes('Play')+':'+i.textContent.slice(0,8))"},
         ])
-        self.assertEqual(out[1], ["In your library", "Not in your library"])
-        self.assertEqual(out[2][0], "true:Sintel 2")   # one row for Sintel, with Play (matched by TMDB id)
+        self.assertEqual(out[2], ["In your library", "Not in your library"])
+        self.assertEqual(out[3][0], "true:Sintel 2")   # one row for Sintel, with Play (matched by TMDB id)
 
     def test_delete_and_stop_looking_dialogs_send_the_right_request(self):
         out = self.run_steps([
-            {"js": "document.querySelector('[data-delete=\"jf1\"]').click(); return true", "wait": 600},
+            {"js": "document.querySelector('[data-delete=\"jf1\"]').click(); return true", "wait": 0},
+            {"until": "document.getElementById('del-title').textContent !== 'Delete'"},   # its details arrived
             {"js": "return [document.getElementById('del-title').textContent, document.getElementById('del-go').textContent,"
                    " !document.getElementById('del-hint').classList.contains('hidden')]"},
-            {"js": "document.getElementById('del-cancel').click(); location.hash='#manage'; return true", "wait": 600},
-            {"js": "document.querySelector('[data-stop]').click(); return true", "wait": 600},
+            {"js": "document.getElementById('del-cancel').click(); location.hash='#manage'; return true", "wait": 300},
+            {"js": "document.querySelector('[data-stop]').click(); return true", "wait": 0},
+            {"until": "document.getElementById('del-title').textContent.startsWith('Stop looking for')"},
             {"js": "return [document.getElementById('del-title').textContent, document.getElementById('del-go').textContent,"
                    " document.getElementById('del-hint').classList.contains('hidden')]"},
-            {"js": "document.getElementById('del-go').click(); return true", "wait": 600},
+            {"js": "document.getElementById('del-go').click(); return true", "wait": 0},
+            {"until": "document.getElementById('del-msg').textContent.startsWith('Stopped')"},
         ])
-        self.assertEqual(out[1], ["Delete Sintel (2010)?", "Delete", True])
-        self.assertEqual(out[4], ["Stop looking for Kaiji season 2?", "Stop looking", True])
+        self.assertEqual(out[2], ["Delete Sintel (2010)?", "Delete", True])
+        self.assertEqual(out[6], ["Stop looking for Kaiji season 2?", "Stop looking", True])
+        self.assertTrue(out[8])   # "Stopped looking…" once the server answered
         self.assertIn(("/api/control/delete", {"item": "sonarr13", "season": 2, "stop": True}), Stand.posts)
 
     def test_automation_panel(self):
         out = self.run_steps([
             {"js": "return document.getElementById('auto-sub').textContent"},
             {"js": "return document.querySelectorAll('#unfinished .lib-row').length"},
-            {"js": "document.querySelector('[data-pause=\"searches\"][data-for=\"24h\"]').click(); return true", "wait": 600},
-            {"js": "return document.getElementById('pause-searches').textContent"},
+            {"js": "document.querySelector('[data-pause=\"searches\"][data-for=\"24h\"]').click(); return true", "wait": 0},
+            {"until": "document.getElementById('pause-searches').textContent.includes('paused until')"},
         ], "#manage")
         self.assertEqual(out[0], "1 thing unfinished")
         self.assertEqual(out[1], 1)
-        self.assertIn("paused until", out[3])
+        self.assertTrue(out[3])
         self.assertIn(("/api/control/pause", {"what": "searches", "for": "24h"}), Stand.posts)
 
 
