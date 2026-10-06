@@ -128,7 +128,7 @@ class Config:
     paths: Paths = field(default_factory=default_paths)
 
     @classmethod
-    def load(cls, paths: Paths | None = None) -> "Config":
+    def load(cls, paths: Paths | None = None) -> Config:
         paths = paths or default_paths()
         return cls(load_toml(paths.config_file), paths)
 
@@ -199,6 +199,6 @@ class Keys:
     seerr: str = ""
 
     @classmethod
-    def read(cls, config_dir: Path) -> "Keys":
+    def read(cls, config_dir: Path) -> Keys:
         return cls(c.arr_key(config_dir, "sonarr"), c.arr_key(config_dir, "radarr"), c.arr_key(config_dir, "prowlarr"),
                    c.sabnzbd_key(config_dir), c.seerr_key(config_dir))

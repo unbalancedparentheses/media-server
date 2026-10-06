@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
-from mediaserver import api, creds
+from mediaserver import creds
 from mediaserver import common as c
 from mediaserver.api import ApiError
 from mediaserver.config import Config

@@ -246,10 +246,10 @@ def comparable(cf: dict) -> dict:
     fields to what they read back: ids, labels, help texts)"""
     return {"name": cf.get("name"), "includeCustomFormatWhenRenaming": bool(cf.get("includeCustomFormatWhenRenaming")),
             "specifications": sorted(
-                (json.dumps({"name": sp.get("name"), "implementation": sp.get("implementation"), "negate": bool(sp.get("negate")),
+                json.dumps({"name": sp.get("name"), "implementation": sp.get("implementation"), "negate": bool(sp.get("negate")),
                              "required": bool(sp.get("required")),
                              "fields": {f.get("name"): f.get("value") for f in sp.get("fields") or []}}, sort_keys=True)
-                 for sp in cf.get("specifications") or []))}
+                 for sp in cf.get("specifications") or [])}
 
 
 def preference_score(cfg: Config, name: str, score: int) -> int:

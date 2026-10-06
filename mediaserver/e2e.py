@@ -32,7 +32,8 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from mediaserver import api
 from mediaserver import common as c

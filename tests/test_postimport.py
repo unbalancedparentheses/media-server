@@ -8,7 +8,6 @@ PATH (nix run .#unit provides it).
 
 Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
-import json
 import os
 import shutil
 import subprocess
@@ -462,7 +461,7 @@ class DefaultTracks(unittest.TestCase):
     def test_command_sets_flags_by_track_type(self):
         info = media(audio(1, "eac3", "eng"), audio(2, "aac", "jpn"), sub(3, "subrip", "chi"), sub(4, "subrip", "eng"))
         cmd = pi.defaults_command(self.video, "out", info, {1: "0", 2: "default", 3: "0", 4: "default"})
-        flags = [(cmd[i], cmd[i + 1]) for i, a in enumerate(cmd) if a.startswith("-disposition")]
+        flags = [(a, cmd[i + 1]) for i, a in enumerate(cmd) if a.startswith("-disposition")]
         self.assertEqual(flags, [("-disposition:a:0", "0"), ("-disposition:a:1", "default"),
                                  ("-disposition:s:0", "0"), ("-disposition:s:1", "default")])
 

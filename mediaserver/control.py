@@ -90,7 +90,7 @@ class Speed:
         if c.sabnzbd_key(self.config) and (sab_answer is None or state.get("sabnzbd_limit") is None
                                            or state["sabnzbd_limit"] != want_sab):
             problems.append("SABnzbd")
-        if problems == ["qBittorrent"] or problems == ["qBittorrent", "SABnzbd"]:
+        if problems in (["qBittorrent"], ["qBittorrent", "SABnzbd"]):
             return {"error": f"{' and '.join(problems)} didn't take it", **state}
         if problems:
             state["warning"] = "Applied to qBittorrent, but SABnzbd didn't take it (Usenet downloads keep their old limit)"
@@ -278,9 +278,7 @@ class Library:
         plan = {"title": title["title"], "kind": title["kind"], "id": title["id"], "tmdb": title.get("tmdb"),
                 "season": season, "exclude": exclude, "hashes": hashes, "kept": kept, "files": [], "bytes": title["size"],
                 "warnings": [], "started": int(__import__("time").time())}
-        if title["kind"] == "movie":
-            plan["steps"] = ["queue", "arr", "torrents", "seerr", "refresh"]
-        elif season is None:
+        if title["kind"] == "movie" or season is None:
             plan["steps"] = ["queue", "arr", "torrents", "seerr", "refresh"]
         else:
             files = [f for f in self.arr("sonarr", "GET", f"episodefile?seriesId={title['id']}") or [] if f.get("seasonNumber") == season]
@@ -425,7 +423,7 @@ def from_this_mac(headers) -> bool:
     return all(h in LOOPBACK for h in hops) and len(hops) <= 1
 
 
-def handler(speed: Speed, library: "Library | None" = None):
+def handler(speed: Speed, library: Library | None = None):
     lib: Library = library or Library(speed.config)
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -462,6 +460,7 @@ def handler(speed: Speed, library: "Library | None" = None):
                 except (ApiError, *c.HTTP_ERRORS):
                     return self.answer(502, {"error": "Radarr, Sonarr or Jellyfin isn't answering"})
             self.answer(404, {"error": "not found"})
+            return None
 
         def do_POST(self):
             if self.path not in ("/speed", "/delete"):
@@ -480,6 +479,7 @@ def handler(speed: Speed, library: "Library | None" = None):
                 return self.answer(400, {"error": parsed})
             result = speed.set(*parsed)
             self.answer(502 if "error" in result else 200, result)
+            return None
 
         def delete(self, body: bytes) -> None:
             parsed = parse_delete(body)
@@ -507,6 +507,7 @@ def handler(speed: Speed, library: "Library | None" = None):
                 finally:
                     lock.release(lib.state)
             self.answer(200, result)
+            return None
 
         def log_message(self, format, *args):  # noqa: A002 (the base class's name)
             pass

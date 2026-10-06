@@ -145,7 +145,8 @@ class BackupRestore(Scratch):
         backup, out = quiet(maintenance.backup, self.cfg)
         self.assertEqual(self.running, {"sonarr", "radarr"})   # put back
         self.assertIn("Services restarted: sonarr radarr", out)
-        names = tarfile.open(backup).getnames()
+        with tarfile.open(backup) as archive:
+            names = archive.getnames()
         for record in ("credentials.json", "renamed-sonarr", "e2e/owned.json"):
             self.assertIn(f".state/{record}", names)
         self.assertIn("config/sonarr.db", names)
@@ -300,7 +301,7 @@ class Lock(Scratch):
 
     def test_read_only_modes_dont_lock(self):
         held = []
-        with mock.patch.object(lock, "acquire", lambda s: held.append(s)), mock.patch.object(cli, "run", return_value=0):
+        with mock.patch.object(lock, "acquire", held.append), mock.patch.object(cli, "run", return_value=0):
             cli.main(["--status"])
             cli.main(["--backup"])
             cli.main(["--uninstall", "--dry-run"])
@@ -596,7 +597,8 @@ class EntryPoint(Scratch):
         r = self.run_setup("--backup")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         backup = next(self.paths.backups.glob("media-server_*.tar.gz"))
-        names = tarfile.open(backup).getnames()
+        with tarfile.open(backup) as archive:
+            names = archive.getnames()
         for record in ("credentials.json", "renamed-sonarr", "e2e/owned.json"):
             self.assertIn(f".state/{record}", names)
         (self.paths.state / "renamed-sonarr").unlink()

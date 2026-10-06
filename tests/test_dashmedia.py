@@ -147,13 +147,15 @@ class Pipeline(unittest.TestCase):
 
 class Fixing(unittest.TestCase):
     def setUp(self):
-        import tempfile, shutil
+        import tempfile
+        import shutil
         self.state = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.state)
         (self.state / "postimport").mkdir()
 
     def status(self, current, age=0):
-        import json, time
+        import json
+        import time
         (self.state / "postimport/status.json").write_text(json.dumps({"updated": time.time() - age, "current": current}))
 
     def test_text(self):
@@ -215,7 +217,8 @@ class Display(unittest.TestCase):
 
 class Recommended(unittest.TestCase):
     def setUp(self):
-        import tempfile, shutil
+        import tempfile
+        import shutil
         self.state = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.state)
         patcher = mock.patch.object(dm, "STATE", self.state)
@@ -312,7 +315,8 @@ class StuckDownloads(unittest.TestCase):
 
 class Tonight(unittest.TestCase):
     def setUp(self):
-        import tempfile, shutil
+        import tempfile
+        import shutil
         self.media = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.media)
         patcher = mock.patch.object(dm, "STATE", self.media / ".state")
@@ -362,7 +366,8 @@ class Tonight(unittest.TestCase):
 
 class Because(unittest.TestCase):
     def setUp(self):
-        import tempfile, shutil
+        import tempfile
+        import shutil
         self.state = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.state)
         patcher = mock.patch.object(dm, "STATE", self.state)
@@ -417,7 +422,9 @@ class Because(unittest.TestCase):
 
 class DubStatus(unittest.TestCase):
     def test_health_says_what_the_replacement_is_doing(self):
-        import tempfile, shutil, json
+        import tempfile
+        import shutil
+        import json
         state = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, state)
         (state / "postimport").mkdir()

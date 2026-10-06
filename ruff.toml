@@ -1,0 +1,16 @@
+# nix develop -c ruff check   (CI runs it)
+line-length = 140
+target-version = "py311"   # as pyrightconfig.json
+
+[lint]
+select = ["E", "F", "W", "B", "UP", "SIM", "RET", "PIE", "PL"]
+ignore = [
+    "E501",                                       # long lines: the code wraps where it reads best
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004",   # size/complexity counts
+    "PLC0415",                                    # imports inside functions (startup time, optional tools)
+    "PLW0603",                                    # module state set with global
+    "SIM105",                                     # try/except/pass reads plainer than contextlib.suppress
+    "SIM108",                                     # if/else over a ternary where it reads better
+    "SIM117",                                     # nested with: each lock on its own line
+    "RET504", "RET505",                           # assign-then-return, else after return
+]

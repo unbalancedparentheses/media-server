@@ -175,7 +175,7 @@ class Recovery(unittest.TestCase):
         self.assertEqual(self.state["items"], {})   # no old schedule shown
 
     def test_downloading_keeps_its_history(self):
-        for hour in range(0, 4):
+        for hour in range(4):
             self.round(hour * 3600)
         searches = self.state["items"]["radarr:1"]["searches"]
         self.assertGreater(searches, 0)
@@ -210,7 +210,7 @@ class Recovery(unittest.TestCase):
                 raise urllib.error.URLError(TimeoutError("timed out"))
             return self.radarr_answers(method, path, body)
         self.radarr.answers = slow
-        for hour in range(0, 3):
+        for hour in range(3):
             self.round(hour * 3600)
         asked = [b for m, p, b in self.radarr.calls if p == "command" and b["movieIds"] == [1]]
         # Radarr may have queued each: every one counted, so the waits grow
@@ -231,7 +231,7 @@ class Recovery(unittest.TestCase):
 
     def test_looks_that_find_nothing_come_less_often(self):
         # Nothing found each time: 12 h, then a day, two days, four, up to a week
-        for hour in range(0, 24 * 40):
+        for hour in range(24 * 40):
             self.round(hour * 3600)
         asked = [i for i, (m, p, b) in enumerate(self.radarr.calls) if p == "release?movieId=7"]
         self.assertEqual(self.state["items"]["radarr:7"]["looks"], len(asked))
@@ -245,7 +245,7 @@ class Recovery(unittest.TestCase):
                 raise TimeoutError("timed out")
             return self.radarr_answers(method, path, body)
         self.radarr.answers = timing_out
-        for hour in range(0, 36):   # looked at after a day, then not for 12 h
+        for hour in range(36):   # looked at after a day, then not for 12 h
             self.round(hour * 3600)
         asked = [p for m, p, b in self.radarr.calls if p == "release?movieId=1"]
         self.assertEqual(len(asked), 1)   # not once an hour
@@ -276,7 +276,7 @@ class Recovery(unittest.TestCase):
 
     def test_fallback_only_when_asked_and_after_a_week(self):
         self.releases["release?movieId=1"] = [release(rejections=["Quality is not wanted in profile"])]
-        for day in range(0, 9):
+        for day in range(9):
             self.round(day * DAY)
         self.assertFalse([c for c in self.radarr.calls if c[0] in ("PUT", "POST") and c[1] != "command"])   # not set: never
         self.settings["fallback_resolution"] = "720p"
@@ -305,7 +305,7 @@ class Recovery(unittest.TestCase):
         self.profiles.append(dict(old, id=2))
         self.profiles[0]["minFormatScore"] = 50
         self.releases["release?movieId=1"] = [release(rejections=["Quality is not wanted in profile"])]
-        for day in range(0, 9):
+        for day in range(9):
             self.round(day * DAY)
         puts = [b for m, p, b in self.radarr.calls if m == "PUT" and p == "qualityprofile/2"]
         self.assertEqual(puts[-1]["minFormatScore"], 50)
@@ -318,7 +318,7 @@ class Recovery(unittest.TestCase):
         self.settings["fallback_resolution"] = "720p"
         self.releases["release?movieId=1"] = [release(rejections=["Quality is not wanted in profile"]),
                                               release(rejections=["Language is not wanted in profile"])]
-        for day in range(0, 9):
+        for day in range(9):
             self.round(day * DAY)
         self.assertFalse([c for c in self.radarr.calls if c[0] in ("PUT", "POST") and c[1] != "command"])
 

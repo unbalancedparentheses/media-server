@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 NIGHT = range(1, 7)            # local hours it runs in (1:00 to 6:59)
 PER_ROUND = 2
@@ -135,7 +135,7 @@ def checks_out(old: dict, new: dict | None) -> bool:
             and count(new, "subtitle") == 0 and abs(length(new) - length(old)) <= 2)
 
 
-def unwatched(items: dict, user_data) -> Callable[[object], "bool | None"]:
+def unwatched(items: dict, user_data) -> Callable[[object], bool | None]:
     """A function path → True (nobody started it), False, or None (Jellyfin
     doesn't list it or didn't answer: not now)"""
     def check(path) -> bool | None:

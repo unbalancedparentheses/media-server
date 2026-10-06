@@ -23,12 +23,14 @@ def string(nonempty=True):
             return "must be text (in quotes)"
         if nonempty and not v.strip():
             return "must not be empty"
+        return None
     return check
 
 
 def boolean(v):
     if not isinstance(v, bool):
         return "must be true or false (no quotes)"
+    return None
 
 
 def integer(lo=None, hi=None):
@@ -39,6 +41,7 @@ def integer(lo=None, hi=None):
             return f"must be at least {lo}"
         if hi is not None and v > hi:
             return f"must be at most {hi}"
+        return None
     return check
 
 
@@ -48,6 +51,7 @@ def number(lo=None):
             return "must be a number (no quotes)"
         if lo is not None and v < lo:
             return f"must be at least {lo}"
+        return None
     return check
 
 
@@ -55,6 +59,7 @@ def one_of(*choices):
     def check(v):
         if v not in choices:
             return "must be one of: " + ", ".join(json.dumps(c) for c in choices)
+        return None
     return check
 
 
@@ -68,12 +73,14 @@ def list_of(item, nonempty=False):
             problem = item(x)
             if problem:
                 return f"entry {json.dumps(x)} {problem}"
+        return None
     return check
 
 
 def free_table(v):
     if not isinstance(v, dict):
         return "must be a table, like { apiKey = \"…\" }"
+    return None
 
 
 # section → key → check; REQUIRED lists keys that must be present

@@ -70,6 +70,7 @@ from typing import Any
 
 from mediaserver import common as c
 from mediaserver import lock, playback, stuck
+from mediaserver import repackage as rp
 from mediaserver.config import local
 from mediaserver.common import background, log, read_json
 
@@ -317,14 +318,6 @@ def stereo_command(path, out, info, source, encoder):
     return cmd + ["-f", fmt, str(out)]
 
 
-def same_file(path, before):
-    try:
-        st = os.stat(path)
-    except OSError:
-        return False
-    return (st.st_ino, st.st_size, st.st_mtime) == before
-
-
 def track_counts(info):
     counts = {}
     for kind in ("video", "audio", "subtitle", "attachment"):
@@ -392,7 +385,7 @@ def rewrite(path, info, command, expected, what, progress=None):
         if new is None or track_counts(new) != expected or abs(duration(new) - duration(info)) > 2:
             log(f"the rewritten {path.name} didn't check out; kept the original")
             return False
-        if not same_file(path, before):
+        if not rp.same(path, before):
             log(f"{path.name} changed while being rewritten; kept the new original")
             return False
         os.chmod(out, st.st_mode & 0o777)
@@ -1127,7 +1120,6 @@ class Worker:
         don't fit (or were started) are remembered by their mark, so they're
         not looked at again until they change. Conversions a crash or a
         failed rescan left unfinished are finished first, at any hour."""
-        from mediaserver import repackage as rp
         for key in list(self.state.get("repackage_pending", {})):
             self.finish_repackage(key)
         if not self.settings.get("repackage_mp4", True) or not rp.night(now):
@@ -1169,7 +1161,6 @@ class Worker:
         overwritten: subtitles and the MP4 are written to temporary files,
         checked, and published under names nothing has yet. Watch state is
         checked again just before the switch."""
-        from mediaserver import repackage as rp
         title = display_name(path)
 
         def not_now(reason: str) -> bool:
@@ -1284,7 +1275,6 @@ class Worker:
 
     def watch_checks(self):
         """(unwatched, busy) from Jellyfin now; None when it isn't answering"""
-        from mediaserver import repackage as rp
         jf = playback.Jellyfin(STATE.parent)
         try:
             items = jf.items()
@@ -1300,7 +1290,6 @@ class Worker:
         MKV goes, everything is checked again (it may be a resumed one): the
         MP4 is the one published here, the MKV hasn't changed, and nobody is
         watching or has started it; otherwise it's undone."""
-        from mediaserver import repackage as rp
         entry = self.state.get("repackage_pending", {}).get(key)
         if not entry:
             return
@@ -1309,20 +1298,24 @@ class Worker:
             step = entry["steps"][0]
             if step == "switch":
                 if not self.ours(new, entry.get("new_ino")):
-                    return self.abandon_repackage(key, "the MP4 wasn't published, or isn't the one made here")
+                    self.abandon_repackage(key, "the MP4 wasn't published, or isn't the one made here")
+                    return
                 if old.exists():
                     if not rp.same(old, tuple(entry.get("old_id") or ())):
-                        return self.abandon_repackage(key, "the MKV changed")
+                        self.abandon_repackage(key, "the MKV changed")
+                        return
                     # The MP4 as it was published (a change in place keeps its
                     # inode), and still a whole copy of the MKV
                     if not rp.same(new, tuple(entry.get("new_id") or ())) or not rp.checks_out(probe(old) or {}, probe(new)):
-                        return self.abandon_repackage(key, "the MP4 changed or doesn't check out")
+                        self.abandon_repackage(key, "the MP4 changed or doesn't check out")
+                        return
                     checks = self.watch_checks()
                     if checks is None:
                         return   # Jellyfin isn't answering: checked next round
                     unwatched, busy = checks
                     if busy(old) or unwatched(old) is not True:
-                        return self.abandon_repackage(key, "someone started it, or Jellyfin doesn't list it")
+                        self.abandon_repackage(key, "someone started it, or Jellyfin doesn't list it")
+                        return
                     old.unlink()
                 self.remember(entry["title"], "repackaged as MP4 so Apple devices and the app play it directly (nothing re-encoded)")
             elif step == "rescan" and not self.rescan_owner(new):

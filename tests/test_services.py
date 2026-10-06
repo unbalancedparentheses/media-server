@@ -4,11 +4,9 @@ netwatch's reconnect, and postimport's side of Sonarr/Radarr.
 
 Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
-import io
 import json
 import time
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, timedelta
 from pathlib import Path
 from unittest import mock

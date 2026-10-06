@@ -56,7 +56,7 @@ def bdecode(data: bytes, i: int = 0):
         while data[j:j + 1] != b"e":
             value, j = bdecode(data, j)
             items.append(value)
-        return (items if data[i:i + 1] == b"l" else dict(zip(items[::2], items[1::2]))), j + 1
+        return (items if data[i:i + 1] == b"l" else dict(zip(items[::2], items[1::2], strict=True))), j + 1
     colon = data.index(b":", i)
     length = int(data[i:colon])
     return data[colon + 1:colon + 1 + length], colon + 1 + length

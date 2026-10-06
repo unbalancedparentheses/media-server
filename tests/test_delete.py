@@ -6,8 +6,6 @@ Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
 import http.client
 import json
-from pathlib import Path
-from unittest import mock
 
 from mediaserver import control
 from tests.test_e2e import first
@@ -269,7 +267,8 @@ class Endpoint(Delete):
         self.assertEqual((status, data["deleted"]), (200, "Skyfall (2012)"))
 
     def test_not_during_an_install(self):
-        import subprocess, sys
+        import subprocess
+        import sys
         code = ("import sys, time; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from mediaserver import lock; "
                 "lock.acquire(Path(sys.argv[2])); print('held', flush=True); time.sleep(30)")
         from tests.test_integration import REPO

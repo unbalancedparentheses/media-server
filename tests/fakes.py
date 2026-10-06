@@ -19,7 +19,8 @@ import threading
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 from urllib.parse import parse_qs, urlparse
 
 
@@ -976,7 +977,7 @@ class FakeStack:
                          "cleanuparr": self.cleanuparr}
         self.saved_env: dict = {}
 
-    def __enter__(self) -> "FakeStack":
+    def __enter__(self) -> FakeStack:
         for name, service in self.services.items():
             service.start()
             var = f"MEDIASERVER_URL_{name.upper()}"

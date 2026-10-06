@@ -26,10 +26,12 @@ import re
 import shutil
 import subprocess
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from mediaserver import common as c
+from mediaserver import control, dashmedia, launchd
+from mediaserver.config import PORTS, local
 
 
 def site(indexer: dict) -> str:
@@ -55,8 +57,6 @@ def unresolved(url: str) -> str:
         except socket.gaierror:
             return ""
         return host
-from mediaserver import control, dashmedia, launchd
-from mediaserver.config import PORTS, local
 
 # 24-hour availability: a sample per service every slow round (5 minutes).
 # Byparr is checked on /docs: its /health opens a browser and can take
@@ -246,7 +246,7 @@ class Collector:
         off = [{"name": names.get(s["indexerId"], f"indexer {s['indexerId']}"), "until": s["disabledTill"],
                 **({"unresolved": host} if (host := unresolved(site(by_id.get(s["indexerId"]) or {}))) else {})}
                for s in statuses if s.get("indexerId") in on and s.get("disabledTill") and iso_time(s["disabledTill"]) > now]
-        since = (datetime.now(timezone.utc) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        since = (datetime.now(UTC) - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
         stats = c.try_json(local("prowlarr") + f"/api/v1/indexerstats?startDate={since}", {"X-Api-Key": pk})
         auth = c.jellyfin_auth(self.state)
         counts = (c.try_json(local("jellyfin") + "/Items/Counts", auth, {}) or {}) if auth else {}

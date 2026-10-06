@@ -4,9 +4,7 @@ of a running install.
 
 Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
-import os
 import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path

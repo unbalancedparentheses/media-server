@@ -140,6 +140,6 @@ def run(state: dict, state_dir: Path, now: float | None = None) -> None:
     del results[KEEP:]
 
 
-def queue(state: dict, path: "str | Path", title: str, now: float | None = None) -> None:
+def queue(state: dict, path: str | Path, title: str, now: float | None = None) -> None:
     """A file just imported (and checked): verify its playback soon"""
     state.setdefault("playback_pending", {})[str(path)] = {"title": title, "since": int(time.time() if now is None else now)}

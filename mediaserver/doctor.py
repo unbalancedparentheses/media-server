@@ -92,7 +92,7 @@ class Doctor:
         on = {i["id"] for i in indexers if i.get("enable")}
         now = time.time()
         # Switched-off indexers keep their last failure; only enabled ones count
-        off = [f"{names.get(s['indexerId'], 'indexer %s' % s['indexerId'])} (until {datetime.fromtimestamp(iso_time(s['disabledTill'])).strftime('%a %H:%M')})"
+        off = [f"{names.get(s['indexerId']) or 'indexer ' + str(s['indexerId'])} (until {datetime.fromtimestamp(iso_time(s['disabledTill'])).strftime('%a %H:%M')})"
                for s in statuses if s.get("indexerId") in on and s.get("disabledTill") and iso_time(s["disabledTill"]) > now]
         if off:
             self.need("Prowlarr switched off indexers after failures: " + ", ".join(off),

@@ -115,9 +115,9 @@ def qbittorrent(cfg: Config) -> None:
         warn("Could not set qBittorrent's preferences (retried next run)")
     set_qbittorrent_password(cfg, q)
     # A new listen address only takes effect after a restart
-    if old_address and old_address != prefs["web_ui_address"]:
-        if launchd.restart(cfg.paths.config, "qbittorrent") and api.wait_for("qBittorrent", q.url):
-            ok(f"qBittorrent restarted to listen on {cfg.get('network.admin_bind', '0.0.0.0')}")
+    if old_address and old_address != prefs["web_ui_address"] \
+            and launchd.restart(cfg.paths.config, "qbittorrent") and api.wait_for("qBittorrent", q.url):
+        ok(f"qBittorrent restarted to listen on {cfg.get('network.admin_bind', '0.0.0.0')}")
     categories(cfg, q)
 
 
@@ -218,9 +218,7 @@ def sabnzbd(cfg: Config) -> None:
         warn(f"SABnzbd didn't accept its download folders (retried next run; see {cfg.paths.logs}/sabnzbd.log)")
     existing = (s.api({"mode": "get_cats"}) or {}).get("categories") or []
     for cat in CATEGORIES:
-        if cat in existing:
-            ok(f"Category: {cat}")
-        elif s.api({"mode": "set_config", "section": "categories", "keyword": cat, "dir": cat}) is not None:
+        if cat in existing or s.api({"mode": "set_config", "section": "categories", "keyword": cat, "dir": cat}) is not None:
             ok(f"Category: {cat}")
         else:
             warn(f"Could not create category: {cat}")

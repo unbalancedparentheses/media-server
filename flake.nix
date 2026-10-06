@@ -406,6 +406,9 @@
             nginx
             nixfmt
             pyright
+            ruff
+            # The tests on real media files (postimport, repackaging) need it
+            jellyfin-ffmpeg
             (python3.withPackages (ps: [
               ps.pyyaml
               ps.bcrypt

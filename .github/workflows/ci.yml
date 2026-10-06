@@ -32,6 +32,9 @@ jobs:
       - name: Pyright
         run: nix develop -c pyright
 
+      - name: Ruff
+        run: nix develop -c ruff check
+
       # Unit and failure-path tests against fake services, with a coverage
       # floor; no real services needed
       - name: Tests

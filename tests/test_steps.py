@@ -363,6 +363,7 @@ class ArrLogin(unittest.TestCase):
                 return {"id": 1, "username": "admin", "authenticationMethod": "forms"}
             if not state["put_ok"]:
                 raise api.ApiError("PUT failed")
+            return None
         with mock.patch.object(api, "call", call), mock.patch.object(logins, "arr", lambda u, user, p: state["login_ok"]):
             for change in ("put_ok", "login_ok", None):
                 run(arr.set_login, cfg, "Sonarr", "http://s", "k", "v3", "sonarr")
@@ -510,6 +511,7 @@ class Arrs(unittest.TestCase):
                 return [{"id": 1}]
             if method == "POST" and not accepted["now"]:
                 raise api.ApiError("failed")
+            return None
         app = FakeApp("Sonarr", answer)
         marker = self.cfg.paths.state / "renamed-sonarr"
         run(arrs.set_renaming, self.cfg, app, "series")

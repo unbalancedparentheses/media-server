@@ -63,7 +63,7 @@ def forget(cfg: Config, port: str) -> None:
         c.write_json(routes_file(cfg), routes, mode=0o600, compact=True)
 
 
-def take_down_stale(cfg: Config, ts: str, now: "dict[str, list[str]] | None") -> bool:
+def take_down_stale(cfg: Config, ts: str, now: dict[str, list[str]] | None) -> bool:
     """Routes an earlier setup published that it no longer wants (the
     dashboard used to be on :443): removed when still pointing where it put
     them. False when one may still be there (Tailscale's routes couldn't be

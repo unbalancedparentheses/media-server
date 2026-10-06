@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 import sqlite3
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
@@ -191,7 +191,7 @@ def write_login(db_path: Path, user: str, password: str) -> None:
     digest = bcrypt.hashpw(password.encode(), bcrypt.gensalt(12)).decode().replace("$2b$", "$2a$", 1)
     with closing(sqlite3.connect(db_path)) as db, db:
         db.execute("UPDATE users SET username = ?, password_hash = ?, failed_login_attempts = 0, lockout_end = NULL, updated_at = ?",
-                   (user, digest, datetime.now(timezone.utc).isoformat()))
+                   (user, digest, datetime.now(UTC).isoformat()))
         db.execute("DELETE FROM refresh_tokens")  # sign out existing sessions
 
 
@@ -225,7 +225,7 @@ def require_login(cfg: Config) -> None:
             conn.execute("UPDATE general_configs SET auth_disable_auth_for_local_addresses = 0 WHERE auth_disable_auth_for_local_addresses = 1")
             left = conn.execute("SELECT COUNT(*) FROM general_configs WHERE auth_disable_auth_for_local_addresses = 1").fetchone()[0]
     except sqlite3.Error:
-        raise err(f"Couldn't turn on Cleanuparr's login requirement in {db}; stopping here so it doesn't start without one")
+        raise err(f"Couldn't turn on Cleanuparr's login requirement in {db}; stopping here so it doesn't start without one") from None
     if left:
         raise err(f"Cleanuparr's login requirement is still off in {db}; stopping here")
 

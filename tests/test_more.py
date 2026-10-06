@@ -6,17 +6,16 @@ Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 import io
 import json
 import shutil
-import sqlite3
 import tempfile
 import unittest
-from contextlib import closing, redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 from mediaserver import __main__ as cli
 from mediaserver import api, launchd
 from mediaserver import common as c
-from mediaserver.pins import INTRO_SKIPPER, MOONBASE
+from mediaserver.pins import INTRO_SKIPPER
 from mediaserver.steps import arrs, introskipper, moonbase, seerr
 from tests.test_integration import Stack, example_config, quiet
 
@@ -101,7 +100,8 @@ class PluginInstalls(Stack):
         j.wizard_done = True
         j.folders = [{"Name": "TV Shows", "CollectionType": "tvshows", "ItemId": "lib1", "Locations": [],
                       "LibraryOptions": {"MediaSegmentProviderOrder": [], "DisabledMediaSegmentProviders": ["Intro Skipper"]}}]
-        patcher = mock.patch("mediaserver.jellyfin.Jellyfin.restart_ready", lambda jf: self.restart(jf))
+        # A lambda, not self.restart: patched onto the class, it must take the Jellyfin instance
+        patcher = mock.patch("mediaserver.jellyfin.Jellyfin.restart_ready", lambda jf: self.restart(jf))  # noqa: PLW0108
         patcher.start()
         self.addCleanup(patcher.stop)
 

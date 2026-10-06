@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, UTC
 from pathlib import Path
 from typing import Any
 
@@ -210,7 +210,7 @@ def short_day(iso):
 def next_release(movie, today):
     """(date, which) of a movie's next release on or after today, or None"""
     dates = [(movie.get(k) or "")[:10] for k in ("inCinemas", "digitalRelease", "physicalRelease")]
-    upcoming = sorted((d, w) for d, w in zip(dates, ("in cinemas", "digital", "on disc")) if d and d >= today)
+    upcoming = sorted((d, w) for d, w in zip(dates, ("in cinemas", "digital", "on disc"), strict=True) if d and d >= today)
     return upcoming[0] if upcoming else None
 
 
@@ -423,7 +423,7 @@ def requests():
         out.append(item)
     # Also on its way without a request: what Sonarr/Radarr are downloading
     # (e.g. new episodes of a series you follow)
-    for kind, queue, catalog, app in (("movie", queue_m, movies, "Radarr"), ("tv", queue_s, series, "Sonarr")):
+    for kind, queue, catalog in (("movie", queue_m, movies), ("tv", queue_s, series)):
         by_id = {x.get("id"): x for x in catalog.values()}
         for item_id in queue:
             if (kind, item_id) in shown or item_id not in by_id:
@@ -739,7 +739,7 @@ def add_picks(results: list, seed: dict, skip: set, cache: dict, items: list, pe
 
 def recommended(per_row: int = 12) -> dict:
     """{"anime": [...], "series": [...], "movies": [...]}, best first"""
-    today = datetime.now(timezone.utc)
+    today = datetime.now(UTC)
     since, until = (today - timedelta(days=RECENT_DAYS)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
     movies = f"primaryReleaseDateGte={since}&primaryReleaseDateLte={until}&sortBy=popularity.desc"
     shows = f"firstAirDateGte={since}&firstAirDateLte={until}&sortBy=popularity.desc"
@@ -880,5 +880,5 @@ def collect() -> dict:
     # dashstatus asks again next round instead of in 5 minutes (e.g. right
     # after the services restart)
     result["media_failed"] = failed
-    result["media_updated"] = int(datetime.now(timezone.utc).timestamp())
+    result["media_updated"] = int(datetime.now(UTC).timestamp())
     return result
