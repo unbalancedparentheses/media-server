@@ -267,13 +267,9 @@ def install(o: Options) -> int:
         warn(f"The update was rolled back: {rolled_back}")
         c.notify("Media server: update rolled back", rolled_back)
     if failed:
-        # Right after an update: back to the previous version (doesn't return)
-        maintenance.roll_back(cfg, failed)
         print(f"\n\033[1;31m  Setup finished, but {failed} verification check(s) failed (see above).\033[0m")
         print("  Fix the cause and re-run 'nix run .#install', or check again with 'nix run .#test'.\n")
         return 1
-    if os.environ.get("MEDIA_UPDATE_ROLLBACK") == "1":
-        maintenance.rollback_file(cfg).unlink(missing_ok=True)   # the update checked out: nothing to go back to
     summary(cfg, hostname, time.time() - started, times)
     open_dashboard_once(cfg, o.yes)
     return 0
@@ -365,7 +361,7 @@ def run(o: Options) -> int:
     elif m == "restore":
         maintenance.restore(config_or_defaults(), o.arg, o.yes)
     elif m == "update":
-        maintenance.update(config_or_defaults(), o.yes)
+        return maintenance.update(config_or_defaults(), o.yes)
     elif m == "uninstall":
         maintenance.uninstall(config_or_defaults(), o.purge, o.yes)
     elif m == "logs":

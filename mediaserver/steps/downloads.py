@@ -268,8 +268,18 @@ def vpn_settings(cfg: Config) -> None:
     path = cfg.paths.state / "netwatch/vpn.json"
     if c.read_json(path, None) != want:
         c.write_json(path, want, mode=0o644)
-    if want["enabled"]:
-        ok("VPN kill switch on: qBittorrent bound to the VPN, SABnzbd paused while it's down (netwatch, every minute)")
+    # Applied now, not a minute later by netwatch
+    from mediaserver import vpn
+    result = vpn.keep(path.parent, vpn.Clients(cfg.paths.config))
+    status = c.read_json(path.parent / "vpn-status.json", {}) or {}
+    if result == "up" and status.get("protected"):
+        ok(f"VPN kill switch: qBittorrent bound to {status.get('interface')} (no traffic if it drops); SABnzbd paused within a minute if it does")
+    elif result == "down":
+        warn("VPN kill switch: the VPN isn't connected; downloads are blocked until it is")
+    elif result == "up":
+        warn("VPN kill switch: qBittorrent didn't take the binding yet; netwatch retries every minute")
+    elif result == "":
+        warn("VPN kill switch: qBittorrent didn't answer; netwatch applies it within a minute")
 
 
 def sabnzbd_login(cfg: Config) -> None:

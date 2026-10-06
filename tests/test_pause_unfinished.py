@@ -72,7 +72,7 @@ class Unfinished(unittest.TestCase):
             "failures": {"/m/Show - S01E01 - Pilot Bluray-1080p.mkv": {"count": 2, "last": now - 600, "what": ["stereo audio"]}}})
         c.write_json(state / "deletions.json", {"jf1": {"title": "Old Film (1999)", "steps": ["torrents", "seerr"]},
                                                 "sonarr9": {"title": "Kaiji season 2", "steps": ["unmonitor"], "stop": True}})
-        c.write_json(state / "diskwatch/paused.json", {"free_gb": 25, "resume_gb": 40})
+        c.write_json(state / "holds.json", {"reasons": {"disk": {"free_gb": 25, "resume_gb": 40}}, "torrents": []})
         items = unfinished.collect(state, now=now)
         whats = [i["what"] for i in items]
         self.assertEqual(whats, ["Repackaging Film (2010) as MP4", "Fixing Show - S01E01 - Pilot", "Deleting Old Film (1999)",
@@ -139,18 +139,34 @@ class Orphans(unittest.TestCase):
 
 
 class Leaks(unittest.TestCase):
-    def test_a_served_secret_is_found(self):
+    def test_everything_served_checked_and_what_isnt_said(self):
         from mediaserver import leaks
         from tests.test_integration import example_config
         cfg = example_config(Path(tempfile.mkdtemp()))
         self.addCleanup(shutil.rmtree, cfg.paths.media)
-        served = {"/status.json": b'{"sonarr": {"apiKey": "abcdef123456"}}'}
+        www = cfg.paths.config / "nginx/www"
+        www.mkdir(parents=True)
+        (www / "index.html").write_text("x")
+        (www / "status.json").write_text("x")
+        (cfg.paths.config / "nginx/api-proxy.conf").write_text(
+            "location = /api/qbt/torrents/info {\n}\nlocation = /api/sabnzbd/ {\n}\nlocation = /api/control/speed {\n}\n")
+        paths = leaks.served(cfg)
+        self.assertIn("/status.json", paths)
+        self.assertIn("/api/qbt/torrents/info", paths)
+        self.assertIn("/api/sabnzbd/?mode=queue&output=json", paths)
+        self.assertEqual(paths.count("/api/control/speed"), 1)
+        answers = {"/status.json": (200, b'{"k": "abcdef123456"}'), "/api/qbt/torrents/info": (502, b"")}
 
         def request(url, *a, **kw):
             path = url.split("localhost", 1)[1] or "/"
-            return c.Response(200, {}, served.get(path, b"<html></html>"))
-        with mock.patch.object(leaks, "secrets", return_value={"sonarr API key": "abcdef123456", "Jellyfin password": "admin-pass"}), \
+            status, body = answers.get(path, (200, b"<html></html>"))
+            return c.Response(status, {}, body)
+        with mock.patch.object(leaks, "secrets", return_value={"sonarr API key": "abcdef123456", "Jellyfin password": "admin"}), \
                 mock.patch.object(c, "request", request), mock.patch.dict("os.environ", {"MEDIASERVER_URL_DASHBOARD": "http://localhost"}):
-            self.assertEqual(leaks.find(cfg), ["sonarr API key in /status.json"])
-            served.clear()
-            self.assertEqual(leaks.find(cfg), [])
+            r = leaks.find(cfg)
+            self.assertEqual(r.found, ["sonarr API key in /status.json"])
+            self.assertEqual(r.unverified, ["/api/qbt/torrents/info (502)"])   # not counted as clean
+            self.assertEqual(r.unchecked, ["Jellyfin password"])   # too short: said, not passed over
+            self.assertFalse(r.clean)
+            answers.clear()
+            self.assertTrue(leaks.find(cfg).clean)

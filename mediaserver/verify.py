@@ -336,8 +336,10 @@ class Verifier:
         self.t.check(f"Proxy → hides other endpoints (Jellyfin Auth/Keys: {keys})", keys == 404)
         self.t.check("Proxy → SABnzbd limited to queue/history", c.status_code(f"{d}/api/sabnzbd/?mode=get_config") == 403)
         from mediaserver import leaks
-        found = leaks.find(self.cfg)
-        self.t.check(f"Dashboard → serves no API key or password{': ' + ', '.join(found) if found else ''}", not found)
+        r = leaks.find(self.cfg)
+        detail = (f": {', '.join(r.found)}" if r.found else f": couldn't fetch {', '.join(r.unverified)}" if r.unverified
+                  else f" ({r.paths} paths" + (f"; too short to look for: {', '.join(r.unchecked)}" if r.unchecked else "") + ")")
+        self.t.check(f"Dashboard → serves no API key or password{detail}", r.clean)
         # The dashboard is this Mac's only: a request through a proxy (an old
         # Tailscale route) or for another host name is refused
         via_proxy = c.request(f"{d}/", headers={"X-Forwarded-For": "100.64.0.9"}).status

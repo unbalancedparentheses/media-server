@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, UTC
 from pathlib import Path
 
 from mediaserver import common as c
-from mediaserver import control, dashmedia, launchd, pause, unfinished
+from mediaserver import control, dashmedia, holds, launchd, pause, unfinished
 from mediaserver.config import PORTS, local
 
 
@@ -292,10 +292,13 @@ class Collector:
         if vpn and vpn.get("up") is False:
             out.append({"level": "error", "text": "The VPN is down: downloads are blocked until it reconnects",
                         "action": "Reconnect your VPN app; or set enabled = false under [vpn] in config.toml"})
-        paused = c.read_json(self.state / "diskwatch/paused.json", None)
-        if paused:
+        if vpn and vpn.get("protected") is False:
+            out.append({"level": "error", "text": f"qBittorrent isn't confirmed bound to the VPN ({vpn.get('interface')})",
+                        "action": "Retried every minute; check qBittorrent → Settings → Advanced → Network interface"})
+        disk_hold = holds.held(self.state).get("disk")
+        if disk_hold:
             out.append({"level": "error", "text": f"Downloads paused for space: {free} GB free",
-                        "action": f"They resume on their own above {paused.get('resume_gb', '?')} GB; delete something to free space"})
+                        "action": f"They resume on their own above {disk_hold.get('resume_gb', '?')} GB; delete something to free space"})
         if free < disk.get("min_gb", 10):
             out.append({"level": "error", "text": f"Only {free} GB free: imports have stopped", "action": "Delete something in Sonarr or Radarr"})
         elif free < disk.get("warn_gb", 50):

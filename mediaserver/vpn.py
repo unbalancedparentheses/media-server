@@ -3,15 +3,20 @@ every minute:
 
 - the VPN's interface is the one traffic to the internet leaves through
   when it's a tunnel (utun…, ipsec…, ppp…), or [vpn] interface if set;
-- qBittorrent is bound to it ("network interface" in its settings): if the
-  VPN drops, the interface goes and qBittorrent has no network at all, at
-  once, until it's back (when it reconnects under another name, the
-  binding follows);
-- SABnzbd can't be bound, so it's paused while the VPN is down and resumed
-  after (only if it was paused here);
-- switched off, qBittorrent is unbound and SABnzbd resumed.
+  either way it counts as connected only when it exists, is active and
+  has an address;
+- qBittorrent: bound to it ("network interface" in its settings), read
+  back to confirm. If the VPN drops, the interface goes and qBittorrent
+  has no network at all, at once (a guarantee from qBittorrent itself),
+  until it's back; when it reconnects under another name, the binding
+  follows within a minute;
+- SABnzbd can't be bound: it's paused within a minute of the VPN going
+  down (not instant), and resumed when it's back unless something else
+  still holds it (holds.py: low disk space) or it was paused by hand;
+- switched off, qBittorrent is unbound and the VPN's hold released.
 
-Setup writes the settings to $NETWATCH_STATE/vpn.json; the state goes to
+Setup writes the settings to $NETWATCH_STATE/vpn.json and applies them at
+once (before it finishes); netwatch keeps them. The state goes to
 vpn-status.json for the dashboard.
 """
 from __future__ import annotations
@@ -22,6 +27,7 @@ import time
 from pathlib import Path
 
 from mediaserver import common as c
+from mediaserver import holds
 from mediaserver.config import local
 
 TUNNELS = ("utun", "ipsec", "ppp", "tun", "wg")
@@ -40,11 +46,20 @@ def route_interface(target: str = "1.1.1.1") -> str:
     return m.group(1) if m else ""
 
 
-class Clients:
-    """qBittorrent (skips its login for this Mac) and SABnzbd"""
+def interface_up(name: str) -> bool:
+    """<name> exists, is active and has an address (an interface that
+    carries traffic, not just a name in config.toml)"""
+    try:
+        r = subprocess.run(["/sbin/ifconfig", name], capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if r.returncode or "status: inactive" in r.stdout:
+        return False
+    return bool(re.search(r"^\s*inet\s", r.stdout, re.M) or re.search(r"^\s*inet6\s+(?!fe80)", r.stdout, re.M))
 
-    def __init__(self, config: Path):
-        self.config = config
+
+class Clients(holds.Clients):
+    """holds.Clients, and qBittorrent's interface binding"""
 
     def bound(self) -> str | None:
         r = c.request(local("qbittorrent") + "/api/v2/app/preferences", timeout=15)
@@ -57,16 +72,11 @@ class Clients:
                       form={"json": json.dumps({"current_network_interface": interface, "current_interface_address": ""})}, timeout=15)
         return r.ok
 
-    def sabnzbd(self, mode: str) -> bool:
-        key = c.sabnzbd_key(self.config)
-        if not key:
-            return True
-        r = c.request(local("sabnzbd") + f"/api?mode={mode}&apikey={key}&output=json", timeout=15)
-        return r.ok and (r.json({}) or {}).get("status") is not False
 
-
-def keep(state: Path, clients: Clients, detect=route_interface, now: float | None = None) -> str:
-    """One round: "off", "up", "down" or "" (qBittorrent didn't answer)"""
+def keep(state: Path, clients: Clients, detect=route_interface, is_up=interface_up, now: float | None = None) -> str:
+    """One round: "off", "up", "down" or "" (qBittorrent didn't answer).
+    "up"/"down" with protected: qBittorrent read back as bound to the
+    interface it should be; SABnzbd is held (holds.py, "vpn") while down"""
     now = time.time() if now is None else now
     settings = c.read_json(state / "vpn.json", {}) or {}
     status = c.read_json(state / "vpn-status.json", {}) or {}
@@ -78,30 +88,27 @@ def keep(state: Path, clients: Clients, detect=route_interface, now: float | Non
     if not settings.get("enabled"):
         if status.get("bound_here") and bound:
             clients.bind("")   # back to every interface
-        if status.get("sabnzbd_paused"):
-            clients.sabnzbd("resume")
+        holds.reconcile(state.parent, clients, "vpn", False)
         (state / "vpn-status.json").unlink(missing_ok=True)
         return "off"
-    found = settings.get("interface") or detect()
-    up = bool(found) and (bool(settings.get("interface")) or found.startswith(TUNNELS))
-    if up:
-        if bound != found and clients.bind(found):
-            c.log(f"VPN on {found}: qBittorrent bound to it")
-        if status.get("sabnzbd_paused") and clients.sabnzbd("resume"):
-            status["sabnzbd_paused"] = False
-        new = {"up": True, "interface": found, "bound_here": True, "sabnzbd_paused": status.get("sabnzbd_paused", False),
-               "since": status.get("since") if status.get("up") else int(now)}
-    else:
-        # Down: qBittorrent stays bound to the VPN's interface (gone now, so
-        # no traffic); bound to nothing yet means bound to a name that isn't there
-        keep_on = status.get("interface") or (bound if bound and bound.startswith(TUNNELS) else NONE_YET)
-        if bound != keep_on:
-            clients.bind(keep_on)
-        paused = status.get("sabnzbd_paused") or clients.sabnzbd("pause")
-        if status.get("up", True):
-            c.log("VPN down: downloads blocked until it's back")
-            c.notify("Media server: VPN down", "Downloads are blocked until the VPN reconnects.")
-        new = {"up": False, "interface": keep_on, "bound_here": True, "sabnzbd_paused": bool(paused),
-               "since": status.get("since") if status.get("up") is False else int(now)}
-    c.write_json(state / "vpn-status.json", new)
+    fixed = settings.get("interface") or ""
+    found = fixed or detect()
+    up = bool(found) and (fixed != "" or found.startswith(TUNNELS)) and is_up(found)
+    # Down: qBittorrent stays bound to the VPN's interface (gone, so no
+    # traffic); bound to nothing yet means a name that isn't there
+    want = found if up else (status.get("interface") or fixed or (bound if bound.startswith(TUNNELS) else NONE_YET))
+    if bound != want:
+        clients.bind(want)
+        bound = clients.bound()   # read back: protected only if it took
+    protected = bound == want
+    held = holds.reconcile(state.parent, clients, "vpn", not up, {"interface": want})
+    if up and not status.get("up") and status:
+        c.log(f"VPN back on {want}")
+    if not up and status.get("up", True):
+        c.log("VPN down: downloads blocked until it's back")
+        c.notify("Media server: VPN down", "Downloads are blocked until the VPN reconnects.")
+    if not protected:
+        c.log(f"qBittorrent didn't take the binding to {want}; retried next round")
+    c.write_json(state / "vpn-status.json", {"up": up, "interface": want, "bound_here": True, "protected": protected,
+                                              "sabnzbd_confirmed": held, "since": status.get("since") if status.get("up") == up else int(now)})
     return "up" if up else "down"

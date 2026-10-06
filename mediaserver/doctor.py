@@ -224,11 +224,16 @@ class Doctor:
     def secrets(self) -> None:
         """Nothing the dashboard serves carries an API key or password"""
         from mediaserver import leaks
-        found = leaks.find(self.cfg)
-        if found:
-            self.need("The dashboard serves secrets: " + ", ".join(found), "Report it: nothing it serves should carry them")
-        else:
-            self.good("The dashboard serves no API key or password")
+        r = leaks.find(self.cfg)
+        if r.found:
+            self.need("The dashboard serves secrets: " + ", ".join(r.found), "Report it: nothing it serves should carry them")
+        if r.unverified:
+            self.note("Couldn't check for secrets in: " + ", ".join(r.unverified), "Unverified until those answer (is nginx running?)")
+        if r.unchecked:
+            self.note(f"Too short to look for in what the dashboard serves: {', '.join(r.unchecked)}",
+                      f"A longer password ({leaks.MIN_LENGTH}+ characters) can be checked, and is safer")
+        if r.clean:
+            self.good(f"The dashboard serves no API key or password ({r.paths} paths checked)")
 
     def orphans(self) -> None:
         """Files in the finished-downloads folders that no torrent owns (left

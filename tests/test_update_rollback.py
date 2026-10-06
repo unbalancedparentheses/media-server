@@ -1,12 +1,11 @@
-"""Updates that roll themselves back (maintenance.update / roll_back, and
-the end of cli.install): real git repositories in a scratch folder, the
-backup, restore and re-run of setup stood in for.
+"""Updates that roll themselves back (maintenance.update / roll_back): real
+git repositories in a scratch folder; setup (a child process the update
+supervises), the backup and restore stood in for.
 
 Run: nix run .#unit   (or: python3 -m unittest discover -s tests -t .)
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -23,10 +22,6 @@ def git(cwd, *args):
     return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True).stdout.strip()
 
 
-class Exec(Exception):
-    """os.execvpe stood in for: the re-run of setup"""
-
-
 class Rollback(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())
@@ -34,7 +29,6 @@ class Rollback(unittest.TestCase):
         env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
                "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
         self.enterContext(mock.patch.dict(os.environ, env))
-        # The published repo, and the checkout one version behind it
         self.origin = self.root / "origin"
         self.origin.mkdir()
         git(self.origin, "init", "-q", "-b", "main")
@@ -51,97 +45,78 @@ class Rollback(unittest.TestCase):
         self.cfg.paths.config.mkdir(parents=True)
         self.cfg.paths.state.mkdir(parents=True)
         self.backup = self.root / "backup.tar.gz"
-        self.execs: list = []
+        self.setups: list = []   # (commit checked out, env) for each run of setup
+        self.results: list = []  # what each run of setup exits with
+        self.restored: list = []
 
-        def execvpe(cmd, args, env):
-            self.execs.append(env)
-            raise Exec
+        def run_setup(repo, yes, env):
+            self.setups.append((git(repo, "rev-parse", "HEAD"), env))
+            return self.results.pop(0)
         for patcher in (mock.patch.object(maintenance, "backup", return_value=self.backup),
-                        mock.patch.object(maintenance.os, "execvpe", execvpe),
+                        mock.patch.object(maintenance, "run_setup", run_setup),
+                        mock.patch.object(maintenance, "restore", lambda cfg, f, yes: self.restored.append(f)),
                         mock.patch.dict(os.environ, {"MEDIA_SERVER_REPO": str(self.repo)})):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def update(self):
-        with self.assertRaises(Exec):
-            quiet(maintenance.update, self.cfg, True)
-        return self.execs[-1]
+    def update(self, *results):
+        self.results = list(results)
+        return quiet(maintenance.update, self.cfg, True)
 
-    def test_update_records_what_to_go_back_to(self):
-        env = self.update()
+    def test_a_good_update_keeps_the_new_version(self):
+        code, _ = self.update(0)
+        self.assertEqual(code, 0)
         self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.v2)
-        self.assertEqual(env["MEDIA_UPDATE_ROLLBACK"], "1")
-        record = json.loads(maintenance.rollback_file(self.cfg).read_text())
-        self.assertEqual((record["from"], record["to"], record["backup"]), (self.v1, self.v2, str(self.backup)))
+        self.assertFalse(maintenance.rollback_file(self.cfg).exists())
 
-    def test_no_rollback_when_nothing_changed_or_local_changes(self):
+    def test_any_failure_goes_back(self):
+        for failure in (1, 2):   # failed checks, a build failure or a crash: any non-zero exit
+            with self.subTest(failure=failure):
+                git(self.repo, "reset", "-q", "--hard", self.v1)
+                self.setups.clear()
+                self.restored.clear()
+                code, out = self.update(failure, 0)
+                self.assertNotEqual(code, 0)   # the update itself failed
+                self.assertEqual([s[0] for s in self.setups], [self.v2, self.v1])   # tried the new, then back on the old
+                self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.v1)
+                self.assertEqual(self.restored, [str(self.backup)])
+                self.assertIn(f"failed (setup exited with status {failure})", self.setups[1][1]["MEDIA_ROLLED_BACK"])
+                self.assertFalse(maintenance.rollback_file(self.cfg).exists())
+
+    def test_nothing_to_go_back_to(self):
         git(self.repo, "pull", "-q", "--ff-only")
-        env = self.update()   # already up to date
-        self.assertNotIn("MEDIA_UPDATE_ROLLBACK", env)
+        code, _ = self.update(1)   # already up to date: the failure is just reported
+        self.assertEqual(code, 1)
+        self.assertEqual(len(self.setups), 1)
+        self.assertEqual(self.restored, [])
+
+    def test_local_changes_are_never_reset(self):
         (self.repo / "flake.nix").write_text("my own change\n")
-        env = self.update()
-        self.assertNotIn("MEDIA_UPDATE_ROLLBACK", env)
-        self.assertFalse(maintenance.rollback_file(self.cfg).exists())
+        self.update(1)
+        self.assertEqual((self.repo / "flake.nix").read_text(), "my own change\n")
+        self.assertEqual(self.restored, [])
 
-    def test_failed_checks_go_back_to_the_previous_version(self):
-        env = self.update()
-        restored = []
-        with mock.patch.dict(os.environ, env), mock.patch.object(maintenance, "restore", lambda cfg, f, yes: restored.append(f)), \
-                self.assertRaises(Exec):
-            quiet(maintenance.roll_back, self.cfg, 3)
-        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.v1)
-        self.assertEqual(restored, [str(self.backup)])
-        again = self.execs[-1]
-        self.assertNotIn("MEDIA_UPDATE_ROLLBACK", again)   # the re-run doesn't roll back again
-        self.assertIn("failed 3 check(s)", again["MEDIA_ROLLED_BACK"])
-        self.assertFalse(maintenance.rollback_file(self.cfg).exists())
-
-    def test_not_after_the_checkout_changed(self):
-        env = self.update()
-        (self.repo / "flake.nix").write_text("edited after the update\n")
-        with mock.patch.dict(os.environ, env), mock.patch.object(maintenance, "restore") as restore:
-            self.assertFalse(quiet(maintenance.roll_back, self.cfg, 1)[0])
-        restore.assert_not_called()
-        self.assertEqual((self.repo / "flake.nix").read_text(), "edited after the update\n")
-
-    def test_not_outside_an_update(self):
-        maintenance.rollback_file(self.cfg).write_text(json.dumps({"repo": str(self.repo), "from": self.v1, "to": self.v2}))
-        with mock.patch.dict(os.environ, {"MEDIA_UPDATE_ROLLBACK": ""}):
-            self.assertFalse(quiet(maintenance.roll_back, self.cfg, 1)[0])
+    def test_interrupted_leaves_it_to_you(self):
+        code, out = self.update(130)
+        self.assertEqual(code, 130)
+        self.assertIn("git reset --hard", out)
+        self.assertEqual(git(self.repo, "rev-parse", "HEAD"), self.v2)
 
 
 class InstallEnd(unittest.TestCase):
-    def setUp(self):
-        self.root = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.root)
-        self.cfg = example_config(self.root)
-        self.cfg.paths.state.mkdir(parents=True)
-
-    def run_install(self, failed, env):
-        with mock.patch.dict(os.environ, env), mock.patch.object(cli, "check_platform", return_value=""), \
-                mock.patch.object(cli, "ensure_config", return_value=self.cfg), mock.patch.object(cli, "run_step"), \
-                mock.patch.object(cli.arrs, "require_no_unmerged_anime_sonarr"), mock.patch.object(cli.tailscale, "configure", return_value=""), \
-                mock.patch("mediaserver.cli.verify.main", return_value=failed), mock.patch.object(cli, "lan_ip", return_value=""), \
-                mock.patch.object(cli, "open_dashboard_once"), mock.patch.object(cli.c, "notify"), \
-                mock.patch.object(maintenance, "roll_back", return_value=False) as roll_back:
-            result, out = quiet(cli.install, cli.Options(yes=True))
-        return result, out, roll_back
-
-    def test_failed_checks_after_an_update_roll_back(self):
-        result, _, roll_back = self.run_install(2, {"MEDIA_UPDATE_ROLLBACK": "1"})
-        self.assertEqual(result, 1)
-        roll_back.assert_called_once_with(self.cfg, 2)
-
-    def test_a_good_update_clears_its_record(self):
-        maintenance.rollback_file(self.cfg).write_text("{}")
-        result, _, roll_back = self.run_install(0, {"MEDIA_UPDATE_ROLLBACK": "1"})
-        self.assertEqual(result, 0)
-        roll_back.assert_not_called()
-        self.assertFalse(maintenance.rollback_file(self.cfg).exists())
-
     def test_after_a_rollback_it_says_so(self):
-        _, out, _ = self.run_install(0, {"MEDIA_ROLLED_BACK": "abc1234 failed 3 check(s); back on def5678"})
-        self.assertIn("The update was rolled back: abc1234 failed 3 check(s); back on def5678", out)
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        cfg = example_config(root)
+        cfg.paths.state.mkdir(parents=True)
+        with mock.patch.dict(os.environ, {"MEDIA_ROLLED_BACK": "abc1234 failed (x); back on def5678"}), \
+                mock.patch.object(cli, "check_platform", return_value=""), mock.patch.object(cli, "ensure_config", return_value=cfg), \
+                mock.patch.object(cli, "run_step"), mock.patch.object(cli.arrs, "require_no_unmerged_anime_sonarr"), \
+                mock.patch.object(cli.tailscale, "configure", return_value=""), mock.patch("mediaserver.cli.verify.main", return_value=0), \
+                mock.patch.object(cli, "lan_ip", return_value=""), mock.patch.object(cli, "open_dashboard_once"), \
+                mock.patch.object(cli.c, "notify"):
+            _, out = quiet(cli.install, cli.Options(yes=True))
+        self.assertIn("The update was rolled back: abc1234 failed (x); back on def5678", out)
 
 
 if __name__ == "__main__":

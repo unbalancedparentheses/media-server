@@ -44,10 +44,18 @@ def collect(state: Path, now: float | None = None) -> list:
             verb = "Stopping looking for" if plan.get("stop") else "Deleting"
             out.append({"what": f"{verb} {plan.get('title')}", "left": steps(plan["steps"]), "error": "",
                         "retry": "do it again from the dashboard to finish"})
-    paused = c.read_json(state / "diskwatch/paused.json", None)
-    if paused:
-        out.append({"what": "Downloads paused for space", "left": f"resume above {paused.get('resume_gb', '?')} GB free",
-                    "error": f"{paused.get('free_gb', '?')} GB free when paused", "retry": "every 2 minutes"})
+    hold = c.read_json(state / "holds.json", {}) or {}
+    reasons = hold.get("reasons") or {}
+    if "disk" in reasons:
+        d = reasons["disk"]
+        out.append({"what": "Downloads paused for space", "left": f"resume above {d.get('resume_gb', '?')} GB free",
+                    "error": f"{d.get('free_gb', '?')} GB free", "retry": "checked every 2 minutes"})
+    if "vpn" in reasons:
+        out.append({"what": "Downloads held: the VPN is down", "left": "resume when it reconnects", "error": "",
+                    "retry": "checked every minute"})
+    if not reasons and (hold.get("torrents") or hold.get("sabnzbd_held")):
+        out.append({"what": "Resuming downloads after a hold", "left": "confirm qBittorrent/SABnzbd resumed", "error": "",
+                    "retry": "checked every 2 minutes"})
     rollback = c.read_json(state / "update-rollback.json", None)
     if rollback:
         out.append({"what": "An update that didn't finish", "left": f"its checks (back to {str(rollback.get('from', ''))[:7]} if they fail)",
