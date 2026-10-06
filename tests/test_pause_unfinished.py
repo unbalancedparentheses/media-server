@@ -111,3 +111,28 @@ class Endpoint(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Orphans(unittest.TestCase):
+    def test_leftovers_reported_never_deleted(self):
+        from mediaserver import doctor
+        from tests.test_integration import example_config
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        cfg = example_config(root)
+        done = cfg.paths.downloads / "torrents/complete/radarr"
+        (done / "Owned.2020").mkdir(parents=True)
+        (done / "Leftover.2019").mkdir()
+        (done / "Leftover.2019/film.mkv").write_bytes(b"x" * 2048)
+        torrents = [{"content_path": str(done / "Owned.2020"), "save_path": str(done), "name": "Owned.2020"}]
+        d = doctor.Doctor(cfg)
+        with mock.patch.object(c, "request", return_value=c.Response(200, {}, json.dumps(torrents).encode())):
+            d.orphans()
+        self.assertEqual(len(d.notes), 1)
+        self.assertIn("1 item(s) in the downloads folder no torrent owns", d.notes[0][0])
+        self.assertIn("Leftover.2019", d.notes[0][0])
+        self.assertTrue((done / "Leftover.2019/film.mkv").exists())   # only reported
+        d2 = doctor.Doctor(cfg)
+        with mock.patch.object(c, "request", return_value=c.Response(0, {}, b"")):
+            d2.orphans()   # qBittorrent not answering: nothing said
+        self.assertEqual(d2.notes, [])

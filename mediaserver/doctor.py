@@ -8,11 +8,12 @@ from __future__ import annotations
 import re
 import shutil
 import time
+from pathlib import Path
 from datetime import datetime
 
 from mediaserver import common as c
 from mediaserver import launchd
-from mediaserver.config import Config, Keys
+from mediaserver.config import Config, Keys, local
 from mediaserver.ui import info
 
 JF_CLIENT = 'MediaBrowser Client="doctor", Device="script", DeviceId="doctor", Version="1.0"'
@@ -43,7 +44,7 @@ class Doctor:
     def run(self) -> int:
         info("Doctor (read-only)")
         for part in (self.services, self.connection, self.indexers, self.downloads, self.subtitles,
-                     self.library, self.postimport, self.disk, self.records):
+                     self.library, self.postimport, self.disk, self.orphans, self.records):
             try:
                 part()
             except (KeyError, IndexError, TypeError, ValueError, AttributeError, *c.HTTP_ERRORS) as e:
@@ -218,6 +219,32 @@ class Doctor:
             self.note(f"Kept although no better release was found: {kept}", "Sonarr/Radarr → the title → Interactive Search, to pick one by hand")
         recent = sum(1 for r in status.get("recent") or [] if r.get("time", 0) > time.time() - 86400)
         self.good(f"Checks after each download: running ({recent} fixes in the last day)")
+
+    def orphans(self) -> None:
+        """Files in the finished-downloads folders that no torrent owns (left
+        by a torrent removed without its files): reported, never deleted"""
+        root = self.paths.downloads / "torrents/complete"
+        if not root.is_dir():
+            return
+        r = c.request(local("qbittorrent") + "/api/v2/torrents/info", timeout=20)
+        torrents = r.json(None) if r.ok else None
+        if not isinstance(torrents, list):
+            return   # can't tell what's owned: say nothing
+        owned = {str(Path(t.get("content_path") or Path(t.get("save_path", "")) / t.get("name", ""))) for t in torrents}
+        left = [e for category in root.iterdir() if category.is_dir() for e in category.iterdir()
+                if not e.name.startswith(".") and str(e) not in owned]
+
+        def size(p: Path) -> int:
+            if p.is_file():
+                return p.stat().st_size
+            return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+        if left:
+            total = sum(size(e) for e in left) / 1024 ** 3
+            names = ", ".join(e.name[:50] for e in left[:3]) + (f" and {len(left) - 3} more" if len(left) > 3 else "")
+            self.note(f"{len(left)} item(s) in the downloads folder no torrent owns ({total:.1f} GB): {names}",
+                      f"Leftovers of removed torrents; delete them in {root} once you've checked they're in your library")
+        else:
+            self.good("No leftover files in the downloads folder")
 
     def disk(self) -> None:
         free = shutil.disk_usage(self.paths.media).free // 1024 ** 3

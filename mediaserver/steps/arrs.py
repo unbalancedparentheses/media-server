@@ -72,13 +72,18 @@ def configure_app(cfg: Config, app: App, roots: list[str], category_field: str, 
     qbit = next((x for x in clients if x.get("implementation") == "QBittorrent"), None)
     sab = next((x for x in clients if x.get("implementation") == "Sabnzbd"), None)
     resource = f"{app.url}/api/{app.version}/downloadclient"
+    # Sonarr/Radarr remove a download (with its files) once it's imported and
+    # qBittorrent's seeding limits are reached: otherwise finished torrents
+    # stay forever, a full second copy once postimport rewrote the file
+    removal = {"removeCompletedDownloads": cfg.flag("downloads.remove_completed", True), "removeFailedDownloads": True}
     if qbit:
         # Keep the login in step with config.toml
-        sync_fields(f"{service} qBittorrent client", resource, qbit["id"], {"username": cfg.qbit_user, "password": cfg.qbit_pass}, app.key)
+        sync_fields(f"{service} qBittorrent client", resource, qbit["id"], {"username": cfg.qbit_user, "password": cfg.qbit_pass}, app.key,
+                    removal)
         ok("qBittorrent connected")
     else:
         body = {"name": "qBittorrent", "implementation": "QBittorrent", "configContract": "QBittorrentSettings", "enable": True,
-                "protocol": "torrent", "priority": 1,
+                "protocol": "torrent", "priority": 1, **removal,
                 "fields": [{"name": "host", "value": "localhost"}, {"name": "port", "value": 8081},
                            {"name": "username", "value": cfg.qbit_user}, {"name": "password", "value": cfg.qbit_pass},
                            {"name": category_field, "value": service}]}
@@ -88,11 +93,11 @@ def configure_app(cfg: Config, app: App, roots: list[str], category_field: str, 
         except ApiError:
             warn("Could not add qBittorrent")
     if keys.sabnzbd and sab:
-        sync_fields(f"{service} SABnzbd client", resource, sab["id"], {"apiKey": keys.sabnzbd}, app.key)
+        sync_fields(f"{service} SABnzbd client", resource, sab["id"], {"apiKey": keys.sabnzbd}, app.key, removal)
         ok("SABnzbd connected")
     elif keys.sabnzbd:
         body = {"name": "SABnzbd", "implementation": "Sabnzbd", "configContract": "SabnzbdSettings", "enable": True,
-                "protocol": "usenet", "priority": 2,
+                "protocol": "usenet", "priority": 2, **removal,
                 "fields": [{"name": "host", "value": "localhost"}, {"name": "port", "value": 8080},
                            {"name": "apiKey", "value": keys.sabnzbd}, {"name": category_field, "value": service}]}
         try:

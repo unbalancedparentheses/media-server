@@ -17,6 +17,7 @@ password = "changeme"
 seeding_ratio = 2
 seeding_time_minutes = 10080
 upload_limit_kib = 100   # qBittorrent upload cap in KiB/s (0 = no limit)
+remove_completed = true  # once imported and done seeding, Sonarr/Radarr remove the torrent and its files
 
 [subtitles]
 languages = ["en", "es"]

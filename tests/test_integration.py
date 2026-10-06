@@ -218,6 +218,18 @@ class ChangedConfig(Stack):
         self.assertEqual(self.stack.sonarr.host["password"], "new-admin-pass")
         self.assertIn("Jellyfin password changed", out)
 
+    def test_finished_downloads_removed_once_imported(self):
+        self.run_steps()
+        for app in (self.stack.sonarr, self.stack.radarr):
+            client = next(c for c in app.resources["downloadclient"].items if c["implementation"] == "QBittorrent")
+            self.assertEqual((client["removeCompletedDownloads"], client["removeFailedDownloads"]), (True, True))
+        data = json.loads(json.dumps(self.cfg.data))
+        data["downloads"]["remove_completed"] = False
+        self.cfg = Config(data, self.cfg.paths)
+        self.run_steps()   # an existing client follows the setting
+        client = next(c for c in self.stack.sonarr.resources["downloadclient"].items if c["implementation"] == "QBittorrent")
+        self.assertFalse(client["removeCompletedDownloads"])
+
     def test_admin_pages_on_this_mac_only_ask_no_login(self):
         import yaml
         def bind(address):

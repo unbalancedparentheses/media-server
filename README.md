@@ -257,6 +257,7 @@ To change a password, edit it here and re-run install: every service gets it, Je
 | `seeding_ratio` | `2` | Stop seeding a finished torrent after uploading this many times its size… |
 | `seeding_time_minutes` | `10080` (7 days) | …or after this long, whichever comes first |
 | `upload_limit_kib` | `100` | qBittorrent's upload speed cap in KiB/s (`0` = no limit) |
+| `remove_completed` | `true` | Once a download is imported and has reached the seeding limits above, Sonarr/Radarr remove it from qBittorrent with its files (the library copy stays). Without it finished torrents stay forever, a full second copy once a file was fixed after import. A download that was never imported is kept; `nix run .#doctor` also reports files in the downloads folder no torrent owns (it never deletes them) |
 
 </details>
 

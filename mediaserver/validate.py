@@ -93,6 +93,7 @@ SCHEMA = {
         "seeding_ratio": number(lo=0),
         "seeding_time_minutes": integer(lo=0),
         "upload_limit_kib": integer(lo=0),
+        "remove_completed": boolean,
     },
     "subtitles": {
         "languages": list_of(string(), nonempty=True),

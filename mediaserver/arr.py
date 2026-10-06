@@ -50,7 +50,7 @@ def set_login(cfg: Config, label: str, url: str, key: str, version: str, service
         warn(f"{label}: the new login doesn't work yet (retried next run)")
 
 
-def sync_fields(label: str, resource_url: str, resource_id: Any, fields: dict, key: str) -> None:
+def sync_fields(label: str, resource_url: str, resource_id: Any, fields: dict, key: str, extra: dict | None = None) -> None:
     """Set named fields on an existing resource (a download client, an
     application...) so changed passwords, API keys and URLs reach it.
     Secrets read back masked, so the update is sent every run."""
@@ -62,6 +62,7 @@ def sync_fields(label: str, resource_url: str, resource_id: Any, fields: dict, k
         return
     current["fields"] = [dict(f, value=fields[f["name"]]) if fields.get(f.get("name")) is not None else f
                          for f in current.get("fields") or []]
+    current.update(extra or {})
     try:
         api.call("PUT", f"{resource_url}/{resource_id}?forceSave=true", h, body=current)
     except ApiError:
