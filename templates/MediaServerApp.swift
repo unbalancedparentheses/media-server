@@ -12,7 +12,9 @@
 // Written by setup (mediaserver/steps/macapp.py), compiled on this Mac;
 // the services and their addresses come from services.json beside it.
 import AppKit
+import CoreSpotlight
 import ServiceManagement
+import UniformTypeIdentifiers
 import UserNotifications
 import WebKit
 
@@ -88,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         window.titleVisibility = .hidden
 
         buildMenu()
-        show(0)
+        show(min(defaults.integer(forKey: "lastPage"), services.count - 1))   // where you left off
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -126,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         v.navigationDelegate = self
         v.uiDelegate = self
         v.pageZoom = zoom(i)
-        if let url = URL(string: services[i].url) { v.load(URLRequest(url: url)) }
+        if let url = savedURL(i) ?? URL(string: services[i].url) { v.load(URLRequest(url: url)) }
         // Page changes without a reload too (Seerr after its login)
         watchers.append(v.observe(\.url, options: [.new]) { [weak self] view, _ in
             DispatchQueue.main.async { self?.landed(i, view.url) }
@@ -139,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
     func show(_ i: Int, url: URL? = nil) {
         guard services.indices.contains(i) else { return }
         current = i
+        defaults.set(i, forKey: "lastPage")
         picker.selectedSegment = i
         let v = page(i)
         for (j, other) in views { other.isHidden = j != i }
@@ -157,8 +160,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         return path.hasPrefix("/login") || path.hasPrefix("/signin") || path.hasPrefix("/auth")
     }
 
+    // Each page's address, to reopen it there (not a login page, and only
+    // on the same service)
+    func savedURL(_ i: Int) -> URL? {
+        guard let text = defaults.string(forKey: "lastURL." + services[i].name), let url = URL(string: text),
+              !AppDelegate.isLogin(url), service(for: url) == i else { return nil }
+        return url
+    }
+
     func landed(_ i: Int, _ url: URL?) {
         guard let url = url else { return }
+        if !AppDelegate.isLogin(url), service(for: url) == i { defaults.set(url.absoluteString, forKey: "lastURL." + services[i].name) }
         if AppDelegate.isLogin(url) {
             // Sent to the login: remember where it was going (not the front page)
             if let wanted = lastAsked[i], !AppDelegate.isLogin(wanted), wanted.path != "/" { afterLogin[i] = wanted }
@@ -282,6 +294,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
     var polled = false
 
     func poll() {
+        if let torrents = URL(string: services[0].url + "/api/qbt/torrents/info") {
+            URLSession.shared.dataTask(with: torrents) { [weak self] data, _, _ in
+                let list = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] } ?? []
+                DispatchQueue.main.async { self?.lastTorrents = list }
+            }.resume()
+        }
         guard let url = URL(string: services[0].url + "/status.json") else { return }
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -310,7 +328,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         }
     }
 
+    var lastStatus: [String: Any] = [:]
+    var lastTorrents: [[String: Any]] = []
+
     func update(_ status: [String: Any]) {
+        lastStatus = status
+        decorateToolbar(status)
+        indexLibrary(status)
         let problems = AppDelegate.problems(status)
         let downloading = (status["downloads"] as? [String: Any])?["downloading"] as? Int ?? 0
         NSApp.dockTile.badgeLabel = !problems.isEmpty ? "\(problems.count)" : downloading > 0 ? "↓\(downloading)" : nil
@@ -337,6 +361,159 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
         defaults.set(seen, forKey: "notifiedReady")
         defaults.set(Array(current), forKey: "notifiedProblems")
         polled = true
+    }
+
+    // ─── Toolbar health and counts ───────────────────────────────
+
+    // The service behind each page, by the dashboard's uptime names
+    func serviceName(_ page: String) -> String {
+        ["Watch": "Jellyfin", "Requests": "Seerr", "Home": "nginx"][page] ?? page
+    }
+
+    func decorateToolbar(_ status: [String: Any]) {
+        let up = Dictionary((status["uptime"] as? [[String: Any]] ?? []).compactMap { u -> (String, Bool)? in
+            guard let name = u["name"] as? String else { return nil }
+            return (name, u["up_now"] as? Bool ?? true)
+        }, uniquingKeysWith: { a, _ in a })
+        let problems = AppDelegate.problems(status).count
+        let pending = (status["requests"] as? [String: Any])?["pending"] as? Int ?? 0
+        let downloading = (status["downloads"] as? [String: Any])?["downloading"] as? Int ?? 0
+        let warning = NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "not answering")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [.systemRed]))
+        for (i, s) in services.enumerated() {
+            let count = s.name == "Home" ? problems : s.name == "Requests" ? pending : s.name == "qBittorrent" ? downloading : 0
+            let label = s.name + (count > 0 ? (s.name == "qBittorrent" ? " ↓\(count)" : " \(count)") : "")
+            picker.setLabel(label, forSegment: i)
+            let down = up[serviceName(s.name)] == false
+            picker.setImage(down ? warning : nil, forSegment: i)
+            picker.setToolTip(down ? "\(serviceName(s.name)) isn't answering"
+                              : count > 0 ? (s.name == "Home" ? "\(count) thing(s) need a look"
+                                             : s.name == "Requests" ? "\(count) request(s) waiting" : "\(count) downloading") : nil,
+                              forSegment: i)
+        }
+    }
+
+    // ─── Spotlight: your library, opened in Watch ────────────────
+
+    func indexLibrary(_ status: [String: Any]) {
+        let titles = status["library_titles"] as? [[String: Any]] ?? []
+        let key = titles.compactMap { $0["id"] as? String }.joined(separator: ",")
+        guard !titles.isEmpty, key != defaults.string(forKey: "spotlightIndexed") else { return }
+        let items = titles.compactMap { t -> CSSearchableItem? in
+            guard let id = t["id"] as? String, let title = t["title"] as? String else { return nil }
+            let attrs = CSSearchableItemAttributeSet(contentType: UTType.movie)
+            let year = (t["year"] as? Int).map { " · \($0)" } ?? ""
+            attrs.title = title
+            attrs.displayName = title
+            attrs.contentDescription = ((t["kind"] as? String) == "series" ? "Series" : "Film") + year + " · Media Server"
+            attrs.keywords = [title, "Media Server"]
+            return CSSearchableItem(uniqueIdentifier: id, domainIdentifier: "library", attributeSet: attrs)
+        }
+        let index = CSSearchableIndex.default()
+        index.deleteSearchableItems(withDomainIdentifiers: ["library"]) { _ in
+            index.indexSearchableItems(items) { error in
+                if error == nil { DispatchQueue.main.async { self.defaults.set(key, forKey: "spotlightIndexed") } }
+            }
+        }
+    }
+
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        guard userActivity.activityType == CSSearchableItemActionType,
+              let id = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+              let url = URL(string: watchURL(id)) else { return false }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        show(service(for: url) ?? 0, url: url)
+        return true
+    }
+
+    // ─── Cmd+K: search your library and everything to request ─────
+
+    @objc func searchEverything(_ sender: Any?) {
+        window.makeKeyAndOrderFront(nil)
+        show(0)
+        views[0]?.evaluateJavaScript("var s=document.getElementById('search'); if(s){s.focus(); s.select();}")
+    }
+
+    // ─── The Dock icon's menu ────────────────────────────────────
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        func header(_ title: String) {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        func link(_ title: String, _ url: String) {
+            let item = NSMenuItem(title: title, action: #selector(openFromDock(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = url
+            menu.addItem(item)
+        }
+        header(serverStatus.title)
+        let moving = lastTorrents.filter { ($0["progress"] as? Double ?? 1) < 1 && !["pausedDL", "stoppedDL"].contains($0["state"] as? String ?? "") }
+        if !moving.isEmpty {
+            menu.addItem(.separator())
+            header("Downloading")
+            for t in moving.prefix(5) {
+                let name = (t["name"] as? String ?? "?").prefix(48)
+                link("\(name) — \(Int((t["progress"] as? Double ?? 0) * 100))%", services.first { $0.name == "qBittorrent" }?.url ?? services[0].url)
+            }
+        }
+        let playing = lastStatus["playing"] as? [[String: Any]] ?? []
+        if !playing.isEmpty {
+            menu.addItem(.separator())
+            header("Playing")
+            for p in playing.prefix(3) {
+                header("\(p["title"] as? String ?? "?") (\(p["user"] as? String ?? ""))")
+            }
+        }
+        let latest = (lastStatus["latest"] as? [[String: Any]] ?? []).prefix(3)
+        if !latest.isEmpty {
+            menu.addItem(.separator())
+            header("Recently added")
+            for item in latest {
+                if let id = item["id"] as? String, let title = item["title"] as? String { link("▶ " + title, watchURL(id)) }
+            }
+        }
+        menu.addItem(.separator())
+        let speed = lastStatus["speed_limit"] as? [String: Any] ?? [:]
+        let limited = speed["limited"] as? Bool ?? false
+        let toggle = NSMenuItem(title: limited ? "Back to normal speed" : "Limit download speed", action: #selector(toggleSpeed(_:)), keyEquivalent: "")
+        toggle.target = self
+        menu.addItem(toggle)
+        let restart = NSMenuItem(title: "Restart Everything…", action: #selector(restartAll(_:)), keyEquivalent: "")
+        restart.target = self
+        menu.addItem(restart)
+        link("Open Dashboard", services[0].url)
+        return menu
+    }
+
+    @objc func openFromDock(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String, let url = URL(string: text) else { return }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        show(service(for: url) ?? 0, url: url)
+    }
+
+    // The dashboard's speed switch: its limits when on (5 MB/s down, 512 KB/s up if none set)
+    @objc func toggleSpeed(_ sender: Any?) {
+        let speed = lastStatus["speed_limit"] as? [String: Any] ?? [:]
+        let limited = speed["limited"] as? Bool ?? false
+        let down = (speed["down"] as? Int).flatMap { $0 > 0 ? $0 : nil } ?? 5120
+        let up = (speed["up"] as? Int).flatMap { $0 > 0 ? $0 : nil } ?? 512
+        let body: [String: Any] = limited ? ["limited": false] : ["limited": true, "down": down, "up": up]
+        guard let url = URL(string: services[0].url + "/api/control/speed"),
+              let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = data
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("media-server-app", forHTTPHeaderField: "X-Requested-With")
+        URLSession.shared.dataTask(with: request) { [weak self] _, _, _ in
+            DispatchQueue.main.async { self?.poll() }
+        }.resume()
     }
 
     func watchURL(_ id: String) -> String {
@@ -646,6 +823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSToolbarDelegate, WKN
             item("Forward", #selector(goForward(_:)), "]", target: self),
             item("Reload", #selector(reload(_:)), "r", target: self),
             item("Start of This Page", #selector(goHome(_:)), "h", [.command, .shift], target: self),
+            item("Search Library and Requests…", #selector(searchEverything(_:)), "k", target: self),
             .separator(),
         ]
         for (i, s) in services.enumerated() where i < 9 {
