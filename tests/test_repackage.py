@@ -143,12 +143,15 @@ class RealFile(unittest.TestCase):
                         "-c:v", "libx264", "-c:a", "aac", "-c:s", "srt", "-metadata:s:s:0", "language=eng", str(self.video)], check=True)
         self.radarr = FakeApp("Radarr", "movie", [{"id": 7, "path": str(folder)}])
         self.state: dict = {}
+        pi.Worker.checks = (lambda p: True, lambda p: False)
         settings: dict = dict(pi.DEFAULTS, library_dirs=[str(self.movies)])
         self.worker = pi.Worker([self.radarr], settings, self.state)
         self.updates: list = []
         for patcher in (mock.patch.object(pi, "STATE", self.dir), mock.patch.object(pi, "room_for", return_value=True),
-                        mock.patch.object(pi, "jellyfin_updated", lambda p, changes=None: self.updates.append(changes)),
-                        mock.patch.object(pi, "operation_running", return_value=False)):
+                        mock.patch.object(pi, "jellyfin_updated", lambda p, changes=None: self.updates.append(changes) or True),
+                        mock.patch.object(pi, "operation_running", return_value=False),
+                        # Jellyfin's view when resuming: nobody started it, nothing playing
+                        mock.patch.object(pi.Worker, "watch_checks", lambda self: self.checks)):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -213,27 +216,98 @@ class RealFile(unittest.TestCase):
         self.assertNotIn(new, self.state["repackage_pending"])
         self.assertIn(new, self.state["playback_pending"])
 
-    def test_a_crash_after_the_switch_is_finished(self):
+    def interrupted(self, publish_subtitles: bool, publish_mp4: bool) -> tuple[Path, Path]:
+        """A conversion stopped right after its record was saved, with the
+        subtitle and/or the MP4 published or not (as a crash would leave it)"""
+        real = rp.publish
+
+        def publish(tmp, final):
+            if (final.suffix == ".srt" and not publish_subtitles) or (final.suffix == ".mp4" and not publish_mp4):
+                raise KeyboardInterrupt   # the service stopped here
+            real(tmp, final)
+
+        def stopped(*a):
+            raise KeyboardInterrupt   # …or right after the MP4 was published
+        # A crash runs no clean-up: abandon_repackage isn't reached
+        with mock.patch.object(rp, "publish", publish), mock.patch.object(pi.Worker, "abandon_repackage", lambda *a: None), \
+                mock.patch.object(pi.Worker, "finish_repackage", stopped):
+            with self.assertRaises(KeyboardInterrupt):
+                self.worker.repackage_one(self.video, pi.seen_mark(self.video), lambda p: True, {})
         new = self.video.with_suffix(".mp4")
-        shutil.copy(self.video, new)   # published, then the service stopped
-        self.state["repackage_pending"] = {str(new): {"old": str(self.video), "title": "Film (2010)", "subtitles": [],
-                                                      "steps": ["switch", "rescan", "jellyfin", "playback"]}}
+        self.assertIn(str(new), self.state["repackage_pending"])   # the record survived
+        return new, self.video.parent / "Film (2010).en.srt"
+
+    def test_crash_before_any_publish_leaves_others_files_alone(self):
+        new, sub = self.interrupted(publish_subtitles=False, publish_mp4=False)
+        sub.write_text("Bazarr wrote this one after the crash")   # same name, not ours
+        self.worker.finish_repackage(str(new))
+        self.assertEqual(sub.read_text(), "Bazarr wrote this one after the crash")
+        self.assertTrue(self.video.exists())
+        self.assertEqual(self.state["repackage_pending"], {})
+
+    def test_crash_after_the_subtitles_is_undone(self):
+        new, sub = self.interrupted(publish_subtitles=True, publish_mp4=False)
+        self.assertTrue(sub.exists())
+        self.worker.finish_repackage(str(new))
+        self.assertFalse(sub.exists())   # ours (same inode): removed
+        self.assertTrue(self.video.exists())
+        self.assertFalse(new.exists())
+        self.assertEqual(sorted(f.name for f in self.video.parent.iterdir()), ["Film (2010).mkv"])
+
+    def test_crash_after_the_mp4_is_finished(self):
+        new, sub = self.interrupted(publish_subtitles=True, publish_mp4=True)
         self.worker.finish_repackage(str(new))
         self.assertFalse(self.video.exists())
+        self.assertTrue(new.exists() and sub.exists())
         self.assertEqual(self.radarr.rescans, [{"movieId": 7}])
         self.assertEqual(self.state["repackage_pending"], {})
 
-    def test_a_crash_before_the_switch_is_undone(self):
-        sub = self.video.parent / "Film (2010).en.srt"
-        sub.write_text("published before the crash")
-        new = self.video.with_suffix(".mp4")
-        self.state["repackage_pending"] = {str(new): {"old": str(self.video), "title": "Film (2010)", "subtitles": [str(sub)],
-                                                      "steps": ["switch", "rescan", "jellyfin", "playback"]}}
+    def test_resuming_when_someone_started_it_undoes(self):
+        new, sub = self.interrupted(publish_subtitles=True, publish_mp4=True)
+        self.worker.checks = (lambda p: False, lambda p: False)   # started meanwhile
         self.worker.finish_repackage(str(new))
         self.assertTrue(self.video.exists())
-        self.assertFalse(sub.exists())
+        self.assertFalse(new.exists() or sub.exists())
+
+    def test_resuming_when_its_playing_undoes(self):
+        new, _ = self.interrupted(publish_subtitles=True, publish_mp4=True)
+        self.worker.checks = (lambda p: True, lambda p: True)
+        self.worker.finish_repackage(str(new))
+        self.assertTrue(self.video.exists())
+        self.assertFalse(new.exists())
+
+    def test_resuming_when_the_mkv_changed_undoes(self):
+        new, _ = self.interrupted(publish_subtitles=True, publish_mp4=True)
+        with open(self.video, "ab") as f:
+            f.write(b"replaced by a new download")
+        self.worker.finish_repackage(str(new))
+        self.assertTrue(self.video.exists())
+        self.assertFalse(new.exists())
+
+    def test_resuming_when_the_mp4_was_replaced_touches_neither(self):
+        new, _ = self.interrupted(publish_subtitles=True, publish_mp4=True)
+        new.unlink()
+        new.write_bytes(b"someone else's file")   # same name, another inode
+        self.worker.finish_repackage(str(new))
+        self.assertEqual(new.read_bytes(), b"someone else's file")
+        self.assertTrue(self.video.exists())
         self.assertEqual(self.state["repackage_pending"], {})
-        self.assertEqual(self.radarr.rescans, [])
+
+    def test_resuming_waits_while_jellyfin_isnt_answering(self):
+        new, _ = self.interrupted(publish_subtitles=True, publish_mp4=True)
+        self.worker.checks = None
+        self.worker.finish_repackage(str(new))
+        self.assertTrue(self.video.exists() and new.exists())
+        self.assertEqual(self.state["repackage_pending"][str(new)]["steps"][0], "switch")
+
+    def test_a_failed_jellyfin_notice_stays_pending(self):
+        with mock.patch.object(pi, "jellyfin_updated", return_value=False):
+            self.assertTrue(self.worker.repackage_one(self.video, pi.seen_mark(self.video), lambda p: True, {}))
+        new = str(self.video.with_suffix(".mp4"))
+        self.assertEqual(self.state["repackage_pending"][new]["steps"], ["jellyfin", "playback"])
+        self.worker.finish_repackage(new)   # Jellyfin answers now
+        self.assertNotIn(new, self.state["repackage_pending"])
+        self.assertEqual(len(self.updates), 1)
 
     def test_failed_remux_keeps_the_mkv_and_no_stray_subtitles(self):
         with mock.patch.object(rp, "checks_out", return_value=False):

@@ -820,9 +820,9 @@ class Arr:
         return bool(self.call("GET", f"movie/{item_id}").get("hasFile"))
 
 
-def jellyfin_updated(path, changes: list | None = None):
+def jellyfin_updated(path, changes: list | None = None) -> bool:
     """Tell Jellyfin a file changed, so it re-reads its tracks (or <changes>:
-    [(path, "Created"/"Deleted"/"Modified")])"""
+    [(path, "Created"/"Deleted"/"Modified")]); False when it didn't take it"""
     try:
         key = (STATE.parent / "dashstatus/jellyfin-key").read_text().strip()
         updates = [{"Path": str(p), "UpdateType": t} for p, t in (changes or [(path, "Modified")])]
@@ -831,8 +831,9 @@ def jellyfin_updated(path, changes: list | None = None):
             data=json.dumps({"Updates": updates}).encode(),
             headers={"Authorization": f'MediaBrowser Token="{key}"', "Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=15).close()
+        return True
     except (OSError, urllib.error.URLError):
-        pass
+        return False
 
 
 # ─── Rounds ──────────────────────────────────────────────────────
@@ -1223,61 +1224,99 @@ class Worker:
             if not rp.same(path, before):
                 log(f"{path.name} changed while being repackaged; kept it")
                 return False
-            # Recorded before any name changes: a crash from here on is
-            # finished (or undone) next round
-            self.state.setdefault("repackage_pending", {})[str(new)] = {
-                "old": str(path), "title": title, "subtitles": [], "steps": ["switch", "rescan", "jellyfin", "playback"]}
-            save(self.state)
+            # Recorded before any name changes, with the identity (inode)
+            # each published file will have (a hard link keeps it): a crash
+            # from here on is finished or undone next round, removing only
+            # files that are provably ours
             os.chmod(out, st.st_mode & 0o777)
+            self.state.setdefault("repackage_pending", {})[str(new)] = {
+                "old": str(path), "old_id": list(before), "new_ino": out.stat().st_ino, "title": title,
+                "subtitles": [{"path": str(final), "ino": tmp.stat().st_ino} for tmp, final in planned],
+                "temps": [str(f) for f in temps], "steps": ["switch", "rescan", "jellyfin", "playback"]}
+            save(self.state)
             for tmp, final in planned:
                 rp.publish(tmp, final)
-                # Listed once it's ours: an undo removes only what was published here
-                self.state["repackage_pending"][str(new)]["subtitles"].append(str(final))
-                save(self.state)
             rp.publish(out, new)
             committed = True
         except OSError as e:
             log(f"couldn't repackage {path.name}: {e}; kept it")
             return False
         finally:
+            if not committed and str(new) in self.state.get("repackage_pending", {}):
+                self.abandon_repackage(str(new), "it didn't finish")
             for f in temps:
                 f.unlink(missing_ok=True)
-            if not committed:
-                # Undone: the record, and any subtitle already published
-                entry = self.state.get("repackage_pending", {}).pop(str(new), None)
-                for f in (entry or {}).get("subtitles", []):
-                    Path(f).unlink(missing_ok=True)
-                if entry:
-                    save(self.state)
             self.working(path, title, None)
         self.finish_repackage(str(new))
         return True
 
+    @staticmethod
+    def ours(path, ino) -> bool:
+        """<path> is the very file this published (same inode)"""
+        try:
+            return os.stat(path).st_ino == ino
+        except OSError:
+            return False
+
+    def abandon_repackage(self, key: str, reason: str) -> None:
+        """Undone: the subtitles and the MP4 this published go (only those:
+        checked by inode), its temporary files too; the MKV stays"""
+        entry = self.state.get("repackage_pending", {}).pop(key, None)
+        if not entry:
+            return
+        for sub in entry.get("subtitles", []):
+            if self.ours(sub["path"], sub["ino"]):
+                Path(sub["path"]).unlink(missing_ok=True)
+        if Path(entry["old"]).exists() and self.ours(key, entry.get("new_ino")):
+            Path(key).unlink(missing_ok=True)
+        for f in entry.get("temps", []):
+            Path(f).unlink(missing_ok=True)
+        save(self.state)
+        log(f"{entry.get('title', key)}: repackaging undone ({reason}); the MKV stays")
+
+    def watch_checks(self):
+        """(unwatched, busy) from Jellyfin now; None when it isn't answering"""
+        from mediaserver import repackage as rp
+        jf = playback.Jellyfin(STATE.parent)
+        try:
+            items = jf.items()
+        except c.HTTP_ERRORS:
+            return None
+        playing = jf.now_playing()
+        if playing is None:
+            return None
+        return rp.unwatched(items, jf.user_data), (lambda p: str(p) in playing)
+
     def finish_repackage(self, key: str) -> None:
-        """The steps of a conversion left: the MKV removed once the MP4 is in
-        place, Sonarr/Radarr's rescan, Jellyfin told, the stream check. Each
-        is saved when done, so a crash or a failed rescan resumes here."""
+        """The steps of a conversion left, each saved when done. Before the
+        MKV goes, everything is checked again (it may be a resumed one): the
+        MP4 is the one published here, the MKV hasn't changed, and nobody is
+        watching or has started it; otherwise it's undone."""
+        from mediaserver import repackage as rp
         entry = self.state.get("repackage_pending", {}).get(key)
         if not entry:
             return
         new, old = Path(key), Path(entry["old"])
-        if not new.exists():
-            # Interrupted before the MP4 was published: undone (the
-            # subtitles published here go), MKV kept
-            for f in entry.get("subtitles", []):
-                Path(f).unlink(missing_ok=True)
-            self.state["repackage_pending"].pop(key, None)
-            save(self.state)
-            return
         while entry["steps"]:
             step = entry["steps"][0]
             if step == "switch":
-                old.unlink(missing_ok=True)
+                if not self.ours(new, entry.get("new_ino")):
+                    return self.abandon_repackage(key, "the MP4 wasn't published, or isn't the one made here")
+                if old.exists():
+                    if not rp.same(old, tuple(entry.get("old_id") or ())):
+                        return self.abandon_repackage(key, "the MKV changed")
+                    checks = self.watch_checks()
+                    if checks is None:
+                        return   # Jellyfin isn't answering: checked next round
+                    unwatched, busy = checks
+                    if busy(old) or unwatched(old) is not True:
+                        return self.abandon_repackage(key, "someone started it, or Jellyfin doesn't list it")
+                    old.unlink()
                 self.remember(entry["title"], "repackaged as MP4 so Apple devices and the app play it directly (nothing re-encoded)")
             elif step == "rescan" and not self.rescan_owner(new):
                 return   # Sonarr/Radarr didn't answer: next round
-            elif step == "jellyfin":
-                jellyfin_updated(new, [(old, "Deleted"), (new, "Created")])
+            elif step == "jellyfin" and not jellyfin_updated(new, [(old, "Deleted"), (new, "Created")]):
+                return   # Jellyfin didn't take it: next round
             elif step == "playback":
                 playback.queue(self.state, new, entry["title"])
             entry["steps"].pop(0)
