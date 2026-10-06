@@ -86,7 +86,7 @@ class Stand(http.server.BaseHTTPRequestHandler):
                                                {"id": 10378, "mediaType": "movie", "title": "Big Buck Bunny", "releaseDate": "2008-04-10"}]})
         if path.startswith("/api/"):
             return self.send(200, [] if "qbt" in path else {})
-        self.send(404, b"", "text/plain")
+        return self.send(404, b"", "text/plain")
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
@@ -95,9 +95,9 @@ class Stand(http.server.BaseHTTPRequestHandler):
             return self.send(200, {"paused": {body["what"]: NOW + 86400}})
         if self.path == "/api/control/delete":
             return self.send(200, {"stopped": "Kaiji season 2"} if body.get("stop") else {"deleted": "Sintel (2010)", "files_removed": 1})
-        self.send(200, {})
+        return self.send(200, {})
 
-    def log_message(self, *a):
+    def log_message(self, format, *args):  # noqa: A002 (the base class's name)
         pass
 
 
