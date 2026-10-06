@@ -88,9 +88,13 @@ class Verifier:
     def health(self) -> None:
         info("Service health...")
         for name, url in self.urls.health_endpoints():
-            # Generous: Byparr's /health starts a browser to answer
+            # Generous: Byparr's /health starts a browser to answer, which
+            # takes a while after a restart (a restore, on a slow Mac)
             code = c.status_code(url, timeout=30)
-            if code == 0:
+            # Up to 2 minutes for Byparr, when an enabled indexer needs it
+            for _ in range(24 if name == "Byparr" and self.cfg.byparr_needed() else 1):
+                if code != 0:
+                    break
                 time.sleep(5)
                 code = c.status_code(url, timeout=30)
             shown = f"{code:03d}"
