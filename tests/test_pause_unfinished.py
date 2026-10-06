@@ -136,3 +136,21 @@ class Orphans(unittest.TestCase):
         with mock.patch.object(c, "request", return_value=c.Response(0, {}, b"")):
             d2.orphans()   # qBittorrent not answering: nothing said
         self.assertEqual(d2.notes, [])
+
+
+class Leaks(unittest.TestCase):
+    def test_a_served_secret_is_found(self):
+        from mediaserver import leaks
+        from tests.test_integration import example_config
+        cfg = example_config(Path(tempfile.mkdtemp()))
+        self.addCleanup(shutil.rmtree, cfg.paths.media)
+        served = {"/status.json": b'{"sonarr": {"apiKey": "abcdef123456"}}'}
+
+        def request(url, *a, **kw):
+            path = url.split("localhost", 1)[1] or "/"
+            return c.Response(200, {}, served.get(path, b"<html></html>"))
+        with mock.patch.object(leaks, "secrets", return_value={"sonarr API key": "abcdef123456", "Jellyfin password": "admin-pass"}), \
+                mock.patch.object(c, "request", request), mock.patch.dict("os.environ", {"MEDIASERVER_URL_DASHBOARD": "http://localhost"}):
+            self.assertEqual(leaks.find(cfg), ["sonarr API key in /status.json"])
+            served.clear()
+            self.assertEqual(leaks.find(cfg), [])

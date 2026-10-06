@@ -44,7 +44,7 @@ class Doctor:
     def run(self) -> int:
         info("Doctor (read-only)")
         for part in (self.services, self.connection, self.indexers, self.downloads, self.subtitles,
-                     self.library, self.postimport, self.disk, self.orphans, self.records):
+                     self.library, self.postimport, self.disk, self.orphans, self.secrets, self.records):
             try:
                 part()
             except (KeyError, IndexError, TypeError, ValueError, AttributeError, *c.HTTP_ERRORS) as e:
@@ -220,6 +220,15 @@ class Doctor:
             self.note(f"Kept although no better release was found: {kept}", "Sonarr/Radarr → the title → Interactive Search, to pick one by hand")
         recent = sum(1 for r in status.get("recent") or [] if r.get("time", 0) > time.time() - 86400)
         self.good(f"Checks after each download: running ({recent} fixes in the last day)")
+
+    def secrets(self) -> None:
+        """Nothing the dashboard serves carries an API key or password"""
+        from mediaserver import leaks
+        found = leaks.find(self.cfg)
+        if found:
+            self.need("The dashboard serves secrets: " + ", ".join(found), "Report it: nothing it serves should carry them")
+        else:
+            self.good("The dashboard serves no API key or password")
 
     def orphans(self) -> None:
         """Files in the finished-downloads folders that no torrent owns (left

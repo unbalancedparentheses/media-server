@@ -983,6 +983,12 @@ class FakeStack:
             var = f"MEDIASERVER_URL_{name.upper()}"
             self.saved_env[var] = os.environ.get(var)
             os.environ[var] = service.url
+        # Services the stack doesn't fake point nowhere (a closed port), so
+        # nothing reaches the real ones on this Mac (the dashboard, Byparr)
+        for var in ("MEDIASERVER_URL_DASHBOARD", "MEDIASERVER_URL_BYPARR"):
+            if var not in os.environ:
+                self.saved_env[var] = None
+                os.environ[var] = "http://127.0.0.1:9"
         return self
 
     def __exit__(self, *exc) -> None:
