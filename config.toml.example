@@ -20,6 +20,7 @@ upload_limit_kib = 100   # qBittorrent upload cap in KiB/s (0 = no limit)
 remove_completed = true  # once imported and done seeding, Sonarr/Radarr remove the torrent and its files
 
 [subtitles]
+sync = true               # line up downloaded subtitles with the film's audio (Bazarr's sync)
 languages = ["en", "es"]
 # "first": English (the first language); until it's found, the others are
 #          fetched too as a fallback; "all": get every language

@@ -628,3 +628,54 @@ class NoDefaultStaysNoDefault(unittest.TestCase):
         subs = pi.streams(after, "subtitle")
         self.assertEqual([pi.stream_language(st) for st in subs], ["es"])
         self.assertEqual(subs[0]["disposition"]["default"], 0)  # not made default by the muxer
+
+
+@unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+class EmbedSidecarRealFile(unittest.TestCase):
+    """A file whose only subtitles inside are Chinese, with English next to
+    it: the English is copied in, first and default (players such as Moonfin
+    go by the subtitles inside the file)"""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.video = self.dir / "Film (2021).mkv"
+        chi = self.dir / "chi.srt"
+        chi.write_text("1\n00:00:01,000 --> 00:00:02,000\n你好\n")
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=4", "-i", str(chi),
+                        "-map", "0", "-map", "1", "-c:v", "mpeg4", "-c:s", "srt", "-metadata:s:s:0", "language=chi", str(self.video)], check=True)
+        self.side = self.dir / "Film (2021).en.hi.srt"
+        self.side.write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+        self.worker = pi.Worker([], dict(pi.DEFAULTS, subtitle_languages=["en"], stereo_audio=False, ocr_subtitles=False), {})
+        patcher = mock.patch.object(pi, "STATE", self.dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for p in (mock.patch.object(pi, "room_for", return_value=True), mock.patch.object(pi, "jellyfin_updated")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def subtitles(self):
+        return [(pi.stream_language(s), s["disposition"]["default"], pi.tags(s).get(pi.SIDECAR_TAG.lower(), ""))
+                for s in pi.streams(pi.probe(self.video), "subtitle")]
+
+    def test_english_inside_first_and_default_once(self):
+        self.worker.fix(self.video, pi.probe(self.video), "Film")
+        subs = self.subtitles()
+        self.assertEqual([(lang, default) for lang, default, _ in subs], [("en", 1), ("zh", 0)])
+        self.assertTrue(subs[0][2].startswith("Film (2021).en.hi.srt:"))
+        before = self.video.stat().st_mtime
+        self.worker.fix(self.video, pi.probe(self.video), "Film")   # nothing new: not rewritten
+        self.assertEqual(self.video.stat().st_mtime, before)
+
+    def test_a_resynced_file_next_to_it_replaces_the_copy(self):
+        self.worker.fix(self.video, pi.probe(self.video), "Film")
+        import os
+        self.side.write_text("1\n00:00:01,500 --> 00:00:02,500\nHello\n")   # Bazarr re-synced it
+        os.utime(self.side, (self.side.stat().st_atime, self.side.stat().st_mtime + 5))
+        self.worker.fix(self.video, pi.probe(self.video), "Film")
+        subs = self.subtitles()
+        self.assertEqual(len(subs), 2)   # replaced, not added again
+        self.assertEqual(subs[0][:2], ("en", 1))
+
+    def test_a_file_with_english_inside_is_left_alone(self):
+        self.assertIsNone(pi.sidecar_to_embed({"streams": [sub(2, "subrip", "eng")]}, self.video, "en"))

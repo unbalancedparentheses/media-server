@@ -19,7 +19,7 @@ def config_file(cfg: Config) -> Path | None:
                              cfg.paths.config / "bazarr/config/config.yaml") if f.exists()), None)
 
 
-def settings(current: dict, keys: Keys, providers: list, languages: list, bind: str) -> dict:
+def settings(current: dict, keys: Keys, providers: list, languages: list, bind: str, sync: bool = True) -> dict:
     """Bazarr's config.yaml as setup wants it, keeping everything else"""
     want = copy.deepcopy(current)
     general = want.setdefault("general", {})
@@ -48,6 +48,11 @@ def settings(current: dict, keys: Keys, providers: list, languages: list, bind: 
         # Listen where the other admin UIs do (network.admin_bind)
         ip=bind,
     )
+    # subtitles.sync: every subtitle downloaded is lined up with the film's
+    # audio (Bazarr's sync, with ffsubsync): one made for another release of
+    # the same film is often a few seconds off. The thresholds off means
+    # always, not only for low-scoring matches
+    want.setdefault("subsync", {}).update(use_subsync=sync, use_subsync_threshold=False, use_subsync_movie_threshold=False)
     return want
 
 
@@ -128,7 +133,7 @@ def run(cfg: Config) -> None:
     try:
         current = read_yaml(path)
         wanted = settings(current, Keys.read(cfg.paths.config), cfg.get("subtitles.providers", []) or [], languages,
-                          cfg.get("network.admin_bind", "0.0.0.0"))
+                          cfg.get("network.admin_bind", "0.0.0.0"), cfg.flag("subtitles.sync", True))
         ok("Sonarr + Radarr configured")
         # Only rewrite (and restart Bazarr) when something changed
         if wanted != current:

@@ -598,6 +598,64 @@ def defaults_command(path, out, info, plan: dict, dropped: list | None = None):
     return cmd + ["-f", fmt, str(out)]
 
 
+SIDECAR_TAG = "MEDIASERVER_SIDECAR"   # on a subtitle track embedded from a file next to the video: "name:size:mtime"
+EMBEDDABLE = {".srt": "srt", ".ass": "ass", ".ssa": "ass"}
+
+
+def sidecar_stamp(side: Path) -> str:
+    """Which file, as it is now (a re-sync can keep the same size)"""
+    st = side.stat()
+    return f"{side.name}:{st.st_size}:{int(st.st_mtime)}"
+
+
+def sidecar_to_embed(info, path, language: str) -> tuple[Path, int | None] | None:
+    """(the subtitle file next to the video to copy into it, the index of an
+    earlier copy to replace) when the file has no full text subtitle in
+    <language> of its own; None when there's nothing to do. Players such as
+    Moonfin go by the subtitles inside the file: without one in your
+    language they show the first other one (Chinese, say), not the file
+    next to it."""
+    side = next((f for f, lang in sidecars(path) if lang == language and f.suffix.lower() in EMBEDDABLE), None)
+    ours = next((st for st in streams(info, "subtitle") if tags(st).get(SIDECAR_TAG.lower())), None)
+    own = [st for st in streams(info, "subtitle") if st is not ours and stream_language(st) == language
+           and st.get("codec_name") in TEXT_SUBTITLES and not partial_subtitles(st) and not is_forced(st)]
+    if own or side is None:
+        return None
+    stamp = sidecar_stamp(side)
+    if ours is not None and tags(ours).get(SIDECAR_TAG.lower()) == stamp:
+        return None   # embedded already, and the file next to it hasn't changed
+    return side, (ours["index"] if ours is not None else None)
+
+
+def embed_command(path, out, info, side: Path, language: str, replace: int | None):
+    """The video with <side> as its first subtitle track, the default (the
+    others not), tagged with which file it came from; an earlier copy dropped"""
+    code = LANGUAGES.get(language, [language])[0]
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(path), "-i", str(side),
+           "-map", "0:v?", "-map", "0:a?", "-map", "1:0", "-map", "0:s?", "-map", "0:t?"]
+    if replace is not None:
+        cmd += ["-map", f"-0:{replace}"]
+    cmd += ["-map_metadata", "0", "-map_chapters", "0", "-c", "copy", "-c:s:0", EMBEDDABLE[side.suffix.lower()],
+            "-metadata:s:s:0", f"language={code}", "-metadata:s:s:0", f"title={language_name(language)}",
+            "-metadata:s:s:0", f"{SIDECAR_TAG}={sidecar_stamp(side)}", "-disposition:s:0", "default"]
+    others = len(streams(info, "subtitle")) - (1 if replace is not None else 0)
+    for i in range(1, others + 1):
+        cmd += [f"-disposition:s:{i}", "0"]
+    return cmd + ["-default_mode", "passthrough", "-f", "matroska", str(out)]
+
+
+def language_name(code: str) -> str:
+    names = {"en": "English", "es": "Spanish", "fr": "French", "de": "German", "it": "Italian", "pt": "Portuguese",
+             "ja": "Japanese", "nl": "Dutch", "ru": "Russian", "zh": "Chinese", "ko": "Korean"}
+    return names.get(code, code)
+
+
+def embed_sidecar(path, info, side: Path, language: str, replace: int | None, progress=None) -> bool:
+    expected = dict(track_counts(info), subtitle=track_counts(info)["subtitle"] + (0 if replace is not None else 1))
+    return rewrite(path, info, lambda out: embed_command(path, out, info, side, language, replace), expected,
+                   f"embed {side.name}", progress)
+
+
 def set_defaults(path, info, plan: dict, dropped: list | None = None, progress=None) -> bool:
     dropped = dropped or []
     expected = dict(track_counts(info), subtitle=track_counts(info)["subtitle"] - len(dropped))
@@ -634,11 +692,11 @@ def sidecar_languages(path):
 
 
 def sidecar_files(path) -> list:
-    """Names of the subtitle files next to the video (they change what the
-    fixes decide, e.g. when Bazarr adds one)"""
+    """Names and sizes of the subtitle files next to the video (they change
+    what the fixes decide: Bazarr adding one, or replacing or re-syncing one)"""
     path = Path(path)
     try:
-        return sorted(f.name for f in path.parent.iterdir()
+        return sorted(f"{f.name}:{f.stat().st_size}:{int(f.stat().st_mtime)}" for f in path.parent.iterdir()
                       if f.suffix.lower() in SIDECAR_SUBTITLES and f.name.startswith(path.stem + "."))
     except OSError:
         return []
@@ -911,6 +969,23 @@ class Worker:
                     changed = True
                 elif result == "failed":
                     failed.append(f"{lang} subtitles from pictures")
+        # A file with no subtitle in your language inside it, but one next to
+        # it: copied in, first and default, so every player picks it
+        if s.get("default_tracks", True) and path.suffix.lower() == ".mkv" and s["subtitle_languages"]:
+            info = probe(path) or info
+            first = s["subtitle_languages"][0]
+            todo = sidecar_to_embed(info, path, first)
+            if todo and not room_for(path, s):
+                done = False
+            elif todo:
+                side, replace = todo
+                self.working(path, title, f"putting the {language_name(first)} subtitles inside the file")
+                if embed_sidecar(path, info, side, first, replace, self.progress):
+                    changed = True
+                    self.remember(title, f"put the {language_name(first)} subtitles ({side.name}) inside the file, first, so every player shows them")
+                    info = probe(path) or info
+                else:
+                    failed.append("embedding subtitles")
         # The preferred audio and subtitles as the file's defaults
         if path.suffix.lower() in VIDEO_EXTENSIONS and (s.get("default_tracks", True) or s.get("drop_picture_subtitles", True)):
             info = probe(path) or info

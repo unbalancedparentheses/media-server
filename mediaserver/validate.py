@@ -96,6 +96,7 @@ SCHEMA = {
         "remove_completed": boolean,
     },
     "subtitles": {
+        "sync": boolean,
         "languages": list_of(string(), nonempty=True),
         "want": one_of("first", "all"),
         "providers": list_of(string()),
